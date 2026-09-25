@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html>
+<head><base href="/"><script src="/assets/evidence-renderer.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+<style>.priority-card{display:grid;grid-template-columns:34px minmax(0,1fr);gap:0 14px;padding:24px 0;border-bottom:1px solid var(--color-divider)}
+.priority-number{font-family:var(--font-heading);font-weight:800;font-size:28px;line-height:1;color:var(--color-accent)}
+.priority-content{min-width:0;display:flex;flex-direction:column;gap:12px}
+.priority-content h3{font-size:20px;margin:0;line-height:1.25;text-wrap:pretty}
+.priority-content p{margin:0;font-size:15px;line-height:1.55;text-wrap:pretty}
+.priority-content .priority-caveat,.priority-caveat{font-size:14px;line-height:1.5;color:var(--color-neutral-700)}
+.priority-context{display:flex;flex-wrap:wrap;column-gap:18px;row-gap:6px;font-size:14px;line-height:1.5}
+.priority-context strong{font-weight:600}
+.priority-actions,.priority-feedback{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.priority-feedback{padding-top:4px}
+.feedback-control{background:transparent;border:1px solid var(--color-divider);border-radius:4px;padding:7px 10px;font:inherit;font-size:14px;color:inherit;cursor:pointer}
+.feedback-control:hover{background:var(--color-surface)}
+.feedback-control[aria-pressed="true"]{border-color:var(--color-accent);background:var(--color-accent-100);color:var(--color-accent-900)}
+.text-control{font:inherit;font-size:14px;background:none;border:0;padding:2px 0;color:inherit;text-decoration:underline;text-underline-offset:3px;cursor:pointer;text-align:left}
+.priority-reason{font-size:14px;color:var(--color-neutral-700)}
+.priority-reason summary{cursor:pointer;line-height:1.5}
+.priority-reason p{font-size:14px;margin:8px 0}
+.priority-comments{background:var(--color-surface);padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.priority-comment{padding-bottom:12px;border-bottom:1px solid var(--color-divider)}
+.comment-meta{display:flex;gap:12px;justify-content:space-between;align-items:center;font-size:14px;color:var(--color-neutral-700)}
+.priority-comment .comment-text{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:8px}
+.comment-tags{color:var(--color-accent-700);font-size:14px!important}
+.comment-label{font-size:14px;font-weight:600}
+.priority-comments .input{font-size:15px;max-width:100%;box-sizing:border-box}
+.comment-tag-controls{display:flex;flex-wrap:wrap;align-items:end;gap:8px}
+.comment-tag-controls label{display:flex;flex-direction:column;gap:5px;font-size:14px;max-width:100%}
+.priority-order-note,.account-order-note{margin:0;font-size:14px;color:var(--color-neutral-700);line-height:1.5}
+.less-priorities-toggle{width:100%;display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:20px;text-align:left}
+.workspace-notice{padding:12px 16px;margin-bottom:20px;background:var(--color-accent-100);color:var(--color-accent-900);font-size:14px;line-height:1.5;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.content-modes{display:flex;flex-wrap:wrap;gap:16px;align-items:start;padding:12px 0;border-bottom:1px solid var(--color-divider)}
+.content-modes label{font-size:14px;font-weight:600;display:flex;flex-direction:column;gap:6px;flex:1 1 180px;min-width:0}
+.content-modes select{max-width:100%;font-size:14px;font-weight:400}
+.content-mode-note{font-size:14px!important;color:var(--color-neutral-700);margin:0;line-height:1.5}
+.priority-card button:focus-visible,.priority-card summary:focus-visible,.content-modes select:focus-visible,.less-priorities-toggle:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}
+@media(max-width:480px){.priority-card{grid-template-columns:24px minmax(0,1fr);gap:0 10px}.priority-number{font-size:24px}.priority-actions .btn{max-width:100%;white-space:normal;text-align:left}.priority-comments{padding:12px}.priority-context{flex-direction:column}.comment-meta{flex-wrap:wrap}}
+
+/* Opstream color roles retain the existing Archivo type and page structure. */
+a:hover,.btn-ghost,.priority-number{color:var(--color-accent-700)}
+[style*="color:var(--color-accent)"],[style*="color: var(--color-accent)"]{color:var(--color-accent-700)!important}
+:focus-visible,.input:focus-visible,.priority-card button:focus-visible,.priority-card summary:focus-visible,.content-modes select:focus-visible,.less-priorities-toggle:focus-visible{outline-color:var(--color-accent-2)}
+.quiet-control{display:inline-flex;gap:6px;align-items:center;justify-content:center;border:0;background:transparent;color:var(--color-neutral-700);font:inherit;font-size:14px;min-height:36px;min-width:36px;padding:6px 8px;cursor:pointer;border-radius:4px}
+.quiet-control:hover,.quiet-control[aria-pressed="true"]{background:var(--color-surface);color:var(--color-text)}
+.priority-feedback{gap:4px}
+.priority-menu{position:relative}.priority-menu>summary{list-style:none}.priority-menu>summary::-webkit-details-marker{display:none}
+.priority-menu-items{position:absolute;left:0;top:100%;z-index:5;min-width:160px;border:1px solid var(--color-divider);background:var(--color-bg);box-shadow:var(--shadow-md);padding:6px;display:grid}
+.priority-menu-items button{justify-content:flex-start}
+.mention-suggestions{border:1px solid var(--color-divider);background:var(--color-bg);display:grid;max-height:240px;overflow:auto;margin-top:-8px}
+.mention-option{display:flex;flex-direction:column;align-items:start;gap:2px;font:inherit;color:inherit;font-size:14px;padding:10px 12px;border:0;background:transparent;cursor:pointer;text-align:left}
+.mention-option[aria-selected="true"],.mention-option:hover{background:var(--color-surface)}.mention-option span{font-size:13px;color:var(--color-neutral-700)}
+.notification-receipt{display:flex;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--color-neutral-700);margin-top:8px}
+.priority-comment:target,.comment-highlight{outline:2px solid var(--color-accent-2);outline-offset:4px}
+.muted-copy{margin:0;color:var(--color-neutral-700);font-size:14px;line-height:1.5}
+.draft-workspace{display:flex;flex-direction:column;gap:24px}
+.draft-purpose-tabs{display:flex;gap:20px;border-bottom:2px solid var(--color-divider);overflow:auto}
+.draft-purpose-tab{background:transparent;border:0;border-bottom:3px solid transparent;padding:10px 0;font:inherit;font-size:14px;color:var(--color-neutral-700);cursor:pointer;white-space:nowrap}
+.draft-purpose-tab[aria-selected="true"]{border-bottom-color:var(--color-accent);color:var(--color-text);font-weight:600}
+.draft-purpose-tab span{margin-left:4px;font-size:13px}
+.draft-columns{display:flex;flex-wrap:wrap;gap:32px 40px;align-items:start}
+.draft-list{flex:1 1 280px;min-width:0}.email-composer{flex:2 1 480px;min-width:0;display:flex;flex-direction:column;gap:16px}
+.section-rule{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:8px;padding-bottom:8px;border-bottom:2px solid var(--color-divider)}
+.section-rule h6,.section-rule h3{margin:0}
+.draft-list-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 8px;width:100%;text-align:left;font:inherit;color:inherit;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:14px 8px;cursor:pointer}
+.draft-list-item[aria-current="true"]{background:var(--color-surface)}
+.draft-list-item strong{font-size:15px;line-height:1.4}.draft-list-item>span{font-size:13px;color:var(--color-neutral-700);grid-column:1/-1}.draft-list-item .draft-list-status{grid-column:2;grid-row:1;font-size:12px;white-space:nowrap}
+.email-composer .field>label{font-size:14px;color:var(--color-text)}
+.email-composer input,.email-composer textarea{background:var(--color-bg)}
+.email-composer .email-message{min-height:300px;font-size:16px;line-height:1.6}
+.sender-line{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:14px}.sender-line strong{margin-right:12px}
+.composer-details{font-size:14px}.composer-details>summary{cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.composer-addresses{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px}.composer-addresses .field{flex:1 1 220px}
+.composer-context{display:grid;gap:16px;margin-top:16px;padding:16px;background:var(--color-surface)}.composer-context textarea{font-size:14px}
+.composer-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-top:16px;border-top:1px solid var(--color-divider)}
+.draft-status-label{display:flex;gap:6px;align-items:center;margin-left:auto;font-size:13px}.draft-status-label select{width:auto;font-size:13px}
+.draft-support{display:flex;flex-wrap:wrap;gap:20px;border-top:1px solid var(--color-divider);padding-top:12px}
+.form-error{margin:0;padding:10px 12px;border-left:3px solid var(--color-error);background:color-mix(in srgb,var(--color-error) 8%,white);color:var(--color-text);font-size:14px;line-height:1.5}
+.form-success,.send-receipt{margin:0;padding:10px 12px;background:var(--color-surface);color:var(--color-text);font-size:14px;line-height:1.5}
+.connections-panel{border:1px solid var(--color-divider);padding:20px;margin-bottom:24px;display:grid;gap:16px}
+.connection-row{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center;border-bottom:1px solid var(--color-divider);padding-bottom:16px;font-size:14px}
+.connection-row p{margin:4px 0 0;color:var(--color-neutral-700)}.import-note{flex-basis:100%;margin:0;font-size:13px}
+.workspace-account-button{font:inherit;font-size:13px;background:none;border:0;padding:6px 0;color:var(--color-neutral-700);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.evidence-record{padding-bottom:24px;border-bottom:1px solid var(--color-divider);margin-bottom:24px}
+.evidence-record h4{font-size:19px;line-height:1.35;overflow-wrap:anywhere}.evidence-source{font-size:13px;line-height:1.5;color:var(--color-neutral-700);margin-bottom:16px}
+.evidence-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 20px;margin:0 0 20px}
+.evidence-field{min-width:0;border-bottom:1px solid var(--color-divider);padding:0 0 10px}.evidence-field dt{font-size:13px;color:var(--color-neutral-700);margin-bottom:4px}.evidence-field dd{font-size:15px;margin:0;overflow-wrap:anywhere}.evidence-field dd p{margin:0}.evidence-field ul{margin:0;padding-left:20px}
+.evidence-prose{font-size:16px;line-height:1.65;overflow-wrap:anywhere}.evidence-prose p,.evidence-prose ul,.evidence-prose ol{margin:0 0 14px}.evidence-prose h3,.evidence-prose h4,.evidence-prose h5,.evidence-prose h6{font-size:17px;line-height:1.4;letter-spacing:normal;text-transform:none;margin:22px 0 10px}.evidence-prose li>p{margin-bottom:6px}.evidence-prose li{margin-bottom:6px}.evidence-prose a{color:var(--color-text)}
+.evidence-table-wrap{overflow:auto}.evidence-original{margin-top:16px;font-size:14px}.evidence-original summary{cursor:pointer;color:var(--color-neutral-700)}.evidence-original pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.5;padding:16px;background:var(--color-surface);max-height:420px;overflow:auto}
+.evidence-prose pre{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:600px){.evidence-facts{grid-template-columns:1fr}.draft-purpose-tabs{gap:16px}.draft-status-label{margin-left:0}.connections-panel{padding:14px}.email-composer .email-message{min-height:280px}}
+</style></head>
+<body><div role="note" style="padding:10px 20px;background:#143e32;color:white;font:14px sans-serif;text-align:center">PUBLIC DEMO · All data is synthetic · Changes stay in your browser · Email and Slack are disabled</div>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-b33a3025-c7ab-4acb-99c2-5c4275b50711/styles.css">
+<script src="_ds/modernist-b33a3025-c7ab-4acb-99c2-5c4275b50711/_ds_bundle.js"></script>
+<style>
+body{margin:0;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)}
+a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
+</style>
+</helmet>
+<div style="min-height:100vh;display:flex;flex-direction:column;font-family:var(--font-body);color:var(--color-text);background:var(--color-bg)">
+
+  <header style="display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:12px 24px;border-bottom:2px solid var(--color-divider)">
+    <button onClick="{{ goToday }}" style="font-family:var(--font-heading);font-weight:800;font-size:17px;letter-spacing:-.01em;background:none;border:0;padding:6px 0;margin-right:16px;cursor:pointer;color:inherit">GTM Workspace</button>
+    <nav style="display:{{ topNavDisplay }};flex-wrap:wrap;gap:2px">
+      <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="6">
+        <button onClick="{{ n.go }}" aria-current="{{ n.current }}" style="font:inherit;font-size:14px;background:none;border:0;border-bottom:2px solid {{ n.line }};color:{{ n.color }};padding:8px 8px 6px;cursor:pointer;font-weight:{{ n.weight }}">{{ n.label }}</button>
+      </sc-for>
+    </nav>
+    <button onClick="{{ goData }}" style="margin-left:auto;font:inherit;font-size:13px;background:none;border:0;padding:6px 0;color:var(--color-neutral-700);cursor:pointer;text-align:left">Collected Sep 8 · <span style="text-decoration:underline;text-underline-offset:3px">About this data</span></button>
+  <button class="workspace-account-button" onClick="{{ showConnections }}">Connections</button></header>
+
+  <sc-if value="{{ bannerShown }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Status banner" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 24px;background:{{ banner.bg }};color:{{ banner.fg }};border-bottom:2px solid var(--color-divider);font-size:14px">
+      <strong style="font-weight:600">{{ banner.title }}</strong><span style="flex:1 1 280px;min-width:0">{{ banner.text }}</span>
+      <button onClick="{{ banner.go }}" class="btn btn-secondary" style="font-size:13px;padding:5px 10px;background:{{ banner.btnBg }};color:{{ banner.fg }};border-color:currentColor">{{ banner.action }}</button>
+    </div>
+  </sc-if>
+
+  <main style="flex:1;width:100%;max-width:1320px;margin:0 auto;padding:28px 24px {{ mainPadBottom }};box-sizing:border-box">
+    <sc-if value="{{ isLoading }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Loading" style="display:flex;flex-direction:column;gap:20px;max-width:64ch">
+        <h6 style="margin:0;color:var(--color-accent)">Week of September 7</h6>
+        <h1 style="font-size:36px;margin:0">Where to focus</h1>
+        <p style="margin:0;font-size:15px;color:var(--color-neutral-700)">Loading the collected data. The last complete collection was Sep 8, 22:31; it will show if the check takes longer than a few seconds.</p>
+        <div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+          <div style="height:2px;background:var(--color-divider)"></div>
+          <sc-for list="{{ skeleton }}" as="k" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:40px minmax(0,1fr);gap:16px;padding:6px 0 18px;border-bottom:1px solid var(--color-divider)"><div style="height:28px;width:24px;background:var(--color-surface)"></div><div style="display:flex;flex-direction:column;gap:10px"><div style="height:20px;width:{{ k.w1 }};background:var(--color-surface)"></div><div style="height:14px;width:{{ k.w2 }};background:var(--color-surface)"></div><div style="height:14px;width:{{ k.w3 }};background:var(--color-surface)"></div></div></div></sc-for>
+        </div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ notLoading }}" hint-placeholder-val="{{ true }}">
+
+    <sc-if value="{{ storageFailed }}"><div role="alert" class="workspace-notice"><span>{{ storageError }}</span><sc-if value="{{ canRetryStorage }}"><button class="btn btn-secondary" onClick="{{ retryBrowserSave }}">Retry browser save</button></sc-if></div></sc-if><sc-if value="{{ workspaceLoading }}"><p class="workspace-notice" role="status">Loading your saved workspace…</p></sc-if>
+<sc-if value="{{ workspaceError }}"><div class="workspace-notice" role="alert"><span>{{ workspaceError }}</span><button class="text-control" onClick="{{ reloadWorkspace }}">Try again</button></div></sc-if>
+<sc-if value="{{ canImportBrowser }}"><div class="workspace-notice"><span>This browser has drafts and preferences from the earlier workspace.</span><button class="text-control" onClick="{{ importBrowser }}">{{ importLabel }}</button><button class="text-control" onClick="{{ downloadBrowserBackup }}">Download backup</button><p class="import-note">Import your own work into your signed-in account. Existing server drafts are preserved; historical mentions send no DMs.</p></div></sc-if>
+<sc-if value="{{ connectionsOpen }}"><section class="connections-panel" aria-label="Connections">
+  <div class="section-rule"><h3>Connections</h3><button class="text-control" onClick="{{ hideConnections }}">Close</button></div>
+  <p class="muted-copy">Signed in as {{ signedInName }}</p>
+  <div class="connection-row"><div><strong>Gmail sending</strong><p>{{ googleConnectionLabel }}</p></div><button class="btn btn-secondary" onClick="{{ connectGoogle }}" disabled="{{ googleConnectionDisabled }}">{{ googleConnectLabel }}</button></div>
+  <div class="connection-row"><div><strong>Slack mention DMs</strong><p>{{ slackConnectionLabel }}</p></div><sc-if value="{{ canManageSlack }}"><button class="btn btn-secondary" onClick="{{ connectSlack }}" disabled="{{ slackConnectionDisabled }}">{{ slackConnectLabel }}</button></sc-if></div>
+  <sc-if value="{{ canTestSlack }}"><div class="connection-row"><div><strong>Check Slack delivery</strong><p>Send one clearly labeled test to the person who connected Slack.</p><sc-if value="{{ slackTestReceipt }}"><p role="status">{{ slackTestReceipt }}</p></sc-if></div><button class="btn btn-secondary" onClick="{{ testSlack }}" disabled="{{ slackTestDisabled }}">{{ slackTestLabel }}</button></div></sc-if>
+  <sc-if value="{{ connectionError }}"><p class="form-error" role="alert">{{ connectionError }}</p></sc-if>
+  <form action="/auth/logout" method="post"><button class="text-control" type="submit">Sign out</button></form>
+</section></sc-if>
+
+<!-- TODAY -->
+    <sc-if value="{{ isToday }}" hint-placeholder-val="{{ true }}">
+      <div data-screen-label="Today" style="display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h6 style="margin:0 0 8px;color:var(--color-accent)">Week of September 7</h6>
+          <h1 style="font-size:36px;margin:0 0 8px">Where to focus</h1>
+          <p style="margin:0;font-size:15px;color:var(--color-neutral-700);max-width:64ch;text-wrap:pretty">{{ priorityIntro }}</p>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:32px 40px;align-items:flex-start">
+          <section style="flex:2 1 480px;min-width:0;display:flex;flex-direction:column">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--color-divider);padding-bottom:8px"><h6 style="margin:0">Priorities</h6><span style="font-size:12px;color:var(--color-neutral-700)">Priorities reassessed Sep 10 · <button onClick="{{ goData }}" style="font:inherit;background:none;border:0;padding:0;color:inherit;text-decoration:underline;text-underline-offset:3px;cursor:pointer">what it covers</button></span></div>
+            <p class="priority-order-note">{{ priorityOrderNote }}</p><sc-for list="{{ priorities }}" as="p"><article class="priority-card" data-priority-id="{{ p.id }}" aria-label="{{ p.title }}">
+  <div class="priority-number">{{ p.n }}</div>
+  <div class="priority-content">
+    <h3>{{ p.title }}</h3>
+    <div class="priority-context">
+      <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
+      <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
+      <sc-if value="{{ p.hasContextRefs }}"><button class="text-control" onClick="{{ p.contextGo }}">{{ p.contextLabel }}</button></sc-if>
+    </div>
+    <p>{{ p.why }}</p>
+    <p><strong>Next step:</strong> {{ p.next }}</p>
+    <p class="priority-caveat">{{ p.caveat }}</p>
+    <div class="priority-actions">
+      <button onClick="{{ p.primaryGo }}" class="btn btn-primary">{{ p.primary }}</button>
+      <sc-if value="{{ p.hasSecondary }}"><button onClick="{{ p.secondaryGo }}" class="btn btn-secondary">{{ p.secondary }}</button></sc-if>
+    </div>
+    <div class="priority-feedback" role="group" aria-label="Priority feedback">
+      <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCount }}</span></button>
+      <button class="quiet-control" onClick="{{ p.importantGo }}" aria-pressed="{{ p.important }}" aria-label="{{ p.starLabel }}" title="{{ p.starLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{ p.starFill }}" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9L12 3Z"></path></svg></button>
+      <details class="priority-menu"><summary class="quiet-control" aria-label="More priority actions">•••</summary><div class="priority-menu-items"><button class="quiet-control" onClick="{{ p.lessGo }}">{{ p.lessActionLabel }}</button><sc-if value="{{ p.rated }}"><button class="quiet-control" onClick="{{ p.clearRating }}">Reset priority</button></sc-if></div></details>
+    </div>
+    <details class="priority-reason"><summary>{{ p.rankLabel }}</summary><p>{{ p.rankReason }}</p><button class="text-control" onClick="{{ p.sourcesGo }}">Review supporting records</button></details>
+    <sc-if value="{{ p.commentsOpen }}">
+      <section class="priority-comments" aria-label="Comments">
+        <sc-for list="{{ p.comments }}" as="c">
+          <div class="priority-comment" id="{{ c.anchorId }}">
+            <div class="comment-meta"><span><strong>{{ c.authorName }}</strong> · {{ c.date }}</span><sc-if value="{{ c.mine }}"><button class="text-control" onClick="{{ c.edit }}">Edit comment</button></sc-if></div>
+            <p class="comment-text">{{ c.text }}</p>
+            <sc-if value="{{ c.hasTags }}"><p class="comment-tags">{{ c.tags }}</p></sc-if>
+            <sc-for list="{{ c.deliveries }}" as="n"><div class="notification-receipt"><span>{{ n.label }}</span><sc-if value="{{ n.canRetry }}"><button class="text-control" onClick="{{ n.retry }}">Retry DM</button></sc-if></div></sc-for>
+          </div>
+        </sc-for>
+        <label class="comment-label" for="{{ p.editorId }}">{{ p.editorLabel }}</label>
+        <textarea id="{{ p.editorId }}" class="input" value="{{ p.commentText }}" onInput="{{ p.editCommentText }}" onKeyDown="{{ p.commentKeyDown }}" rows="3" maxlength="3000" placeholder="Add a comment. Type @ to mention a teammate." aria-controls="{{ p.mentionListId }}" aria-expanded="{{ p.hasSuggestions }}"></textarea>
+        <sc-if value="{{ p.hasSuggestions }}"><div class="mention-suggestions" id="{{ p.mentionListId }}" role="listbox" aria-label="Mention a teammate"><sc-for list="{{ p.mentionSuggestions }}" as="person"><button class="mention-option" role="option" aria-selected="{{ person.selected }}" onClick="{{ person.choose }}"><strong>{{ person.name }}</strong><span>{{ person.email }}</span></button></sc-for></div></sc-if>
+        <div class="comment-tag-controls">
+          <sc-for list="{{ p.editTags }}" as="tag"><button class="feedback-control" onClick="{{ tag.remove }}" aria-label="{{ tag.removeLabel }}">@{{ tag.name }} ×</button></sc-for>
+        </div>
+        <div class="priority-actions"><button class="btn btn-primary" disabled="{{ p.commentEmpty }}" onClick="{{ p.saveComment }}">{{ p.saveCommentLabel }}</button><button class="btn btn-secondary" onClick="{{ p.cancelComment }}">Cancel</button></div>
+        <sc-if value="{{ p.commentError }}"><p class="form-error" role="alert">{{ p.commentError }}</p></sc-if>
+        <p class="priority-caveat">Mentions notify teammates after Slack is connected. Your comment is saved either way.</p>
+      </section>
+    </sc-if>
+  </div>
+</article>
+</sc-for><sc-if value="{{ hasLessPriorities }}"><button class="btn btn-secondary less-priorities-toggle" aria-expanded="{{ lessOpen }}" onClick="{{ toggleLess }}">{{ lessLabel }}</button><sc-if value="{{ lessOpen }}"><sc-for list="{{ lessPriorities }}" as="p"><article class="priority-card" data-priority-id="{{ p.id }}" aria-label="{{ p.title }}">
+  <div class="priority-number">{{ p.n }}</div>
+  <div class="priority-content">
+    <h3>{{ p.title }}</h3>
+    <div class="priority-context">
+      <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
+      <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
+      <sc-if value="{{ p.hasContextRefs }}"><button class="text-control" onClick="{{ p.contextGo }}">{{ p.contextLabel }}</button></sc-if>
+    </div>
+    <p>{{ p.why }}</p>
+    <p><strong>Next step:</strong> {{ p.next }}</p>
+    <p class="priority-caveat">{{ p.caveat }}</p>
+    <div class="priority-actions">
+      <button onClick="{{ p.primaryGo }}" class="btn btn-primary">{{ p.primary }}</button>
+      <sc-if value="{{ p.hasSecondary }}"><button onClick="{{ p.secondaryGo }}" class="btn btn-secondary">{{ p.secondary }}</button></sc-if>
+    </div>
+    <div class="priority-feedback" role="group" aria-label="Priority feedback">
+      <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCount }}</span></button>
+      <button class="quiet-control" onClick="{{ p.importantGo }}" aria-pressed="{{ p.important }}" aria-label="{{ p.starLabel }}" title="{{ p.starLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{ p.starFill }}" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9L12 3Z"></path></svg></button>
+      <details class="priority-menu"><summary class="quiet-control" aria-label="More priority actions">•••</summary><div class="priority-menu-items"><button class="quiet-control" onClick="{{ p.lessGo }}">{{ p.lessActionLabel }}</button><sc-if value="{{ p.rated }}"><button class="quiet-control" onClick="{{ p.clearRating }}">Reset priority</button></sc-if></div></details>
+    </div>
+    <details class="priority-reason"><summary>{{ p.rankLabel }}</summary><p>{{ p.rankReason }}</p><button class="text-control" onClick="{{ p.sourcesGo }}">Review supporting records</button></details>
+    <sc-if value="{{ p.commentsOpen }}">
+      <section class="priority-comments" aria-label="Comments">
+        <sc-for list="{{ p.comments }}" as="c">
+          <div class="priority-comment" id="{{ c.anchorId }}">
+            <div class="comment-meta"><span><strong>{{ c.authorName }}</strong> · {{ c.date }}</span><sc-if value="{{ c.mine }}"><button class="text-control" onClick="{{ c.edit }}">Edit comment</button></sc-if></div>
+            <p class="comment-text">{{ c.text }}</p>
+            <sc-if value="{{ c.hasTags }}"><p class="comment-tags">{{ c.tags }}</p></sc-if>
+            <sc-for list="{{ c.deliveries }}" as="n"><div class="notification-receipt"><span>{{ n.label }}</span><sc-if value="{{ n.canRetry }}"><button class="text-control" onClick="{{ n.retry }}">Retry DM</button></sc-if></div></sc-for>
+          </div>
+        </sc-for>
+        <label class="comment-label" for="{{ p.editorId }}">{{ p.editorLabel }}</label>
+        <textarea id="{{ p.editorId }}" class="input" value="{{ p.commentText }}" onInput="{{ p.editCommentText }}" onKeyDown="{{ p.commentKeyDown }}" rows="3" maxlength="3000" placeholder="Add a comment. Type @ to mention a teammate." aria-controls="{{ p.mentionListId }}" aria-expanded="{{ p.hasSuggestions }}"></textarea>
+        <sc-if value="{{ p.hasSuggestions }}"><div class="mention-suggestions" id="{{ p.mentionListId }}" role="listbox" aria-label="Mention a teammate"><sc-for list="{{ p.mentionSuggestions }}" as="person"><button class="mention-option" role="option" aria-selected="{{ person.selected }}" onClick="{{ person.choose }}"><strong>{{ person.name }}</strong><span>{{ person.email }}</span></button></sc-for></div></sc-if>
+        <div class="comment-tag-controls">
+          <sc-for list="{{ p.editTags }}" as="tag"><button class="feedback-control" onClick="{{ tag.remove }}" aria-label="{{ tag.removeLabel }}">@{{ tag.name }} ×</button></sc-for>
+        </div>
+        <div class="priority-actions"><button class="btn btn-primary" disabled="{{ p.commentEmpty }}" onClick="{{ p.saveComment }}">{{ p.saveCommentLabel }}</button><button class="btn btn-secondary" onClick="{{ p.cancelComment }}">Cancel</button></div>
+        <sc-if value="{{ p.commentError }}"><p class="form-error" role="alert">{{ p.commentError }}</p></sc-if>
+        <p class="priority-caveat">Mentions notify teammates after Slack is connected. Your comment is saved either way.</p>
+      </section>
+    </sc-if>
+  </div>
+</article>
+</sc-for></sc-if></sc-if><p class="priority-caveat" style="margin-top:16px">{{ priorityNotice }}</p>
+          </section>
+          <aside style="flex:1 1 280px;min-width:0;display:flex;flex-direction:column;gap:32px">
+            <section>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--color-divider);padding-bottom:8px"><h6 style="margin:0">July – August</h6><button onClick="{{ goPerformance }}" style="font:inherit;font-size:12px;background:none;border:0;padding:0;color:var(--color-neutral-700);text-decoration:underline;text-underline-offset:3px;cursor:pointer">All numbers</button></div>
+              <sc-for list="{{ quickNumbers }}" as="q" hint-placeholder-count="5">
+                <button onClick="{{ goPerformance }}" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:12px 0;font:inherit;color:inherit;cursor:pointer">
+                  <span style="font-size:14px">{{ q.label }}</span>
+                  <span style="font-family:var(--font-heading);font-weight:800;font-size:24px;font-variant-numeric:tabular-nums;line-height:1">{{ q.value }}</span>
+                  <span style="font-size:12px;color:var(--color-neutral-700);grid-column:1/-1">{{ q.delta }}</span>
+                </button>
+              </sc-for>
+              <p style="margin:10px 0 0;font-size:12px;color:var(--color-neutral-700)">Jul 1 – Aug 30. Leads, MQLs and SQLs from the Lead Tracker; meetings from the CRM. These are separate counts, not a funnel.</p>
+            </section>
+            <section>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--color-divider);padding-bottom:8px"><h6 style="margin:0">Coming up</h6><button onClick="{{ goMeetings }}" style="font:inherit;font-size:12px;background:none;border:0;padding:0;color:var(--color-neutral-700);text-decoration:underline;text-underline-offset:3px;cursor:pointer">All meetings</button></div>
+              <sc-for list="{{ upcoming }}" as="m" hint-placeholder-count="4">
+                <button onClick="{{ m.go }}" style="display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:12px 0;font:inherit;color:inherit;cursor:pointer">
+                  <span style="font-size:12px;color:var(--color-neutral-700)">{{ m.when }}</span>
+                  <span style="font-weight:600;font-size:15px">{{ m.title }}</span>
+                  <span style="font-size:13px;color:var(--color-neutral-700)">{{ m.prep }}</span>
+                </button>
+              </sc-for>
+            </section>
+            <section style="background:var(--color-surface);padding:16px">
+              <h6 style="margin:0 0 6px">Reading the numbers</h6>
+              <p style="margin:0;font-size:13px;line-height:1.5;color:var(--color-neutral-800)">All figures are synthetic. Missing actuals are not zero; forecast amounts are not commitments.</p>
+              <button onClick="{{ goData }}" class="btn btn-ghost" style="margin-top:8px;padding-inline:0">About this data →</button>
+            </section>
+          </aside>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- PERFORMANCE -->
+    <sc-if value="{{ isPerformance }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Performance" style="display:flex;flex-direction:column;gap:24px">
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px">
+          <div><h1 style="font-size:36px;margin:0 0 4px">Performance</h1><p style="margin:0;color:var(--color-neutral-700)">Demand, pipeline, spend and visibility.</p></div>
+          <div class="seg" role="tablist">
+            <sc-for list="{{ perfTabs }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.go }}" role="tab" aria-selected="{{ t.selected }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
+          <sc-if value="{{ perfDemand }}" hint-placeholder-val="{{ true }}">
+          <div class="seg">
+            <sc-for list="{{ periods }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.go }}" style="font:inherit;font-size:13px;padding:7px 12px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for>
+          </div>
+          <sc-if value="{{ isCustom }}" hint-placeholder-val="{{ false }}">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px">From<input type="date" class="input" min="2026-01-01" max="2026-09-08" value="{{ customStart }}" onChange="{{ setStart }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px">Through<input type="date" class="input" min="2026-01-01" max="2026-09-08" value="{{ customEnd }}" onChange="{{ setEnd }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
+          </sc-if>
+          <span style="font-size:13px;color:var(--color-neutral-700)">{{ periodRange }}</span>
+          </sc-if>
+          <span style="font-size:13px;color:var(--color-neutral-800)">{{ scopeNote }}</span>
+        </div>
+
+        <sc-if value="{{ perfDemand }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 24px;border-bottom:2px solid var(--color-divider)">
+            <sc-for list="{{ demandMetrics }}" as="m" hint-placeholder-count="5">
+              <button onClick="{{ m.go }}" style="display:flex;flex-direction:column;gap:4px;text-align:left;background:none;border:0;padding:16px 0 18px;font:inherit;color:inherit;cursor:pointer;min-width:0">
+                <span style="font-size:13px;color:var(--color-neutral-700)">{{ m.label }}</span>
+                <span style="font-family:var(--font-heading);font-weight:800;font-size:40px;line-height:1;font-variant-numeric:tabular-nums">{{ m.value }}</span>
+                <span style="font-size:13px;color:var(--color-neutral-800)">{{ m.delta }}</span>
+                <span style="font-size:12px;color:var(--color-neutral-700)">{{ m.note }}</span>
+              </button>
+            </sc-for>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+            <section style="flex:1 1 320px;min-width:0">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">{{ barsTitle }}</h6><span style="font-size:12px;color:var(--color-neutral-700)">Lead Tracker · lead date</span></div>
+              <div style="display:grid;grid-template-columns:repeat({{ barCols }},minmax(0,1fr));gap:6px;align-items:end;height:180px;padding-top:16px">
+                <sc-for list="{{ weeks }}" as="w" hint-placeholder-count="10">
+                  <div style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0" title="{{ w.title }}">
+                    <span style="font-size:11px;color:var(--color-neutral-700);text-align:center;font-variant-numeric:tabular-nums">{{ w.leads }}</span>
+                    <div style="background:var(--color-accent-2);height:{{ w.leadH }}"></div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat({{ barCols }},minmax(0,1fr));gap:6px;border-top:1px solid var(--color-divider);padding-top:6px">
+                <sc-for list="{{ weeks }}" as="w" hint-placeholder-count="10"><span style="font-size:11px;color:var(--color-neutral-700);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ w.label }}</span></sc-for>
+              </div>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Webinar registrations and event badge scans count as leads. Qualification is counted only when a separate MQL or SQL date is recorded.</p>
+            </section>
+            <section style="flex:1 1 320px;min-width:0">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">By source · {{ periodRange }}</h6><button onClick="{{ exportSources }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
+              <table class="table" style="font-size:14px">
+                <thead><tr><th>Source</th><th style="text-align:right">Leads</th><th style="text-align:right">MQL</th><th style="text-align:right">SQL</th><th style="text-align:right">SQL / leads</th></tr></thead>
+                <tbody><sc-for list="{{ channels }}" as="c" hint-placeholder-count="5"><tr><td>{{ c.channel }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.leads }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.mql }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.sql }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.rate }}</td></tr></sc-for></tbody>
+              </table>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Lead Tracker, each stage counted by its own date, so MQL and SQL can exceed leads for a source in a short period. What counts as Lead, MQL and SQL differs by source; see <button onClick="{{ goData }}" style="font:inherit;background:none;border:0;padding:0;color:inherit;text-decoration:underline;text-underline-offset:3px;cursor:pointer">definitions</button>.</p>
+            </section>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+            <section style="flex:1 1 320px;min-width:0">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Open pipeline by stage</h6><span style="font-size:12px;color:var(--color-neutral-700)">Owners' prep sheets · ARR</span></div>
+              <sc-for list="{{ stages }}" as="s" hint-placeholder-count="6">
+                <div style="display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--color-divider);font-size:14px">
+                  <span>{{ s.stage }}</span>
+                  <div style="height:14px;background:var(--color-surface)"><div style="height:100%;width:{{ s.w }};background:var(--color-accent-2)"></div></div>
+                  <span style="font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap">{{ s.count }} · {{ s.amount }}</span>
+                </div>
+              </sc-for>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;padding-top:14px">
+                <sc-for list="{{ scorecard }}" as="k" hint-placeholder-count="4"><div><span style="display:block;font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums;line-height:1.1">{{ k.value }}</span><span style="font-size:12px;color:var(--color-neutral-700)">{{ k.label }}</span></div></sc-for>
+              </div>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Synthetic scorecard. All pipeline values are examples, not buyer commitments.</p>
+            </section>
+            <section style="flex:1 1 320px;min-width:0">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Latest owner notes</h6><button onClick="{{ goDeals }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">All opportunities</button></div>
+              <sc-for list="{{ movements }}" as="m" hint-placeholder-count="6">
+                <button onClick="{{ m.go }}" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:10px 0;font:inherit;color:inherit;cursor:pointer">
+                  <span style="font-weight:600;font-size:14px">{{ m.name }}</span><span style="font-size:12px;color:var(--color-neutral-700);white-space:nowrap">{{ m.meta }}</span>
+                  <span style="font-size:13px;color:var(--color-neutral-800);grid-column:1/-1">{{ m.change }}</span>
+                </button>
+              </sc-for>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">"Last meeting / what happened" column, Alex Morgan and Sam Rivera sheets, collected Sep 8.</p>
+            </section>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ perfSpend }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+            <section style="flex:1 1 320px;min-width:0">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Plan vs recorded, 2026</h6><button onClick="{{ exportSpend }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
+              <table class="table" style="font-size:14px">
+                <thead><tr><th>Month</th><th style="text-align:right">Planned</th><th style="text-align:right">Recorded</th><th style="text-align:right">Difference</th></tr></thead>
+                <tbody><sc-for list="{{ spendMonths }}" as="m" hint-placeholder-count="9"><tr><td>{{ m.month }} <span class="tag tag-neutral" style="margin-left:6px;display:{{ m.tagDisplay }}">{{ m.tag }}</span></td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ m.budget }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ m.actual }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ m.diff }}</td></tr></sc-for></tbody>
+              </table>
+              <p style="margin:12px 0 0;font-size:13px;color:var(--color-neutral-800);line-height:1.5">Synthetic monthly budget. Missing actuals mean not entered, not zero.</p>
+            </section>
+            <section style="flex:1 1 320px;min-width:0">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Where the money went</h6><span style="font-size:12px;color:var(--color-neutral-700)">Recorded Jan – Jul · by channel</span></div>
+              <sc-for list="{{ spendChannels }}" as="v" hint-placeholder-count="6">
+                <div style="display:grid;grid-template-columns:minmax(0,120px) minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--color-divider);font-size:14px">
+                  <span>{{ v.name }}</span>
+                  <div style="height:14px;background:var(--color-surface)"><div style="height:100%;width:{{ v.w }};background:var(--color-accent-2)"></div></div>
+                  <span style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ v.amount }}</span>
+                </div>
+              </sc-for>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Example marketing spend grouped by channel. All amounts are synthetic.</p>
+            </section>
+          </div>
+          <section>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Advertising and outbound</h6><span style="font-size:12px;color:var(--color-neutral-700)">Platform-reported · not qualified leads</span></div>
+            <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:560px">
+              <thead><tr><th>Line</th><th style="text-align:right">Sent / shown</th><th style="text-align:right">Replies / conv.</th><th style="text-align:right">Bounces</th><th>Note</th></tr></thead>
+              <tbody><sc-for list="{{ ads }}" as="a" hint-placeholder-count="4"><tr><td style="font-weight:600">{{ a.name }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ a.sent }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ a.replies }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ a.bounces }}</td><td style="font-size:13px;color:var(--color-neutral-800)">{{ a.note }}</td></tr></sc-for></tbody>
+            </table></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{ perfWeb }}" hint-placeholder-val="{{ false }}">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 24px;border-bottom:2px solid var(--color-divider)">
+            <sc-for list="{{ webMetrics }}" as="m" hint-placeholder-count="5">
+              <div style="display:flex;flex-direction:column;gap:4px;padding:16px 0 18px;min-width:0">
+                <span style="font-size:13px;color:var(--color-neutral-700)">{{ m.label }}</span>
+                <span style="font-family:var(--font-heading);font-weight:800;font-size:40px;line-height:1;font-variant-numeric:tabular-nums">{{ m.value }}</span>
+                <span style="font-size:12px;color:var(--color-neutral-700)">{{ m.note }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <p style="margin:0;font-size:13px;color:var(--color-neutral-800);line-height:1.5;max-width:76ch">Website figures are for example.com only. Staging, localhost and preview hosts are excluded. AI visibility uses completed monitored answers in the retained collection; failed answers are excluded.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+            <section style="flex:1 1 320px;min-width:0">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Visits by week</h6><span style="font-size:12px;color:var(--color-neutral-700)">example.com · May – Sep</span></div>
+              <div style="display:grid;grid-template-columns:repeat({{ webCols }},minmax(0,1fr));gap:6px;align-items:end;height:160px;padding-top:16px">
+                <sc-for list="{{ webWeeks }}" as="w" hint-placeholder-count="10"><div style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0" title="{{ w.title }}"><div style="background:var(--color-accent-2);height:{{ w.h }}"></div></div></sc-for>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat({{ webCols }},minmax(0,1fr));gap:6px;border-top:1px solid var(--color-divider);padding-top:6px">
+                <sc-for list="{{ webWeeks }}" as="w" hint-placeholder-count="10"><span style="font-size:11px;color:var(--color-neutral-700);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ w.label }}</span></sc-for>
+              </div>
+            </section>
+            <section style="flex:1 1 320px;min-width:0">
+              <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">How visitors arrive · May 18 – Sep 7</h6></div>
+              <table class="table" style="font-size:14px"><thead><tr><th>Channel</th><th style="text-align:right">Visits</th><th style="text-align:right">Engaged</th><th style="text-align:right">Key events</th></tr></thead>
+              <tbody><sc-for list="{{ webSources }}" as="s" hint-placeholder-count="6"><tr><td>{{ s.name }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ s.visits }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ s.engaged }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ s.ke }}</td></tr></sc-for></tbody></table>
+            </section>
+          </div>
+          <section>
+            <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Top 10 landing pages · May 18 – Sep 7</h6></div>
+            <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:560px"><thead><tr><th>Page</th><th style="text-align:right">Visits</th><th style="text-align:right">Engaged</th><th style="text-align:right">Key events</th></tr></thead>
+            <tbody><sc-for list="{{ landing }}" as="l" hint-placeholder-count="8"><tr><td style="font-variant-numeric:tabular-nums;overflow-wrap:anywhere">{{ l.page }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ l.visits }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ l.engaged }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ l.ke }}</td></tr></sc-for></tbody></table></div>
+            <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">Sample landing pages illustrate engagement and key-event comparisons.</p>
+          </section>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- ACCOUNTS -->
+    <sc-if value="{{ isAccounts }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Accounts" style="display:flex;flex-direction:column;gap:24px">
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px">
+          <div><h1 style="font-size:36px;margin:0 0 4px">Accounts</h1><p style="margin:0;color:var(--color-neutral-700)">Open opportunities from the owners' prep sheets, the review's follow-ups, and new leads from the tracker.</p></div>
+          <div class="seg">
+            <sc-for list="{{ accountTabs }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.go }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
+          <input class="input" placeholder="Search companies and notes" value="{{ searchValue }}" onChange="{{ setSearch }}" style="max-width:320px;min-height:34px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ ownerValue }}" onChange="{{ setOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><option>Alex Morgan</option><option>Sam Rivera</option><option>Alex Morgan</option><option>Sam Rivera</option></select></label>
+          <sc-if value="{{ showAccountSort }}"><label style="display:flex;align-items:center;gap:8px;font-size:14px">Sort<select class="input" value="{{ sortValue }}" onChange="{{ setSort }}" style="width:auto;max-width:100%;min-height:34px"><option value="weighted">Weighted ARR — highest first</option><option value="close">Close date — earliest first</option><option value="days">Days in stage — highest first</option><option value="name">Account name — A to Z</option></select></label></sc-if>
+          <div style="margin-left:auto;display:flex;gap:8px"><button onClick="{{ exportAccounts }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ exportLabel }}</button></div>
+        </div>
+
+        <p class="account-order-note">{{ accountOrderNote }}</p><sc-if value="{{ accountsDeals }}" hint-placeholder-val="{{ true }}">
+          <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:760px">
+            <thead><tr><th>Company</th><th>Owner</th><th>Stage</th><th style="text-align:right">ARR</th><th style="text-align:right">Prob.</th><th style="text-align:right">Weighted ARR</th><th>Close</th><th style="text-align:right">Days in stage</th><th>Last note</th></tr></thead>
+            <tbody><sc-for list="{{ deals }}" as="d" hint-placeholder-count="10">
+              <tr onClick="{{ d.go }}" style="cursor:pointer">
+                <td style="font-weight:600">{{ d.company }}</td><td>{{ d.owner }}</td><td>{{ d.stage }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.arr }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.prob }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.weighted }}</td><td style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ d.close }}</td><td style="text-align:right;font-variant-numeric:tabular-nums;color:{{ d.daysColor }}">{{ d.days }}</td><td style="font-size:13px;color:var(--color-neutral-800);max-width:300px">{{ d.note }}</td>
+              </tr>
+            </sc-for></tbody>
+          </table></div>
+          <sc-if value="{{ dealsEmpty }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:14px;color:var(--color-neutral-800)"><span>{{ emptyNote }}</span><button onClick="{{ clearSearch }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">Clear search and owner</button></div></sc-if>
+          <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ dealsCount }} · Alex Morgan, Sam Rivera and "No AE" prep sheets, collected Sep 8. ARR and probability are owner-entered; the CRM may differ. Days in stage remain the recorded owner values.</p>
+        </sc-if>
+
+        <sc-if value="{{ accountsFollow }}" hint-placeholder-val="{{ false }}"><sc-if value="{{ followUpsEmpty }}"><p>No follow-ups match these filters.</p></sc-if>
+          <p style="margin:0;font-size:13px;color:var(--color-neutral-700);max-width:70ch">From the review prepared Sep 8 for the largest open opportunities. It is a shortlist, not a portfolio assessment.</p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px">
+            <sc-for list="{{ followUps }}" as="f" hint-placeholder-count="7">
+              <article style="border-top:2px solid var(--color-text);padding-top:14px;display:flex;flex-direction:column;gap:10px;min-width:0">
+                <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline"><h3 style="font-size:20px;margin:0">{{ f.name }}</h3><span style="font-size:12px;color:var(--color-neutral-700);white-space:nowrap">{{ f.meta }}</span></div>
+                <p style="margin:0;font-size:15px;line-height:1.55;color:var(--color-neutral-800);flex:1">{{ f.reason }}</p>
+                <p style="margin:0;font-size:15px;line-height:1.55"><strong style="font-weight:600">Next step:</strong> {{ f.next }}</p>
+                <p style="margin:0;font-size:13px;color:var(--color-neutral-700)">{{ f.uncertainty }}</p>
+                <div style="display:flex;flex-wrap:wrap;gap:8px"><button onClick="{{ f.draftGo }}" class="btn btn-primary" style="justify-content:flex-start">Review draft</button><button onClick="{{ f.go }}" class="btn btn-secondary">{{ f.openLabel }}</button></div>
+              </article>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ accountsLeads }}" hint-placeholder-val="{{ false }}">
+          <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:680px">
+            <thead><tr><th>Company</th><th>Source</th><th>Owner</th><th>Lead date</th><th>MQL</th><th>SQL</th><th>Notes</th></tr></thead>
+            <tbody><sc-for list="{{ leads }}" as="l" hint-placeholder-count="12"><tr><td style="font-weight:600">{{ l.company }}</td><td>{{ l.source }}</td><td>{{ l.owner }}</td><td style="font-variant-numeric:tabular-nums">{{ l.date }}</td><td style="font-variant-numeric:tabular-nums">{{ l.mql }}</td><td style="font-variant-numeric:tabular-nums">{{ l.sql }}</td><td style="font-size:13px;color:var(--color-neutral-800)">{{ l.note }}</td></tr></sc-for></tbody>
+          </table></div>
+          <sc-if value="{{ leadsEmpty }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:14px;color:var(--color-neutral-800)"><span>{{ emptyNote }}</span><button onClick="{{ clearSearch }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">Clear search and owner</button></div></sc-if>
+          <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ leadsCount }} · Lead Tracker, newest lead dates first. 62 webinar registrants have no owner and no qualification dates.</p>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- ACCOUNT DETAIL -->
+    <sc-if value="{{ isAccount }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Account detail" style="display:flex;flex-direction:column;gap:24px">
+        <button onClick="{{ goAccounts }}" class="btn btn-ghost" style="align-self:flex-start;padding-inline:0">← Accounts</button>
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px">
+          <div>
+            <h1 style="font-size:36px;margin:0 0 6px">{{ acct.name }}</h1>
+            <p style="margin:0;color:var(--color-neutral-700);font-size:14px">{{ acct.subtitle }}</p>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button onClick="{{ acct.draftGo }}" class="btn btn-primary">{{ acct.draftLabel }}</button><button onClick="{{ exportAccount }}" class="btn btn-secondary">Export record</button></div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:32px 40px;align-items:flex-start">
+          <div style="flex:2 1 480px;min-width:0;display:flex;flex-direction:column;gap:32px">
+            <sc-if value="{{ acct.hasReview }}" hint-placeholder-val="{{ true }}">
+            <section style="background:var(--color-surface);padding:20px 22px">
+              <h6 style="margin:0 0 8px;color:var(--color-accent)">Why this account matters now</h6>
+              <p style="margin:0 0 10px;font-size:16px;line-height:1.55;text-wrap:pretty">{{ acct.reason }}</p>
+              <p style="margin:0 0 10px;font-size:15px;line-height:1.55"><strong style="font-weight:600">Next step:</strong> {{ acct.next }}</p>
+              <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ acct.uncertainty }} From the review prepared Sep 8.</p>
+            </section>
+            </sc-if>
+            <sc-if value="{{ acct.noReview }}" hint-placeholder-val="{{ false }}">
+            <section style="background:var(--color-surface);padding:16px 22px"><p style="margin:0;font-size:14px;line-height:1.5;color:var(--color-neutral-800)">Not in the Sep 8 review's shortlist (the largest open opportunities). The timeline below is the collected record.</p></section>
+            </sc-if>
+            <sc-if value="{{ acct.hasDealReview }}" hint-placeholder-val="{{ false }}">
+            <section>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">What the review relied on</h6><span style="font-size:12px;color:var(--color-neutral-700)">Deal review · Sep 8</span></div>
+              <sc-for list="{{ acct.dealReview }}" as="r" hint-placeholder-count="2">
+                <div style="padding:12px 0;border-bottom:1px solid var(--color-divider);font-size:14px;line-height:1.5;display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start"><span class="tag tag-neutral">{{ r.kind }}</span><span>{{ r.text }}</span></div>
+              </sc-for>
+              <p style="margin:10px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ acct.dealReviewNote }}</p>
+            </section>
+            </sc-if>
+            <sc-if value="{{ acct.hasDescription }}" hint-placeholder-val="{{ true }}"><p style="margin:0;font-size:15px;line-height:1.55;color:var(--color-neutral-800);max-width:70ch">{{ acct.description }}</p></sc-if>
+            <section>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Timeline</h6><span style="font-size:12px;color:var(--color-neutral-700)">{{ acct.timelineNote }}</span></div>
+              <sc-for list="{{ acct.timeline }}" as="t" hint-placeholder-count="6">
+                <button onClick="{{ t.go }}" style="display:grid;grid-template-columns:88px minmax(0,1fr);gap:4px 16px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:14px 0;font:inherit;color:inherit;cursor:pointer">
+                  <span style="font-size:13px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ t.date }}</span>
+                  <span style="min-width:0"><span style="font-weight:600;font-size:15px">{{ t.title }}</span> <span class="tag tag-neutral" style="margin-left:6px;vertical-align:1px">{{ t.kind }}</span><span style="display:block;font-size:14px;color:var(--color-neutral-800);margin-top:4px;line-height:1.5;overflow-wrap:anywhere">{{ t.text }}</span></span>
+                </button>
+              </sc-for>
+              <sc-if value="{{ acct.hasMoreTimeline }}" hint-placeholder-val="{{ false }}"><button onClick="{{ acct.showAllTimeline }}" class="btn btn-secondary" style="margin-top:12px;font-size:13px;padding:6px 10px">{{ acct.moreTimelineLabel }}</button></sc-if>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ acct.emailNote }}</p>
+              <sc-if value="{{ acct.hasRelated }}" hint-placeholder-val="{{ false }}"><p style="margin:6px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ acct.relatedNote }}</p></sc-if>
+            </section>
+          </div>
+          <aside style="flex:1 1 280px;min-width:0;display:flex;flex-direction:column;gap:28px">
+            <section>
+              <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Opportunities</h6></div>
+              <sc-for list="{{ acct.deals }}" as="d" hint-placeholder-count="1">
+                <button onClick="{{ d.go }}" style="display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:12px 0;font:inherit;color:inherit;cursor:pointer"><span style="font-weight:600">{{ d.name }}</span><span style="display:block;font-size:13px;color:var(--color-neutral-700);margin-top:2px">{{ d.line }}</span><span style="display:block;font-size:12px;color:var(--color-neutral-700);margin-top:2px">{{ d.sheet }}</span></button>
+              </sc-for>
+            </section>
+            <sc-if value="{{ acct.hasCriteria }}" hint-placeholder-val="{{ true }}">
+            <section>
+              <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">What they are deciding on</h6></div>
+              <p style="margin:10px 0 0;font-size:14px;line-height:1.5"><strong style="font-weight:600">Success criteria:</strong> {{ acct.criteria }}</p>
+              <p style="margin:8px 0 0;font-size:14px;line-height:1.5"><strong style="font-weight:600">Decision makers:</strong> {{ acct.decisionMakers }}</p>
+              <p style="margin:8px 0 0;font-size:13px;color:var(--color-neutral-700)">{{ acct.context }}</p>
+            </section>
+            </sc-if>
+            <section>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">People</h6><span style="font-size:12px;color:var(--color-neutral-700)">{{ acct.peopleCount }}</span></div>
+              <sc-for list="{{ acct.people }}" as="c" hint-placeholder-count="4"><button onClick="{{ c.go }}" style="display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:10px 0;font:inherit;color:inherit;cursor:pointer"><span style="font-weight:600;font-size:14px">{{ c.name }}</span><span style="display:block;font-size:13px;color:var(--color-neutral-700)">{{ c.line }}</span></button></sc-for>
+              <sc-if value="{{ acct.hasMorePeople }}" hint-placeholder-val="{{ false }}"><button onClick="{{ acct.showAllPeople }}" class="btn btn-ghost" style="margin-top:8px;padding-inline:0;font-size:13px">{{ acct.morePeopleLabel }}</button></sc-if>
+            </section>
+            <section>
+              <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Sources for this account</h6></div>
+              <sc-for list="{{ acct.sources }}" as="s" hint-placeholder-count="4"><button onClick="{{ s.go }}" style="display:flex;justify-content:space-between;gap:8px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:10px 0;font:inherit;font-size:14px;color:inherit;cursor:pointer"><span>{{ s.name }}</span><span style="font-size:12px;color:var(--color-neutral-700);white-space:nowrap">{{ s.updated }}</span></button></sc-for>
+            </section>
+          </aside>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- MEETINGS -->
+    <sc-if value="{{ isMeetings }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Meetings" style="display:flex;flex-direction:column;gap:24px">
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px">
+          <div><h1 style="font-size:36px;margin:0 0 4px">Meetings</h1><p style="margin:0;color:var(--color-neutral-700)">Dated meetings and conversations from the CRM, recordings and owner notes.</p></div>
+          <div class="seg"><sc-for list="{{ meetingTabs }}" as="t" hint-placeholder-count="2"><button onClick="{{ t.go }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for></div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
+          <input class="input" placeholder="Search meetings, companies, attendees" value="{{ meetingSearchValue }}" onChange="{{ setMeetingSearch }}" style="max-width:320px;min-height:34px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ meetingOwnerValue }}" onChange="{{ setMeetingOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><option>Alex Morgan</option><option>Sam Rivera</option><option>Marketing</option></select></label>
+          <span style="margin-left:auto;font-size:12px;color:var(--color-neutral-700)">{{ meetingsNote }}</span>
+        </div>
+        <sc-if value="{{ meetingsEmpty }}" hint-placeholder-val="{{ false }}"><p style="margin:0;font-size:14px;color:var(--color-neutral-700)">No meetings match. Clear the search or choose Everyone.</p></sc-if>
+        <sc-for list="{{ meetingGroups }}" as="g" hint-placeholder-count="2">
+          <section>
+            <h6 style="margin:0 0 4px;padding-bottom:8px;border-bottom:2px solid var(--color-divider)">{{ g.label }}</h6>
+            <sc-for list="{{ g.items }}" as="m" hint-placeholder-count="4">
+              <button onClick="{{ m.go }}" style="display:grid;grid-template-columns:120px minmax(0,1fr) auto;gap:4px 16px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:14px 0;font:inherit;color:inherit;cursor:pointer">
+                <span style="font-size:13px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ m.when }}</span>
+                <span style="min-width:0"><span style="font-weight:600;font-size:15px">{{ m.title }}</span><span style="display:block;font-size:13px;color:var(--color-neutral-700);margin-top:2px">{{ m.who }}</span></span>
+                <span class="tag tag-neutral">{{ m.kind }}</span>
+              </button>
+            </sc-for>
+          </section>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- MEETING READING VIEW -->
+    <sc-if value="{{ isMeeting }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Meeting notes" style="display:flex;flex-direction:column;gap:24px">
+        <button onClick="{{ goMeetings }}" class="btn btn-ghost" style="align-self:flex-start;padding-inline:0">← Meetings</button>
+        <div style="display:flex;flex-wrap:wrap;gap:32px 40px;align-items:flex-start">
+          <article style="flex:2 1 480px;min-width:0;max-width:72ch">
+            <h6 style="margin:0 0 8px;color:var(--color-neutral-700)">{{ mtg.kicker }}</h6>
+            <h1 style="font-size:32px;margin:0 0 12px;text-wrap:pretty">{{ mtg.title }}</h1>
+            <p style="margin:0 0 20px;font-size:14px;color:var(--color-neutral-700);line-height:1.5">{{ mtg.who }}</p>
+            <sc-if value="{{ mtg.hasActions }}" hint-placeholder-val="{{ true }}">
+            <section style="background:var(--color-surface);padding:18px 20px;margin-bottom:28px">
+              <h6 style="margin:0 0 10px">Action items from the call</h6>
+              <ol style="margin:0;padding-left:20px;font-size:16px;line-height:1.55;display:flex;flex-direction:column;gap:6px">
+                <sc-for list="{{ mtg.actions }}" as="a" hint-placeholder-count="3"><li>{{ a }}</li></sc-for>
+              </ol>
+            </section>
+            </sc-if>
+            <sc-if value="{{ mtg.hasSummary }}" hint-placeholder-val="{{ true }}">
+            <div style="font-size:16px;line-height:1.65;display:flex;flex-direction:column;gap:6px">
+              <div id="meeting-summary-readable" class="evidence-prose"></div>
+            </div>
+            </sc-if>
+            <sc-if value="{{ mtg.noSummary }}" hint-placeholder-val="{{ false }}"><p style="margin:0;font-size:15px;color:var(--color-neutral-700)">No summary was recorded for this meeting.</p></sc-if>
+            <div style="margin-top:24px;border-top:2px solid var(--color-divider);padding-top:12px;display:flex;flex-wrap:wrap;gap:12px;align-items:center"><span style="font-weight:600;font-size:15px">Transcript · {{ mtg.transcript }}</span><sc-if value="{{ mtg.canLoadTranscript }}" hint-placeholder-val="{{ false }}"><button onClick="{{ mtg.loadTranscript }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ mtg.transcriptBtn }}</button></sc-if><button onClick="{{ mtg.recordGo }}" class="btn btn-ghost" style="font-size:13px;padding:6px 4px">Recording record</button><span style="font-size:13px;color:var(--color-neutral-700)">{{ mtg.transcriptNote }}</span></div>
+            <sc-if value="{{ mtg.transcriptOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:12px;display:flex;flex-direction:column;gap:2px;font-size:14px;line-height:1.5;max-height:520px;overflow:auto;border:1px solid var(--color-divider);padding:12px 14px">
+                <sc-for list="{{ mtg.lines }}" as="l" hint-placeholder-count="10"><div style="display:grid;grid-template-columns:52px 120px minmax(0,1fr);gap:10px;padding:3px 0"><span style="font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ l.t }}</span><span style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ l.s }}</span><span>{{ l.x }}</span></div></sc-for>
+              </div>
+            </sc-if>
+          </article>
+          <aside style="flex:1 1 280px;min-width:0;display:flex;flex-direction:column;gap:28px">
+            <div style="display:flex;flex-direction:column;gap:8px"><button onClick="{{ mtg.draftGo }}" class="btn btn-primary btn-block" style="margin:0">{{ mtg.draftLabel }}</button><button onClick="{{ exportMeeting }}" class="btn btn-secondary btn-block" style="margin:0">Export notes</button></div>
+            <sc-if value="{{ mtg.hasCompany }}" hint-placeholder-val="{{ true }}">
+            <section>
+              <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Account</h6></div>
+              <button onClick="{{ mtg.companyGo }}" style="display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:12px 0;font:inherit;color:inherit;cursor:pointer"><span style="font-weight:600">{{ mtg.company }}</span><span style="display:block;font-size:13px;color:var(--color-neutral-700)">{{ mtg.dealLine }}</span></button>
+            </section>
+            </sc-if>
+            <section>
+              <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Invited</h6></div>
+              <sc-for list="{{ mtg.invitees }}" as="i" hint-placeholder-count="4"><div style="padding:8px 0;border-bottom:1px solid var(--color-divider);font-size:14px"><span style="font-weight:600">{{ i.name }}</span><span style="display:block;font-size:12px;color:var(--color-neutral-700)">{{ i.email }}</span></div></sc-for>
+            </section>
+            <sc-if value="{{ mtg.hasRelated }}" hint-placeholder-val="{{ true }}">
+            <section>
+              <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Other meetings with this account</h6></div>
+              <sc-for list="{{ mtg.related }}" as="r" hint-placeholder-count="3"><button onClick="{{ r.go }}" style="display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:10px 0;font:inherit;color:inherit;cursor:pointer"><span style="font-weight:600;font-size:14px">{{ r.title }}</span><span style="display:block;font-size:12px;color:var(--color-neutral-700)">{{ r.date }}</span></button></sc-for>
+            </section>
+            </sc-if>
+          </aside>
+        </div>
+      </div>
+    </sc-if>
+
+        <!-- DRAFTS -->
+    <sc-if value="{{ isDrafts }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Drafts" class="draft-workspace">
+        <div><h1 style="font-size:36px;margin:0 0 4px">Drafts</h1><p class="muted-copy">Your emails, campaign copy and internal notes. Every saved version stays available.</p></div>
+        <div class="draft-purpose-tabs" role="tablist" aria-label="Draft purpose"><sc-for list="{{ draftTabs }}" as="tab"><button role="tab" aria-selected="{{ tab.selected }}" class="draft-purpose-tab" onClick="{{ tab.go }}">{{ tab.label }} <span>{{ tab.count }}</span></button></sc-for></div>
+        <div class="draft-columns">
+          <div class="draft-list">
+            <div class="section-rule"><h6>{{ draftListTitle }}</h6><button class="btn btn-ghost" onClick="{{ newDraft }}">New draft</button></div>
+            <sc-if value="{{ draftsEmpty }}"><p class="muted-copy">No drafts here yet.</p></sc-if>
+            <sc-for list="{{ draftList }}" as="item"><button class="draft-list-item" aria-current="{{ item.current }}" onClick="{{ item.go }}"><strong>{{ item.title }}</strong><span>{{ item.meta }}</span><span class="draft-list-status">{{ item.status }}</span></button></sc-for>
+          </div>
+          <sc-if value="{{ hasDraft }}"><section class="email-composer" aria-label="Draft editor">
+            <div class="section-rule"><h6>{{ draft.company }}</h6><span class="muted-copy" role="status">{{ draft.versionLabel }}</span></div>
+            <sc-if value="{{ isEmailDraft }}"><div class="sender-line"><span><strong>From</strong> {{ senderLabel }}</span><button class="text-control" onClick="{{ showConnections }}">{{ senderActionLabel }}</button></div></sc-if>
+            <sc-if value="{{ isCampaignDraft }}"><div class="field"><label for="campaign-sender">Campaign sender reference</label><select id="campaign-sender" class="input" value="{{ draft.campaignSender }}" onChange="{{ editCampaignSender }}"><option value="">Choose a mailbox</option><sc-for list="{{ campaignSenders }}" as="sender"><option value="{{ sender.email }}">{{ sender.email }}</option></sc-for></select></div><p class="muted-copy">Prepare your copy here, then choose the sending accounts and launch in LemList.</p></sc-if>
+            <div class="field"><label for="draft-subject">{{ subjectLabel }}</label><input id="draft-subject" class="input" maxlength="500" value="{{ draft.subject }}" onInput="{{ editSubject }}"></div>
+            <sc-if value="{{ isEmailDraft }}">
+              <div class="field"><label for="draft-to">To</label><input id="draft-to" class="input" placeholder="Email addresses, separated by commas" value="{{ draft.recipients }}" onInput="{{ editRecipients }}" inputmode="email"></div>
+              <sc-if value="{{ hasContacts }}"><div class="field"><label for="draft-contact">Add a recorded contact</label><select id="draft-contact" class="input" value="" onChange="{{ addDraftContact }}"><option value="">Choose a contact</option><sc-for list="{{ draftContacts }}" as="contact"><option value="{{ contact.email }}">{{ contact.label }}</option></sc-for></select></div></sc-if>
+              <details class="composer-details"><summary>Cc / Bcc</summary><div class="composer-addresses"><div class="field"><label for="draft-cc">Cc</label><input id="draft-cc" class="input" value="{{ draft.cc }}" onInput="{{ editCc }}" inputmode="email"></div><div class="field"><label for="draft-bcc">Bcc</label><input id="draft-bcc" class="input" value="{{ draft.bcc }}" onInput="{{ editBcc }}" inputmode="email"></div></div></details>
+            </sc-if>
+            <div class="field"><label for="draft-message">{{ messageLabel }}</label><textarea id="draft-message" class="input email-message" value="{{ draft.text }}" onInput="{{ editText }}" maxlength="100000"></textarea></div>
+            <details class="composer-details"><summary>Internal context and content mode</summary>
+              <div class="composer-context"><div class="field"><label for="draft-internal">Internal notes</label><textarea id="draft-internal" class="input" value="{{ draft.internalNotes }}" onInput="{{ editInternalNotes }}"></textarea></div><div class="field"><label for="draft-rationale">Review context</label><textarea id="draft-rationale" class="input" value="{{ draft.rationale }}" onInput="{{ editRationale }}"></textarea></div>
+              <div class="content-modes"><label>Default content mode<select class="input" value="{{ contentMode }}" onChange="{{ setContentMode }}"><option value="cs">CS</option><option value="marketing">Marketing</option></select></label><label>This draft’s content mode<select class="input" value="{{ draftContentMode }}" onChange="{{ setDraftContentMode }}"><option value="default">Use default</option><option value="cs">CS</option><option value="marketing">Marketing</option></select></label></div><p class="content-mode-note">{{ contentModeNote }} Changing mode preserves your text.</p></div>
+            </details>
+            <div class="composer-actions"><sc-if value="{{ isEmailDraft }}"><button class="btn btn-primary" onClick="{{ sendDraft }}" disabled="{{ sendDisabled }}">{{ sendLabel }}</button></sc-if><button class="btn btn-secondary" onClick="{{ saveDraft }}" disabled="{{ saveDisabled }}">{{ saveLabel }}</button><sc-if value="{{ isCampaignDraft }}"><button class="btn btn-secondary" onClick="{{ copyCampaign }}">Copy for LemList</button></sc-if><button class="btn btn-secondary" onClick="{{ exportDraft }}">Export</button><label class="draft-status-label">Status<select class="input" value="{{ draft.status }}" onChange="{{ editStatus }}"><option>Draft</option><option>Ready for review</option><option>Archived</option></select></label></div>
+            <sc-if value="{{ draftFeedback }}"><p class="{{ draftFeedbackClass }}" role="status">{{ draftFeedback }}</p></sc-if>
+            <sc-if value="{{ draftSaveConflict }}"><div class="workspace-notice"><span>Your edits are kept. The saved draft changed in another session.</span><button class="text-control" onClick="{{ reloadWorkspaceDraft }}">Load saved version</button><button class="text-control" onClick="{{ saveDraftCopy }}">Save my edits as a copy</button></div></sc-if>
+            <sc-if value="{{ hasSendReceipt }}"><p class="send-receipt">{{ sendReceiptLabel }} <a href="https://mail.google.com/" target="_blank" rel="noopener noreferrer">Open Gmail</a></p></sc-if>
+            <div class="draft-support"><button class="text-control" onClick="{{ evDraftRefs }}">{{ draft.refs }} supporting records</button><button class="text-control" onClick="{{ showWorkspaceHistory }}">Version history</button></div>
+          </section></sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- DATA -->
+    <sc-if value="{{ isData }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="About this data" style="display:flex;flex-direction:column;gap:32px">
+        <div><h1 style="font-size:36px;margin:0 0 4px">About this data</h1><p style="margin:0;color:var(--color-neutral-700);max-width:64ch">Where the numbers come from, how current each source is, and what they can and cannot tell you.</p></div>
+        <section>
+          <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">How to read the numbers</h6></div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 32px">
+            <sc-for list="{{ readingRules }}" as="r" hint-placeholder-count="5"><div style="padding:14px 0;border-bottom:1px solid var(--color-divider)"><strong style="display:block;font-weight:600;font-size:15px;margin-bottom:4px">{{ r.title }}</strong><span style="font-size:14px;line-height:1.5;color:var(--color-neutral-800)">{{ r.text }}</span></div></sc-for>
+          </div>
+        </section>
+        <section>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Sources · collected Sep 8, 2026</h6><span style="display:flex;align-items:center;gap:10px"><span style="font-size:12px;color:var(--color-neutral-700)">{{ checkNote }}</span><button onClick="{{ checkUpdates }}" disabled="{{ checking }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ checkLabel }}</button></span></div>
+          <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:680px">
+            <thead><tr><th>Source</th><th>Used for</th><th>Collected</th><th style="text-align:right">Records</th><th>Known limits</th></tr></thead>
+            <tbody><sc-for list="{{ sources }}" as="s" hint-placeholder-count="8"><tr><td style="font-weight:600;white-space:nowrap">{{ s.name }}</td><td>{{ s.used }}</td><td style="white-space:nowrap;font-variant-numeric:tabular-nums;color:{{ s.color }}">{{ s.updated }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ s.count }}</td><td style="color:var(--color-neutral-800);font-size:13px">{{ s.gaps }}</td></tr></sc-for></tbody>
+          </table></div>
+        </section>
+        <div style="display:flex;flex-wrap:wrap;gap:32px 40px;align-items:flex-start">
+          <section style="flex:1 1 300px;min-width:0">
+            <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">What counts as Lead, MQL and SQL</h6></div>
+            <table class="table" style="font-size:13px"><thead><tr><th>Source</th><th>Lead</th><th>MQL</th><th>SQL</th></tr></thead>
+            <tbody><sc-for list="{{ definitions }}" as="d" hint-placeholder-count="4"><tr><td style="font-weight:600">{{ d.source }}</td><td>{{ d.lead }}</td><td>{{ d.mql }}</td><td>{{ d.sql }}</td></tr></sc-for></tbody></table>
+            <p style="margin:10px 0 0;font-size:12px;color:var(--color-neutral-700)">From the workbook's Marketing tab, rows 45 – 48.</p>
+          </section>
+          <section style="flex:1 1 300px;min-width:0">
+            <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">The review</h6></div>
+            <p style="margin:12px 0;font-size:14px;line-height:1.5">{{ reviewScope }} Follow-ups and saved drafts retain their September 8 review context. Personal ratings change only your priority list.</p>
+            <button onClick="{{ refreshReview }}" disabled="{{ reviewRequested }}" class="btn btn-secondary">{{ refreshLabel }}</button><p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ refreshNote }}</p>
+            <div style="padding-top:20px;margin-top:20px;border-top:2px solid var(--color-divider)"><h6 style="margin:0 0 8px">Records loaded</h6><p style="margin:0;font-size:14px;color:var(--color-neutral-800);line-height:1.5">{{ coverageNote }}</p></div>
+            <div style="padding-top:20px;margin-top:20px;border-top:2px solid var(--color-divider)"><h6 style="margin:0 0 8px">People</h6><p style="margin:0;font-size:14px;color:var(--color-neutral-800)">Demo User (marketing) · Alex Morgan, Sam Rivera (sales) · Demo User, Alex Morgan, Sam Rivera (other deal owners). Owner filters use these names.</p></div>
+          </section>
+        </div>
+      </div>
+    </sc-if>
+    </sc-if>
+  </main>
+
+  <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+    <nav data-screen-label="Mobile tab bar" style="position:sticky;bottom:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));background:var(--color-bg);border-top:2px solid var(--color-divider);z-index:30">
+      <sc-for list="{{ mobileNav }}" as="n" hint-placeholder-count="5">
+        <button onClick="{{ n.go }}" aria-current="{{ n.current }}" style="font:inherit;font-size:11px;letter-spacing:.02em;background:none;border:0;border-top:3px solid {{ n.line }};margin-top:-2px;color:{{ n.color }};padding:10px 4px 12px;min-height:48px;cursor:pointer;font-weight:{{ n.weight }}">{{ n.label }}</button>
+      </sc-for>
+    </nav>
+  </sc-if>
+
+  <!-- EVIDENCE DRAWER -->
+  <sc-if value="{{ evidenceOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeEvidence }}" style="position:fixed;inset:0;background:color-mix(in srgb,var(--color-neutral-900) 40%,transparent);z-index:40"></div>
+    <aside data-screen-label="Evidence" role="dialog" aria-modal="true" aria-labelledby="evidence-heading" onClick="{{ stop }}" style="position:fixed;top:0;right:0;bottom:0;width:min(760px,100%);background:var(--color-bg);border-left:2px solid var(--color-divider);box-shadow:var(--shadow-lg);z-index:41;overflow:auto;padding:24px;display:flex;flex-direction:column;gap:16px;box-sizing:border-box">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px"><div><h6 style="margin:0 0 6px;color:var(--color-accent)">{{ ev.kicker }}</h6><h3 id="evidence-heading" style="font-size:20px;margin:0">{{ ev.title }}</h3></div><button onClick="{{ closeEvidence }}" class="btn btn-icon btn-secondary" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div>
+      <p style="margin:0;font-size:13px;color:var(--color-neutral-700)">{{ ev.meta }}</p>
+      <div id="evidence-readable"></div>
+      <sc-if value="{{ ev.missing }}" hint-placeholder-val="{{ false }}">
+        <div style="background:var(--color-surface);padding:14px 16px;font-size:14px;line-height:1.5">Some referenced records are unavailable in this collection. Available records are shown below.</div>
+      </sc-if>
+      <p style="margin:0;font-size:13px;line-height:1.5;color:var(--color-neutral-800)">{{ ev.note }}</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding-top:12px;border-top:2px solid var(--color-divider)"><button onClick="{{ proposeCorrection }}" class="btn btn-secondary">Propose a correction</button><button onClick="{{ exportEvidence }}" disabled="{{ ev.missing }}" class="btn btn-secondary">Export record</button></div>
+      <details><summary style="cursor:pointer;font-size:12px;color:var(--color-neutral-700)">Technical identifiers</summary><code style="display:block;font-size:11px;margin-top:6px;word-break:break-all;color:var(--color-neutral-700)">{{ ev.ids }}</code></details>
+    </aside>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;screen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;today&quot;,&quot;options&quot;:[&quot;today&quot;,&quot;performance&quot;,&quot;accounts&quot;,&quot;account&quot;,&quot;meetings&quot;,&quot;meeting&quot;,&quot;drafts&quot;,&quot;data&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Navigation&quot;},&quot;systemState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;normal&quot;,&quot;options&quot;:[&quot;normal&quot;,&quot;loading&quot;,&quot;review-running&quot;,&quot;review-ready&quot;,&quot;source-failed&quot;,&quot;stale&quot;,&quot;draft-conflict&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;States&quot;},&quot;mobile&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Layout&quot;}}">
+class Component extends DCLogic {
+  state = { screen: null, perf: 'demand', accounts: 'deals', meetings: 'upcoming', evidence: false, draft: 0, period: 'quarter' };
+  go(screen, extra) { return () => { this.setState({ screen, evidence: false, ...(extra || {}) }); window.scrollTo(0, 0); }; }
+  csv(name, header, rows) {
+    const cell = v => { const s = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const text = [header, ...rows].map(r => r.map(cell).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  memo(key, dep, fn) { this._memo = this._memo || {}; const m = this._memo[key]; if (m && m.dep === dep) return m.val; const val = fn(); this._memo[key] = { dep, val }; return val; }
+  loadTranscript(id) { if (!id || (this.state.transcripts && this.state.transcripts[id] !== undefined)) return; if (!this._trPromise) this._trPromise = fetch('data/transcripts.json').then(r => r.json()); this._trPromise.then(all => this.setState(s => ({ transcripts: { ...(s.transcripts || {}), [id]: all[id] || null } }))); }
+  componentDidMount() { fetch('data/records.json').then(r => r.json()).then(records => this.setState({ records })).catch(e => this.setState({ recordsError: String(e) })); }
+  edit(field) { return e => { const i = this.state.draft; const edits = { ...(this.state.edits || {}) }; edits[i] = { ...(edits[i] || {}), [field]: e.target.value }; this.setState({ edits }); }; }
+  renderVals() { const t0 = performance.now(); const v = this.renderValsInner(); window.__rvMs = Math.round(performance.now() - t0); return v; }
+  renderValsInner() {
+    const s = this.state.screen ?? this.props.screen ?? 'today';
+    const st = this.state;
+    const ink = 'var(--color-text)', bg = 'var(--color-bg)', accent = 'var(--color-accent)', muted = 'var(--color-neutral-700)', red = 'var(--color-accent-700)';
+    const seg = (items, cur, key) => items.map(([id, label]) => ({ id, label, go: () => this.setState({ [key]: id }), selected: cur === id, bg: cur === id ? accent : 'transparent', fg: cur === id ? bg : ink }));
+    const navDefs = [['today', 'Today'], ['performance', 'Performance'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts'], ['data', 'Data']];
+    const groupOf = { account: 'accounts', meeting: 'meetings' };
+    const activeNav = groupOf[s] ?? s;
+    const ev = key => e => { e && e.stopPropagation && e.stopPropagation(); this.setState({ evidence: key || 'doug-11' }); };
+    const goEvidence = ev('doug-11');
+    const goAccount = this.go('account'), goMeeting = this.go('meeting'), goDrafts = this.go('drafts');
+    const goDeals = this.go('accounts', { accounts: 'deals' }), goLeads = this.go('accounts', { accounts: 'leads' }), goFollow = this.go('accounts', { accounts: 'follow' });
+    const goSpend = this.go('performance', { perf: 'spend' }), goDemand = this.go('performance', { perf: 'demand' });
+    const usd = n => '$' + Math.round(n).toLocaleString('en-US');
+    const k = n => '$' + (n / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 }) + 'K';
+    // Lead Tracker: new leads per week starting Jun 29 (lead date)
+    const leadWeeks = [];
+    const webWeeksRaw = [];
+    // Opportunity rows are provided by the data adapter.
+    const dealsRaw = this._verifiedOpportunityRows();
+    const followRaw = [];
+    const leadsRaw = this._verifiedLeadRows();
+    const savedRaw = [];
+    const suggestedRaw = [];
+    const savedState = st.savedState || {}; // index -> {version, savedAt, history:[]}
+    const edits = st.edits || {};
+    followRaw.forEach(f => { const index = savedRaw.findIndex(d => d[1] === f[0]); if (index >= 0) f[5] = index; });
+    const baseDrafts = [
+      ...savedRaw.map(([title, company, version, text, rationale, refs]) => ({ kind: 'Follow-up', title, company, text, rationale, refs, version, type: 'Follow-up', status: 'Draft', recipients: '', saved: true })),
+      ...suggestedRaw.map(([title, company, text, rationale, refs]) => ({ kind: 'Suggested follow-up', title, company, text, rationale, refs, version: 0, type: 'Follow-up', status: 'Draft', recipients: '', saved: false })),
+      ...(st.newDrafts || [])
+    ];
+    const drafts = baseDrafts.map((d, i) => { const ss = savedState[i]; const base = ss ? { ...d, ...ss.fields, version: ss.version, saved: true, kind: d.kind === 'Suggested follow-up' ? 'Follow-up' : d.kind } : d; const e = edits[i] || {}; const dirty = Object.keys(e).some(k => e[k] !== base[k]); const cur = { ...base, ...e }; const savedNote = ss ? 'saved just now' : d.saved ? 'saved Sep 8' : null; return { ...cur, dirty, versionLabel: cur.version ? 'Version ' + cur.version + ' · ' + savedNote + (dirty ? ' · unsaved changes' : '') : (dirty ? 'Not yet saved · unsaved changes' : 'Not yet saved'), saveLabel: cur.version ? 'Save version ' + (cur.version + 1) : 'Save as version 1', saveDisabled: !dirty && !!cur.version, history: (ss ? ss.history : (d.version > 1 ? ['v1 · Sep 8, 15:58'] : [])).length ? 'Earlier versions: ' + (ss ? ss.history : ['v1 · Sep 8, 15:58']).join(' · ') + '. Each stays available.' : (cur.version ? 'First saved version. Earlier versions will be listed here.' : 'Suggested by the review prepared Sep 8. Saving creates version 1.') }; });
+    const draftIndex = Math.min(st.draft, drafts.length - 1);
+    const draft = drafts[draftIndex] || { title: 'Untitled draft', text: '', rationale: '', refs: 0, version: 0, history: [] };
+    const now = () => new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const saveDraft = () => { const d = drafts[draftIndex]; const prev = savedState[draftIndex]; const history = prev ? [...prev.history] : (d.version > 1 ? ['v1 · Sep 8, 15:58'] : []); if (d.version) history.unshift('v' + d.version + ' · ' + (prev ? prev.savedAt : 'Sep 8')); const fields = { title: d.title, text: d.text, rationale: d.rationale, type: d.type, status: d.status, recipients: d.recipients }; const next = { ...savedState, [draftIndex]: { version: d.version + 1, savedAt: now(), history, fields } }; const e2 = { ...edits }; delete e2[draftIndex]; this.setState({ savedState: next, edits: e2 }); };
+    const newDraft = () => { const list = [...(st.newDrafts || []), { kind: 'New draft', title: 'Untitled draft', company: 'No company linked', text: '', rationale: '', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length }); };
+    const q = (st.search || '').trim().toLowerCase();
+    const mq = (st.meetingSearch || '').trim().toLowerCase();
+    const mOwner = st.meetingOwner || 'Everyone';
+    const filteredDeals = dealsRaw.filter(d => (!st.owner || st.owner === 'Everyone' || d[1] === st.owner) && (!q || (d[0] + ' ' + d[7] + ' ' + d[2]).toLowerCase().includes(q)));
+    const filteredLeads = leadsRaw.filter(l => (!st.owner || st.owner === 'Everyone' || l[2] === st.owner) && (!q || (l[0] + ' ' + l[4] + ' ' + l[1]).toLowerCase().includes(q)));
+    const dealRows = filteredDeals.map(d => [d[0], d[1], d[2], d[3], d[4] + '%', d[5], d[6] ?? '', d[7]]);
+    // Lead Tracker by period: leads by lead date, MQL/SQL by their own dates
+    const periodData = {"six":{"range":"Demo — no company data","L":0,"M":0,"S":0,"bars":[],"src":[],"unit":""},"quarter":{"range":"Demo — no company data","L":0,"M":0,"S":0,"bars":[],"src":[],"unit":""},"year":{"range":"Demo — no company data","L":0,"M":0,"S":0,"bars":[],"src":[],"unit":""}};
+    const LEADS = (st.verified?.leads || []).map(r => [r.source, r.lead, r.mql, r.sql]);
+    const fmt = d => new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    if (st.period === 'custom') {
+      let a = st.start || '2026-08-01', b = st.end || '2026-09-08'; const inverted = a > b; if (inverted) [a, b] = [b, a];
+      const inR = d => d && d >= a && d <= b;
+      const src = {}; let L = 0, M = 0, S = 0;
+      for (const [s0, ld, md, sd] of LEADS) { const o = src[s0] = src[s0] || [s0, 0, 0, 0]; if (inR(ld)) { L++; o[1]++; } if (inR(md)) { M++; o[2]++; } if (inR(sd)) { S++; o[3]++; } }
+      const days = Math.round((Date.parse(b) - Date.parse(a)) / 86400000) + 1;
+      const monthly = days > 120; const bars = [];
+      if (monthly) { const m = {}; for (const [, ld] of LEADS) if (inR(ld)) { const key = ld.slice(0, 7); m[key] = (m[key] || 0) + 1; } for (const key of Object.keys(m).sort()) bars.push([new Date(key + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }), m[key]]); }
+      else { for (let d = a; d <= b; d = new Date(Date.parse(d) + 7 * 86400000).toISOString().slice(0, 10)) { const e = new Date(Date.parse(d) + 6 * 86400000).toISOString().slice(0, 10); bars.push([fmt(d), LEADS.filter(r => r[1] && r[1] >= d && r[1] <= (e < b ? e : b)).length]); } }
+      periodData.custom = { range: fmt(a) + ' – ' + fmt(b) + (inverted ? ' (dates were reversed)' : ''), L, M, S, bars: bars.length ? bars : [['—', 0]], unit: monthly ? '' : 'Week of ', src: Object.values(src).filter(o => o[1] || o[2] || o[3]).sort((x, y) => y[1] - x[1]) };
+    }
+    const pd = periodData[st.period];
+    const barMax = Math.max(...pd.bars.map(b => b[1]));
+    // ---- Records from the CRM / Fathom extract
+    const REC = st.records || { companies: [] };
+    const fmtD = d => (d = d == null ? '' : String(d)) ? new Date((d.length === 10 ? d + 'T12:00:00Z' : (d.length === 16 ? d + ':00Z' : d))).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : '—';
+    const fmtDT = d => (d = d == null ? '' : String(d)) && d.length >= 16 ? fmtD(d) + ' · ' + d.slice(11, 16) + ' UTC' : fmtD(d);
+    const money = n => n === null || n === undefined ? 'no amount' : '$' + Math.round(n).toLocaleString('en-US');
+    const findCo = idOrName => this._verifiedAccount(idOrName);
+    const goCo = (idOrName) => e => { e && e.stopPropagation && e.stopPropagation(); const c = findCo(idOrName); if (c) { this.setState({ screen: 'account', accountId: c.id, evidence: false, timelineAll: false, peopleAll: false }); window.scrollTo(0, 0); } else ev('sheet:' + idOrName)(e); };
+    const allRecs = this.memo('allRecs', REC, () => [...REC.companies.flatMap(c => c.recordings.map(r => ({ ...r, companyId: c.id, companyName: c.name }))), ...(REC.unmatchedRecordings || []).map(r => { const ext = [...new Set(r.invitees.map(i => String(i.email || '').split('@')[1]).filter(d => d && !/opstream|gmail|outlook/.test(d)))]; return { ...r, companyId: null, companyName: ext[0] ? ext[0] + ' (not in CRM extract)' : 'Internal' }; })]);
+    const goMtg = id => e => { e && e.stopPropagation && e.stopPropagation(); this.setState({ screen: 'meeting', meetingId: id, evidence: false }); window.scrollTo(0, 0); };
+    const co = findCo(st.accountId || 'sample-account') || { name: 'Loading…', deals: [], contacts: [], notes: [], meetings: [], tasks: [], recordings: [] };
+    const sheetFor = name => { const c = findCo(name); return dealsRaw.find(d => d[0] === name || (c && findCo(d[0])?.id === c.id)); };
+    const review = followRaw.find(f => f[0].toLowerCase().split(' ')[0] === (co.name || '').toLowerCase().split(' ')[0]);
+    const openDeal = co.deals.find(d => !d.closed) || co.deals[0];
+    const sheet = sheetFor(co.name);
+    const timeline = this.memo('timeline', REC === (st.records || null) ? co.id + ':' + (REC.generatedAt || '') : Math.random(), () => [
+      ...co.notes.map(n => ({ date: n.date, title: 'CRM note' + (n.owner ? ' · ' + n.owner : ''), kind: 'CRM', text: n.text.replace(/https?:\/\/([^\s\/]+)[^\s]*/g, '[link: $1]').slice(0, 260) + (n.text.length > 260 ? '…' : ''), go: ev('note:' + co.id + ':' + n.id) })),
+      ...co.recordings.map(r => ({ date: r.date.slice(0, 10), title: r.title, kind: 'Recorded', text: (r.summary.find(b => b.t === 'p' || b.t === 'li') || {}).x || (r.actions[0] ? 'Action: ' + r.actions[0] : (r.minutes ? r.minutes + ' min' : '')), go: goMtg(r.id) })),
+      ...co.meetings.filter(m => !co.recordings.some(r => r.date.slice(0, 10) === m.start.slice(0, 10))).map(m => ({ date: m.start.slice(0, 10), title: m.title, kind: m.start.slice(0, 10) > '2026-09-08' ? 'Upcoming' : 'Calendar', text: m.outcome ? m.outcome.toLowerCase().replace(/_/g, ' ') : 'CRM calendar entry', go: ev('crm-meeting:' + co.id + ':' + m.id) })),
+      ...co.deals.flatMap(d => d.history.map(hh => ({ date: hh.date, title: 'Stage → ' + hh.label, kind: 'CRM', text: d.name, go: ev('deal:' + d.id) }))),
+      ...co.deals.flatMap(d => d.amountHistory.slice(0, 4).map(a => ({ date: a.date, title: 'Amount set to ' + money(a.value), kind: 'CRM', text: d.name, go: ev('deal:' + d.id) }))),
+      ...(co.calls || []).map(cl => ({ date: cl.date, title: cl.title + (cl.minutes ? ' · ' + cl.minutes + ' min' : ''), kind: 'Call', text: (cl.text || 'CRM call log') + (cl.owner ? ' · ' + cl.owner : ''), go: ev('call:' + co.id + ':' + cl.id) })),
+      ...co.tasks.filter(t => t.open).map(t => ({ date: t.due, title: 'Open task · ' + t.subject, kind: 'Task', text: (t.owner || '') + (t.status ? ' · ' + t.status.toLowerCase().replace(/_/g, ' ') : ''), go: ev('deal:' + (openDeal || {}).id) }))
+    ].filter(t => t.date).sort((a, b) => b.date.localeCompare(a.date)));
+    const tlShown = st.timelineAll ? timeline : timeline.slice(0, 30);
+    const acct = {
+      name: co.name, description: (co.description || '').length > 320 ? co.description.slice(0, 300).replace(/[,;]\s*\S*$/, '') + '…' : (co.description || ''), hasDescription: !!co.description,
+      subtitle: [co.domain, co.owner ? 'Owner ' + co.owner : null, co.industry ? co.industry.toLowerCase().replace(/_/g, ' ') : null, co.employees ? co.employees.toLocaleString('en-US') + ' employees' : null, [co.city, co.country].filter(Boolean).join(', ') || null, co.lifecycle ? 'CRM: ' + co.lifecycle : null].filter(Boolean).join(' · '),
+      hasReview: !!review, noReview: !review && !!st.records, reason: review ? review[2] : '', next: review ? review[3] : '', uncertainty: review ? review[4] : '',
+      draftLabel: review ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: review ? () => { this.setState({ screen: 'drafts', draft: review[5] }); window.scrollTo(0, 0); } : () => { const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + co.name, company: co.name, text: '', rationale: openDeal ? openDeal.name + ' · ' + openDeal.stageLabel + ' · ' + money(openDeal.amount) : '', refs: 1, version: 0, type: 'Follow-up', status: 'Draft', recipients: co.contacts.slice(0, 2).map(c => c.name).join(', '), saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
+      timeline: tlShown.map(t => ({ ...t, date: fmtD(t.date) })), timelineNote: timeline.length + ' dated items · notes, calls, recordings, calendar, stage and amount changes, open tasks', hasMoreTimeline: timeline.length > tlShown.length, moreTimelineLabel: 'Show all ' + timeline.length, showAllTimeline: () => this.setState({ timelineAll: true }),
+      hasRelated: !!(co.related && co.related.length), relatedNote: co.related && co.related.length ? 'Includes ' + co.related.length + ' related CRM company record' + (co.related.length > 1 ? 's' : '') + ' (' + co.related.map(r => r.name).join(', ') + ') whose contacts, meetings and emails are merged here. Records are kept separate in the CRM.' : '',
+      emailNote: co.emails ? co.emails.count + ' CRM emails on file' + (co.emails.latest ? ', latest ' + fmtD(String(co.emails.latest).slice(0, 10)) : '') + '. Email bodies are not shown in this workspace.' : 'No CRM emails on file for this company.',
+      deals: co.deals.map(d => { const sh = sheetFor(co.name); return { name: d.name, line: 'CRM: ' + d.stageLabel + ' · ' + money(d.amount) + (d.currency && d.currency !== 'USD' ? ' ' + d.currency : '') + (d.probability !== null ? ' · ' + d.probability + '%' : '') + ' · close ' + fmtD(d.close) + (d.owner ? ' · ' + d.owner : ''), sheet: sh ? 'Owner sheet: ' + sh[2] + ' · $' + sh[3].toLocaleString('en-US') + ' · ' + sh[4] + '% · ' + sh[5] + ' · ' + (sh[6] ?? '—') + ' days in stage' : 'Not on an owner prep sheet', go: ev('deal:' + d.id) }; }),
+      hasDealReview: !!(openDeal && openDeal.review), dealReview: openDeal && openDeal.review ? openDeal.review.flatMap(r => [...r.supporting.map(x => ({ kind: 'Supports', text: x })), ...r.concerns.map(x => ({ kind: 'Caveat', text: x }))]).filter((x, i, arr) => arr.findIndex(y => y.text === x.text) === i) : [], dealReviewNote: openDeal && openDeal.review ? 'The review cites ' + openDeal.review.reduce((n, r) => n + r.refs, 0) + ' evidence records by its own ids; those ids are not part of the collected snapshot, so they cannot be opened here.' : '',
+      hasCriteria: !!(openDeal && (openDeal.successCriteria || openDeal.decisionMakers)), criteria: (openDeal || {}).successCriteria || 'Not recorded', decisionMakers: (openDeal || {}).decisionMakers || 'Not recorded', context: openDeal ? [openDeal.erp ? 'ERP: ' + openDeal.erp : null, openDeal.competitors ? 'Also considering: ' + openDeal.competitors : null, openDeal.champion ? 'Champion: ' + openDeal.champion : null, openDeal.segment].filter(Boolean).join(' · ') : '',
+      peopleCount: co.contacts.length + ' in CRM', hasMorePeople: co.contacts.length > (st.peopleAll ? 0 : 8) && !st.peopleAll, morePeopleLabel: 'Show all ' + co.contacts.length, showAllPeople: () => this.setState({ peopleAll: true }), people: (st.peopleAll ? co.contacts : co.contacts.slice(0, 8)).map(c => ({ name: c.name, line: [c.title, c.email, c.lastContacted ? 'last contacted ' + fmtD(c.lastContacted) : null].filter(Boolean).join(' · '), go: ev('contact:' + co.id + ':' + (c.email || c.name)) })),
+      sources: []
+    };
+    const recIndex = this.memo('recIndex', allRecs, () => Object.fromEntries(allRecs.map(r => [r.id, r])));
+    const mrec = recIndex[st.meetingId] || allRecs.find(r => /Sample meeting/.test(r.title)) || allRecs[0] || { title: 'Loading…', summary: [], actions: [], invitees: [], date: '' };
+    const mco = (mrec.companyId && findCo(mrec.companyId)) || { name: mrec.companyName, deals: [] };
+    const mdeal = mco.deals && (mco.deals.find(d => !d.closed) || mco.deals[0]);
+    const mreview = followRaw.find(f => f[0].toLowerCase().split(' ')[0] === (mco.name || '').toLowerCase().split(' ')[0]);
+    const styleBlock = b => ({ x: String(b.x).replace(/\\([~*_#])/g, '$1'), margin: b.t === 'h2' ? '18px 0 4px' : b.t === 'h3' ? '12px 0 2px' : '0', pad: b.t === 'li2' ? '28px' : b.t === 'li' ? '8px' : '0', size: b.t === 'h2' ? '13px' : b.t === 'h3' ? '15px' : '16px', weight: b.t === 'h2' || b.t === 'h3' ? '800' : '400', font: b.t === 'h2' || b.t === 'h3' ? 'var(--font-heading)' : 'var(--font-body)', ls: b.t === 'h2' ? '.08em' : 'normal', tt: b.t === 'h2' ? 'uppercase' : 'none', color: b.t === 'h2' ? 'var(--color-neutral-700)' : 'inherit', bullet: b.t === 'li' || b.t === 'li2' ? 'inline' : 'none' });
+    const mtg = {
+      kicker: (mrec.date ? fmtDT(mrec.date) : '') + (mrec.minutes ? ' · ' + mrec.minutes + ' min' : '') + ' · Fathom recording' + (mrec.recordedBy ? ' by ' + mrec.recordedBy : ''),
+      title: mrec.title, who: (mrec.invitees || []).map(i => i.name || i.email).filter(Boolean).slice(0, 8).join(', ') || 'Invitees not recorded',
+      hasActions: !!(mrec.actions && mrec.actions.length), actions: mrec.actions || [],
+      hasSummary: !!(mrec.summary && mrec.summary.length), noSummary: !!(st.records && !(mrec.summary && mrec.summary.length)), summary: (mrec.summary || []).map(styleBlock),
+      transcript: mrec.transcriptLines ? mrec.transcriptLines.toLocaleString('en-US') + ' lines' : 'not available', recordGo: ev('recording:' + mrec.id),
+      canLoadTranscript: !!mrec.hasTranscript, transcriptBtn: st.transcriptOpen === mrec.id ? 'Hide transcript' : 'Read transcript', loadTranscript: () => { if (st.transcriptOpen === mrec.id) this.setState({ transcriptOpen: null }); else { this.loadTranscript(mrec.id); this.setState({ transcriptOpen: mrec.id }); } }, transcriptOpen: st.transcriptOpen === mrec.id && !!(st.transcripts && st.transcripts[mrec.id]), lines: (st.transcripts && st.transcripts[mrec.id]) || [], transcriptNote: mrec.hasTranscript ? 'Speakers and timestamps as recorded by Fathom.' : 'Transcript text for this recording was not included in the extract.',
+      hasCompany: true, company: mrec.companyId ? mco.name : mrec.companyName, companyGo: mrec.companyId ? goCo(mrec.companyId) : ev('recording:' + mrec.id), dealLine: !mrec.companyId ? 'Matched by invitee domain only; this company was not in the CRM extract' : mdeal ? mdeal.stageLabel + ' · ' + money(mdeal.amount) + ' · close ' + fmtD(mdeal.close) + (mdeal.owner ? ' · ' + mdeal.owner : '') + (mrec.matchedBy && /shared/.test(mrec.matchedBy) ? ' · recording shared with another account' : '') : 'No open opportunity',
+      draftLabel: mreview ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: mreview ? () => { this.setState({ screen: 'drafts', draft: mreview[5] }); window.scrollTo(0, 0); } : () => { const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up: ' + mrec.title, company: mco.name, text: '', rationale: (mrec.actions || []).join('\n'), refs: 1, version: 0, type: 'Follow-up', status: 'Draft', recipients: (mrec.invitees || []).filter(i => i.email && !/opstream/.test(i.email)).map(i => i.name || i.email).slice(0, 3).join(', '), saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
+      invitees: (mrec.invitees || []).map(i => ({ name: i.name || i.email || 'Unnamed', email: i.email || '' })),
+      hasRelated: allRecs.filter(r => r.companyId === mrec.companyId && r.id !== mrec.id).length > 0, related: allRecs.filter(r => r.companyId === mrec.companyId && r.id !== mrec.id).slice(0, 5).map(r => ({ title: r.title, date: fmtD(r.date.slice(0, 10)), go: goMtg(r.id) }))
+    };
+    const sheetRow = (company) => { const d = dealsRaw.find(x => x[0] === company); if (!d) return null; const rowNo = {}; const tab = d[1] === 'Sample' ? 'Sample' : d[1] === 'Sample' ? 'Sample' : d[1] === 'Sample' && company === 'Sample' ? 'Sample' : 'Other'; return { kicker: 'Original record', title: 'Pipeline workbook · ' + tab + ', row ' + rowNo, meta: 'Google Sheets · collected Sep 8, 2026 · columns B – I fill from HubSpot, J – M are typed by the owner', rows: [['Deal / company', company], ['Owner', d[1]], ['Stage', d[2]], ['Close month', d[5]], ['ARR', d[3].toLocaleString('en-US')], ['Prob %', d[4]], ['Days in stage', d[6] ?? 'Not recorded'], ['Weighted ARR', Math.round(d[3] * d[4] / 100).toLocaleString('en-US')], ['Last meeting / what happened', d[7]]].map(([label, value]) => ({ label, value })), note: 'ARR, probability and close month are owner estimates, not buyer commitments. The CRM record may differ.', ids: 'sheets/main · ' + tab + '!A' + rowNo + ':M' + rowNo + ' · sample-sheet:' + tab + ':row-' + rowNo + ' · capture 2026-09-08' }; };
+    const refOnly = (title, meta, ids, note) => ({ kicker: 'Referenced record', title, meta, rows: [], missing: true, note, ids });
+    const evidenceMap = {};
+    const evKey = typeof st.evidence === 'string' ? st.evidence : 'doug-11';
+    const dyn = (() => { const [kind, a, b] = evKey.split(':'); const c = REC.companies.find(x => x.id === a) || REC.companies.find(x => x.deals.some(d => d.id === a));
+      if (kind === 'note' && c) { const n = c.notes.find(x => x.id === b) || {}; return { kicker: 'Original record', title: 'CRM note · ' + fmtD(n.date), meta: 'HubSpot · ' + (n.owner || 'owner not recorded') + ' · collected Sep 8, 22:31', rows: [{ label: 'Company', value: c.name }, { label: 'Note (full collected text)', value: n.text }], note: 'Full note text from the retained CRM record.', ids: 'hubspot/main · hubspot_note · company ' + c.id }; }
+      if (kind === 'deal' && c) { const d = c.deals.find(x => x.id === a); return { kicker: 'Original record', title: 'CRM deal ' + d.id, meta: 'HubSpot · collected Sep 8, 22:31', rows: [['Deal name', d.name], ['Stage', d.stageLabel + ' (' + d.stage + ')'], ['Amount', d.amount === null ? 'Not entered' : d.amount.toLocaleString('en-US') + ' ' + (d.currency || '')], ['Probability (stage default)', d.probability === null ? '—' : d.probability + '%'], ['Close date', d.close || 'Not set'], ['Created', d.created], ['Owner', d.owner || 'Not assigned'], ['Stage history', d.history.map(x => x.label + ' · ' + x.date).join(' → ') || '—'], ['Amount history', d.amountHistory.map(x => x.value.toLocaleString('en-US') + ' · ' + x.date).join(' → ') || '—'], ['Close date history', d.closeHistory.map(x => x.value + ' · ' + x.date).join(' → ') || '—']].map(([label, value]) => ({ label, value })), note: 'Stage names for numeric stage ids were inferred from the owner sheets; the pipeline catalog was not in the extract. Close dates are CRM forecasts.', ids: 'hubspot/main · hubspot_deal · ' + d.id + ' · capture 5f96c55d' }; }
+      if (kind === 'company' && c) return { kicker: 'Original record', title: 'CRM company ' + c.id, meta: 'HubSpot · collected Sep 8, 22:31', rows: [['Name', c.name], ['Domain', c.domain || '—'], ['Industry', c.industry || '—'], ['Employees', c.employees || '—'], ['Location', [c.city, c.country].filter(Boolean).join(', ') || '—'], ['Lifecycle stage', c.lifecycle || '—'], ['Owner', c.owner || '—'], ['Created', c.created || '—'], ['Contacts on file', c.contacts.length], ['Emails on file', c.emails ? c.emails.count : 0]].map(([label, value]) => ({ label, value })), note: c.description || '', ids: 'hubspot/main · hubspot_company · ' + c.id };
+      if (kind === 'contact' && c) { const p = c.contacts.find(x => (x.email || x.name) === b) || {}; return { kicker: 'Original record', title: p.name || 'Contact', meta: 'HubSpot contact · collected Sep 8, 22:31', rows: [['Title', p.title || '—'], ['Email', p.email || '—'], ['Company', c.name]].map(([label, value]) => ({ label, value })), note: 'Only populated CRM properties were extracted.', ids: 'hubspot/main · hubspot_contact · company ' + c.id }; }
+      if (kind === 'crm-meeting' && c) { const m = c.meetings.find(x => x.id === b) || {}; return { kicker: 'Original record', title: m.title || 'CRM meeting', meta: 'HubSpot calendar · collected Sep 8, 22:31', rows: [['Start', fmtDT(m.start)], ['Outcome', m.outcome || 'Not recorded'], ['Company', c.name], ['Fathom notes attached', m.hasNotes ? 'Yes' : 'No']].map(([label, value]) => ({ label, value })), note: 'Calendar entries count as "completed" only when the outcome is set in the CRM.', ids: 'hubspot/main · hubspot_meeting · ' + m.id }; }
+      if (kind === 'call' && c) { const cl = (c.calls || []).find(x => x.id === b) || {}; return { kicker: 'Original record', title: cl.title || 'CRM call', meta: 'HubSpot call · ' + fmtD(cl.date) + ' · collected Sep 8, 22:31', rows: [['Owner', cl.owner || '—'], ['Duration', cl.minutes ? cl.minutes + ' min' : '—'], ['Body preview', cl.text || '—'], ['Recording on file', cl.recordingUrl ? 'Yes (not collected)' : 'No'], ['Company', c.name]].map(([label, value]) => ({ label, value })), note: 'Call logs come from the CRM; recording audio is not included.', ids: 'hubspot/main · hubspot_call · ' + cl.id }; }
+      if (kind === 'recording') { const r = allRecs.find(x => x.id === a); if (!r) return null; return { kicker: 'Original record', title: r.title, meta: 'Fathom · ' + fmtDT(r.date) + ' · collected Sep 8, 22:07', rows: [['Recorded by', r.recordedBy || '—'], ['Duration', r.minutes ? r.minutes + ' min' : '—'], ['Invitees', r.invitees.map(i => i.name || i.email).join(', ')], ['Action items', r.actions.length], ['Transcript lines', r.transcriptLines || '—'], ['Transcript in extract', r.hasTranscript ? 'Yes' : 'No'], ['Matched account', r.companyName]].map(([label, value]) => ({ label, value })), note: 'Summary and action items are Fathom\u2019s own; the transcript was not included in this extract.', ids: 'fathom/main · fathom_meeting · evidence ' + r.id }; }
+      return null; })();
+    const evRec = dyn || evidenceMap[evKey] || (evKey.startsWith('sheet:') ? sheetRow(evKey.slice(6)) : null) || refOnly('Record unavailable', 'No matching collected record', evKey, 'This link does not resolve to a record in this collection.');
+    const evVal = { missing: false, ...evRec, hasRows: !!(evRec.rows && evRec.rows.length) };
+    const stageOrder = ['Legal & Compliance', 'Decision', 'Demo meeting', 'Discovery/RFP received', 'SQL'];
+    const stagesAgg = stageOrder.map(stage => { const rows = dealsRaw.filter(d => d[2] === stage); return [stage, rows.length, rows.reduce((n, d) => n + d[3], 0)]; }).concat([]);
+    const maxStage = Math.max(...stagesAgg.map(x => x[2]));
+    return {
+      ...(() => {
+        const mode = st.systemState ?? this.props.systemState ?? 'normal';
+        const mobile = String(this.props.mobile ?? '') === 'true';
+        const banners = {
+          'review-running': { bg: 'var(--color-surface)', fg: ink, btnBg: 'transparent', title: 'Review running', text: 'Requested 09:12. Priorities, follow-ups and suggested drafts below are from the Sep 8 review until it finishes.', action: 'Details', go: this.go('data') },
+          'review-ready': { bg: 'var(--color-accent-100)', fg: 'var(--color-accent-900)', btnBg: 'transparent', title: 'A newer review is ready', text: 'Prepared today 09:41 on the Sep 8 data. Showing the Sep 8 review until you switch; your saved drafts are unaffected.', action: 'Show the new review', go: () => this.setState({ systemState: 'normal', screen: 'today' }) },
+          'source-failed': { bg: 'var(--color-accent-100)', fg: 'var(--color-accent-900)', btnBg: 'transparent', title: 'AI visibility did not refresh', text: 'Collection failed Sep 8 with server errors (HTTP 504). AI figures are from Aug 24; other sources are current.', action: 'See sources', go: this.go('data') },
+          'stale': { bg: 'var(--color-surface)', fg: ink, btnBg: 'transparent', title: 'Newer data collected', text: 'A collection completed at 09:30. Numbers refresh on their own; open records keep the data you were reviewing.', action: 'Refresh now', go: () => this.setState({ systemState: 'normal' }) }
+        };
+        const banner = banners[mode];
+        return { isMobile: mobile, topNavDisplay: mobile ? 'none' : 'flex', mainPadBottom: mobile ? '24px' : '56px', isLoading: mode === 'loading', notLoading: mode !== 'loading', bannerShown: !!banner, banner: banner || {}, draftConflict: mode === 'draft-conflict' && s === 'drafts', reloadDraft: () => this.setState({ systemState: 'normal', edits: {} }), keepMine: () => this.setState({ systemState: 'normal' }), skeleton: [{ w1: '70%', w2: '95%', w3: '60%' }, { w1: '55%', w2: '90%', w3: '40%' }, { w1: '65%', w2: '85%', w3: '55%' }, { w1: '50%', w2: '92%', w3: '35%' }],
+          mobileNav: [['today', 'Today'], ['performance', 'Numbers'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts']].map(([id, label]) => ({ id, label, go: this.go(id), current: activeNav === id ? 'page' : undefined, line: activeNav === id ? accent : 'transparent', color: activeNav === id ? ink : muted, weight: activeNav === id ? 600 : 400 })) };
+      })(),
+      navItems: navDefs.map(([id, label]) => ({ id, label, go: this.go(id), current: activeNav === id ? 'page' : undefined, line: activeNav === id ? accent : 'transparent', color: activeNav === id ? ink : muted, weight: activeNav === id ? 600 : 400 })),
+      goToday: this.go('today'), goPerformance: this.go('performance'), goAccounts: this.go('accounts'), goAccount, goMeetings: this.go('meetings'), goMeeting, goDrafts, goData: this.go('data'), goDeals,
+      isToday: s === 'today', isPerformance: s === 'performance', isAccounts: s === 'accounts', isAccount: s === 'account', isMeetings: s === 'meetings', isMeeting: s === 'meeting', isDrafts: s === 'drafts', isData: s === 'data',
+      acct, mtg, coverageNote: REC.coverage ? 'This prototype loads ' + REC.coverage.primary + ' accounts (' + REC.coverage.companiesInExtract + ' CRM company records, ' + REC.coverage.foldedRelated + ' duplicates folded), ' + REC.coverage.contacts.toLocaleString('en-US') + ' contacts, ' + REC.coverage.notes + ' notes, ' + REC.coverage.calls + ' calls, ' + REC.coverage.meetings + ' calendar entries, ' + REC.coverage.tasks + ' tasks and ' + REC.coverage.fathomTotal + ' recordings (' + REC.coverage.unmatchedRecordings + ' with companies outside the extract), full transcripts for ' + (REC.coverage.transcripts || 0) + ' of them. ' + (REC.coverage.ownersArchived || 0) + ' of 54 CRM owners are archived and shown as (former). Email bodies were excluded. Stage names for numeric CRM stage ids are inferred from the owner sheets; the connector does not export the stage catalog.' : '',
+      meetingsNote: st.records ? (new Set(allRecs.map(r => r.id)).size) + ' recordings · ' + (REC.unmatchedRecordings || []).length + ' with companies outside the 31 extracted accounts · CRM calendar entries for upcoming' : 'Loading meeting records…',
+      evidenceOpen: !!st.evidence, openEvidence: goEvidence, ev: evVal, evReviewSample: ev('review-sample'), evRecordingSample: ev('recording-sample'), evTim13: ev('tim-13'), evDraftRefs: ev('draft-refs'), closeEvidence: () => this.setState({ evidence: false }), stop: e => e.stopPropagation(),
+      priorities: [],
+      quickNumbers: [{"label":"New leads","value":"0","delta":"Synthetic"},{"label":"Marketing qualified","value":"0","delta":"Synthetic"},{"label":"Sales qualified","value":"0","delta":"Synthetic"},{"label":"Meetings completed","value":"0","delta":"Synthetic"},{"label":"Weighted pipeline","value":"0","delta":"Synthetic"}],
+      upcoming: [],
+      perfTabs: seg([['demand', 'Demand & pipeline'], ['spend', 'Spend & campaigns'], ['web', 'Website & AI']], st.perf, 'perf'),
+      perfDemand: st.perf === 'demand', perfSpend: st.perf === 'spend', perfWeb: st.perf === 'web',
+      periods: seg([['six', 'Six weeks'], ['quarter', 'Quarter to date'], ['year', '2026'], ['custom', 'Custom']], st.period, 'period'),
+      periodRange: pd.range, isCustom: st.period === 'custom', customStart: st.start || '2026-08-01', customEnd: st.end || '2026-09-08',
+      setStart: e => this.setState({ start: e.target.value }), setEnd: e => this.setState({ end: e.target.value }),
+      barsTitle: st.period === 'year' || (st.period === 'custom' && !pd.unit) ? 'New leads by month' : 'New leads by week',
+      scopeNote: st.perf === 'web' ? 'Website: May 18 – Sep 7 (analytics start). AI visibility: monitored answers through Aug 24. No period filter applies.' : st.perf === 'spend' ? 'Spend: Jan – Sep 2026 by month, as entered in the budget workbook. Campaign reports as of Sep 1. No period filter applies.' : 'Period applies to the lead, MQL and SQL counts. Pipeline is the current state; meeting counts are Jul – Aug.',
+      demandMetrics: [{"label":"New leads","value":"0","delta":"Synthetic","note":"","go":null},{"label":"Marketing qualified","value":"0","delta":"Synthetic","note":"","go":null},{"label":"Sales qualified","value":"0","delta":"Synthetic","note":"","go":null},{"label":"Meetings completed","value":"0","delta":"Synthetic","note":"","go":null},{"label":"Recordings","value":"0","delta":"Synthetic","note":"","go":null}],
+      weeks: pd.bars.map(([label, leads]) => ({ label, leads, title: pd.unit + label + ': ' + leads + ' new leads', leadH: Math.round(leads / barMax * 100) + '%' })),
+      barCols: pd.bars.length,
+      channels: pd.src.map(([channel, leads, mql, sql]) => ({ channel, leads, mql, sql, rate: leads ? Math.round(sql / leads * 100) + '%' : '—' })),
+      stages: stagesAgg.map(([stage, count, amt]) => ({ stage, count, amount: k(amt), w: Math.round(amt / maxStage * 100) + '%' })),
+      scorecard: [],
+      movements: dealsRaw.filter(d => [].includes(d[0])).map(d => ({ name: d[0], meta: d[1] + ' · ' + d[2], change: d[7], go: ev('sheet:' + d[0]) })),
+      spendMonths: [].map(([month, plan, act, tag]) => ({ month, budget: Math.round(plan).toLocaleString('en-US'), actual: act === null ? '—' : Math.round(act).toLocaleString('en-US'), diff: act === null || tag ? 'Not comparable' : (act - plan >= 0 ? '+' : '−') + Math.round(Math.abs(act - plan)).toLocaleString('en-US'), tag: tag || '', tagDisplay: tag ? 'inline-flex' : 'none' })),
+      spendChannels: [].map(([name, amt]) => ({ name, amount: Math.round(amt).toLocaleString('en-US'), w: Math.round(amt / 230640 * 100) + '%' })),
+      ads: [],
+      webMetrics: [],
+      webWeeks: webWeeksRaw.map(([label, v]) => ({ label, title: 'Week of ' + label + ': ' + v.toLocaleString('en-US') + ' visits', h: Math.round(v / 3134 * 100) + '%' })),
+      webSources: [].map(([name, v, e, ke]) => ({ name, visits: v.toLocaleString('en-US'), engaged: Math.round(e / v * 100) + '%', ke })),
+      landing: [].map(([page, v, e, ke]) => ({ page, visits: v.toLocaleString('en-US'), engaged: e.toLocaleString('en-US'), ke })),
+      accountTabs: seg([['deals', 'Open opportunities'], ['follow', 'Needs follow-up'], ['leads', 'New leads']], st.accounts, 'accounts'),
+      accountsDeals: st.accounts === 'deals', accountsFollow: st.accounts === 'follow', accountsLeads: st.accounts === 'leads',
+      setSort: e => this.setState({ sort: e.target.value }), setOwner: e => this.setState({ owner: e.target.value }), sortValue: st.sort || 'weighted', ownerValue: st.owner || 'Everyone',
+      searchValue: st.search || '', setSearch: e => this.setState({ search: e.target.value }), clearSearch: () => this.setState({ search: '', owner: 'Everyone' }),
+      dealsEmpty: filteredDeals.length === 0, leadsEmpty: filteredLeads.length === 0, emptyNote: 'Nothing matches' + (q ? ' “' + (st.search || '').trim() + '”' : '') + (st.owner && st.owner !== 'Everyone' ? ' for ' + st.owner : '') + '.',
+      dealsCount: filteredDeals.length + ' of ' + dealsRaw.length + ' opportunities', leadsCount: filteredLeads.length + ' of ' + leadsRaw.length + ' recent leads',
+      exportLabel: st.accounts === 'leads' ? 'Export ' + filteredLeads.length + ' leads' : st.accounts === 'follow' ? 'Export follow-ups' : 'Export ' + filteredDeals.length + ' opportunities',
+      exportAccounts: () => { if (st.accounts === 'leads') this.csv('leads.csv', ['Company', 'Source', 'Owner', 'Lead date', 'Notes', 'MQL', 'SQL'], filteredLeads); else if (st.accounts === 'follow') this.csv('follow-ups.csv', ['Company', 'Context', 'Reason', 'Next step', 'Uncertainty'], followRaw.map(f => f.slice(0, 5))); else this.csv('opportunities.csv', ['Company', 'Owner', 'Stage', 'ARR', 'Probability', 'Close', 'Days in stage', 'Last note'], dealRows); },
+      exportSources: () => this.csv('leads-by-source.csv', ['Source', 'Leads', 'MQL', 'SQL', 'Period'], pd.src.map(r => [...r.slice(0, 4), pd.range])),
+      exportSpend: () => this.csv('spend-2026.csv', ['Month', 'Planned', 'Recorded', 'Note'], []),
+      exportAccount: () => this.csv((co.name || 'account').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.csv', ['Date', 'Kind', 'Title', 'Detail'], [['', 'Company', co.name, acct.subtitle], ...co.deals.map(d => ['', 'Deal', d.name, d.stageLabel + ' · ' + money(d.amount) + ' · close ' + d.close]), ...timeline.map(t => [t.date, t.kind, t.title, t.text]), ...co.contacts.map(c => ['', 'Contact', c.name, [c.title, c.email].filter(Boolean).join(' · ')])]),
+      exportMeeting: () => this.csv((mrec.title || 'meeting').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60) + '.csv', ['Section', 'Text'], [['Meeting', mrec.title], ['Date', mrec.date], ['Account', mco.name], ['Invitees', (mrec.invitees || []).map(i => i.name || i.email).join(', ')], ...(mrec.actions || []).map(a => ['Action item', a]), ...(mrec.summary || []).map(b => [b.t, b.x])]),
+      exportEvidence: () => this.csv(evKey.replace(/[^a-z0-9]+/gi, '-') + '.csv', ['Field', 'Value'], evVal.rows.map(r => [r.label, r.value])),
+      exportDraft: () => this.csv((draft.title || 'draft').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60) + '.csv', ['Field', 'Value'], [['Title', draft.title], ['Type', draft.type], ['Status', draft.status], ['Version', draft.version], ['Company', draft.company], ['Recipients', draft.recipients], ['Message', draft.text], ['Why', draft.rationale]]),
+      goFirstDraft: () => { this.setState({ screen: 'drafts', draft: 0, evidence: false }); window.scrollTo(0, 0); }, goSecondDraft: () => { this.setState({ screen: 'drafts', draft: 1, evidence: false }); window.scrollTo(0, 0); },
+      proposeCorrection: () => { this.setState({screen:'drafts',newDrafts:[...(st.newDrafts || []),{title:'Proposed correction',kind:'Proposed correction',type:'Proposed correction',company:'No company linked',text:'Describe the correction.',rationale:'',refs:0,version:0,status:'Draft',recipients:''}]}); },
+      meetingSearchValue: st.meetingSearch || '', setMeetingSearch: e => this.setState({ meetingSearch: e.target.value }), meetingOwnerValue: mOwner, setMeetingOwner: e => this.setState({ meetingOwner: e.target.value }),
+      savedCount: drafts.filter(d => d.version > 0).length, newDraft, saveDraft,
+      editTitle: this.edit('title'), editText: this.edit('text'), editRationale: this.edit('rationale'), editType: this.edit('type'), editStatus: this.edit('status'), editRecipients: this.edit('recipients'),
+      checking: !!st.checking, checkLabel: st.checking ? 'Checking\u2026' : 'Check for updates', checkNote: st.checked ? 'Checked ' + st.checked + ' · no newer collection than Sep 8, 22:31' : '',
+      checkUpdates: () => { this.setState({ checking: true }); setTimeout(() => this.setState({ checking: false, checked: now() }), 1200); },
+      reviewRequested: !!st.reviewRequested, refreshLabel: st.reviewRequested ? 'Review requested' : 'Refresh the review', refreshNote: st.reviewRequested ? 'Requested ' + st.reviewRequested + '. The workspace stays usable while it runs; Today will show "new review available" when it finishes.' : 'Runs on the data already collected. Takes several minutes.',
+      refreshReview: () => this.setState({ reviewRequested: now() }),
+      deals: filteredDeals.sort((a, b) => { const sort = st.sort || 'weighted'; if (sort === 'name') return a[0].localeCompare(b[0]); if (sort === 'days') return (b[6] ?? -1) - (a[6] ?? -1); if (sort === 'close') { const key = d => { const m = String(d[5]) === 'Apr 30' ? ['', 'Apr', '26'] : String(d[5]).match(/^(\w{3}) (\d{2})$/); return m ? '20' + m[2] + '-' + ({ Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' })[m[1]] : d[5]; }; return key(a).localeCompare(key(b)); } return b[3] * b[4] - a[3] * a[4]; }).map(([company, owner, stage, arr, prob, close, days, note]) => ({ company, owner, stage, arr: usd(arr), prob: prob + '%', close, days: days === null ? '—' : days, daysColor: days !== null && days > 120 ? red : ink, note, go: goCo(company) })),
+      followUps: followRaw.map(([name, meta, reason, next, uncertainty, draftIndex]) => ({ name, meta, reason, next, uncertainty, go: goCo(name), openLabel: 'Open account', draftGo: () => { this.setState({ screen: 'drafts', draft: draftIndex }); window.scrollTo(0, 0); } })),
+      leads: filteredLeads.map(([company, source, owner, date, note, mql, sql]) => ({ company, source, owner, date, note, mql: mql || '—', sql: sql || '—' })),
+      timeline: [],
+      accountSources: [],
+      meetingTabs: seg([['upcoming', 'Upcoming'], ['past', 'Past']], st.meetings, 'meetings'),
+      meetingGroups: this.memo('meetingGroups', st.meetings + ':' + (REC.generatedAt || ''), () => {
+        const ownerOf = r => (r.recordedBy || '').split(' ')[0];
+        const monthKey = d => d.slice(0, 7);
+        const monthLabel = k => new Date(k + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+        let items;
+        if (st.meetings === 'upcoming') {
+          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => m.start.slice(0, 10) >= '2026-09-09' && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => ({ when: fmtDT(m.start), sort: m.start, title: m.title, who: c.name + (c.owner ? ' · ' + c.owner : ''), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: c.owner || '' })));
+          const notes = [];
+          items = [...ups, ...notes].sort((a, b) => a.sort.localeCompare(b.sort));
+          const g = {}; for (const it of items) { const k = it.sort <= '2026-09-14' ? 'This week' : it.sort <= '2026-09-21' ? 'Next week' : 'Later'; (g[k] = g[k] || []).push(it); }
+          return ['This week', 'Next week', 'Later'].filter(k => g[k]).map(k => ({ label: k, items: g[k] }));
+        }
+        const seen = new Set(); items = allRecs.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; }).filter(r => r.date && r.date.slice(0, 10) <= '2026-09-08').map(r => ({ when: fmtDT(r.date), sort: r.date, title: r.title, who: r.companyName + (r.recordedBy ? ' · ' + r.recordedBy : ''), kind: 'Recorded', go: goMtg(r.id), owner: ownerOf(r) })).sort((a, b) => b.sort.localeCompare(a.sort));
+        const g = {}; for (const it of items) { const k = monthKey(it.sort); (g[k] = g[k] || []).push(it); }
+        return Object.keys(g).sort().reverse().map(k => ({ label: monthLabel(k), items: g[k] }));
+      }).map(g => ({ ...g, items: g.items.filter(m => (mOwner === 'Everyone' || m.owner === mOwner || m.who.includes(mOwner)) && (!mq || (m.title + ' ' + m.who + ' ' + m.kind).toLowerCase().includes(mq))) })).filter(g => g.items.length),
+      saved: drafts.map((d, i) => ({ d, i })).filter(x => x.d.version > 0).map(({ d, i }) => ({ title: d.title, status: d.status, meta: 'v' + d.version + ' · ' + (savedState[i] ? 'just now' : 'Sep 8') + ' · ' + d.company + (d.dirty ? ' · unsaved changes' : ''), go: () => this.setState({ draft: i }), bg: draftIndex === i ? 'var(--color-surface)' : 'transparent' })),
+      suggested: drafts.map((d, i) => ({ d, i })).filter(x => x.d.version === 0).map(({ d, i }) => ({ title: d.title, meta: (d.kind === 'Suggested follow-up' ? 'Review prepared Sep 8 · ' : d.kind + ' · ') + d.company + (d.dirty ? ' · unsaved changes' : ''), go: () => this.setState({ draft: i }), bg: draftIndex === i ? 'var(--color-surface)' : 'transparent' })),
+      draft: { ...draft, refs: String(draft.refs) },
+      get meetingsEmpty() { return this.meetingGroups.length === 0; },
+      readingRules: [{ title: 'Missing spend is not zero', text: 'August and September have no actuals entered. They show as not entered, never as underspend.' }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'Leads, MQLs and SQLs come from the tracker; completed meetings from the CRM; recordings from Fathom. They are separate populations.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. Only the tracker decides qualification.' }, { title: 'Each source has its own date', text: 'Most sources were collected Sep 8. AI visibility is from Aug 24; later collections failed with server errors.' }],
+      sources: [],
+      definitions: [{ source: 'Inbound', lead: 'Gated content (excl. spam/jobs); simple email form', mql: 'Demo request, meeting booked, pricing, contact form', sql: 'Meeting happened' }, { source: 'Outbound', lead: 'Prospect replied with positive engagement', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'Events', lead: 'Gave us contact info / badge scanned', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'RFP', lead: 'Said they want to send an RFI/RFP', mql: 'Sent RFI/RFP', sql: 'Invitation to start demo' }]
+    };
+  }
+}
+
+/* FRONTEND_MODULES */
+</script>
+</body>
+</html>

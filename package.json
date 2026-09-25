@@ -1,0 +1,15 @@
+{
+  "name": "opstream-gtm-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node build.cjs",
+    "dev": "node scripts/preview.mjs",
+    "security:scan": "node scripts/security-scan.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "esbuild": "^0.28.2",
+    "marked": "^18.0.12"
+  }
+}

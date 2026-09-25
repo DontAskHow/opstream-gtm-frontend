@@ -1,0 +1,15 @@
+{
+  "date": "2026-09-25T07:37:02.908Z",
+  "result": "pass",
+  "checks": [
+    "navigation: seven views",
+    "account detail",
+    "priority persists after reload",
+    "comment save",
+    "draft edit persists after reload",
+    "email disabled",
+    "mobile width 390",
+    "static root isolation",
+    "no browser exceptions"
+  ]
+}

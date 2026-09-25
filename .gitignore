@@ -1,0 +1,6 @@
+node_modules/
+out/
+.env*
+*.db
+*.sqlite*
+preview-check.png
