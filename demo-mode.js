@@ -62,7 +62,7 @@ Component.prototype.renderVals=function(){
   v.gmailEmail=s.email||'';
   v.senderLabel=s.email||'';
   const current=this._currentWorkspaceDraft?this._currentWorkspaceDraft():null;
-  const emailDraft=current&&current.purpose==='email';
+  const emailDraft=current&&(current.purpose==='email'||current.purpose==='event');
   const ready=!!(emailDraft&&String(current.recipients||'').trim()&&String(current.subject||current.title||'').trim()&&String(current.text||'').trim()&&current.id);
   v.sendDisabled=!ready||!!this.state.draftSending;
   v.sendLabel=this.state.draftSending?'Sending…':'Send via Gmail';
@@ -90,6 +90,7 @@ Component.prototype.renderVals=function(){
   };
  }else{
   v.sendDisabled=true;
+  v.sendLabel=s.signedIn?'Reconnect Google to send':'Sign in with Google to send';
   v.sendDraft=()=>this.setState({draftFeedback:'Sign in with Google to send from your account.',draftFeedbackClass:'form-error'});
   v.confirmSend=()=>this.setState({sendConfirm:null,draftFeedback:'Sign in with Google to send from your account.',draftFeedbackClass:'form-error'});
  }

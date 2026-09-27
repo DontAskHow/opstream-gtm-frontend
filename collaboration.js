@@ -1,5 +1,5 @@
 const collaborationOriginal = { render: Component.prototype.renderVals, mount: Component.prototype.componentDidMount, update: Component.prototype.componentDidUpdate };
-const purposeNames = { email: 'Emails', campaign: 'Campaign drafts', linkedin: 'LinkedIn posts', 'internal-note': 'Internal notes' };
+const purposeNames = { email: 'Emails', event: 'Event follow-ups', linkedin: 'LinkedIn posts', campaign: 'Campaign drafts', 'internal-note': 'Internal notes' };
 const emptyPreferences = () => ({ mode:'marketing', ratings:{}, draftModes:{}, priorityContext:{} });
 const shortDate = value => value ? new Date(value).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
 Component.prototype._workspaceApi = async function(path, body, method='POST') {
@@ -55,7 +55,7 @@ Component.prototype._persistPreferences = async function() {
 };
 Component.prototype._workspaceDrafts = function() {
   const s=this.state,remote=new Map((s.remoteDrafts||[]).map(d=>[d.id,d])),seeds=s.draftSeeds||[],ids=new Set(seeds.map(d=>d.id));
-  const base=[...seeds.map(d=>remote.get(d.id)||d),...(s.remoteDrafts||[]).filter(d=>!ids.has(d.id))];base.forEach(d=>ids.add(d.id));
+  const base=[...seeds.map((d,i)=>remote.get(d.id)||workspaceDomain.document(d,i)),...(s.remoteDrafts||[]).filter(d=>!ids.has(d.id))];base.forEach(d=>ids.add(d.id));
   for(const [i,d] of (s.newDrafts||[]).entries()){const normalized=workspaceDomain.document(d,i);if(!ids.has(normalized.id)){base.push(normalized);ids.add(normalized.id);}}
   return base.map(d=>{const edits=s.draftEdits?.[d.id]||{},dirty=Object.keys(edits).some(k=>JSON.stringify(edits[k])!==JSON.stringify(d[k]));return{...d,...edits,dirty,baseVersion:d.version};});
 };
@@ -195,15 +195,15 @@ Component.prototype.renderVals = function() {
   const drafts=this._workspaceDrafts(),selectedDraft=this._currentWorkspaceDraft(),purpose=s.draftPurpose||selectedDraft?.purpose||'email';
   v.draftTabs=Object.entries(purposeNames).map(([id,label])=>({label,count:drafts.filter(d=>d.purpose===id).length,selected:purpose===id,go:()=>this._selectWorkspaceDraft(drafts.find(d=>d.purpose===id)?.id,id)}));
   const visible=drafts.filter(d=>d.purpose===purpose);v.draftListTitle=purposeNames[purpose]||'Drafts';v.draftsEmpty=!visible.length;
-  v.draftList=visible.map(d=>({title:d.subject||d.title||'Untitled draft',current:d.id===selectedDraft?.id,status:(s.sendAudit||[]).some(r=>r.draftId===d.id)?'Sent':d.status,
+  v.draftList=visible.map(d=>({title:d.title||d.subject||'Untitled draft',current:d.id===selectedDraft?.id,status:(s.sendAudit||[]).some(r=>r.draftId===d.id)?'Sent':d.status,
     meta:d.company+' · '+(d.version?'v'+d.version:'Not saved')+(d.dirty?' · unsaved changes':''),go:()=>this._selectWorkspaceDraft(d.id,d.purpose)}));
   v.hasDraft=!!selectedDraft&&selectedDraft.purpose===purpose;v.newDraft=()=>this._newWorkspaceDraft(purpose);
   v.draftFeedback=s.draftFeedback||'';v.draftFeedbackClass=s.draftFeedbackClass||'form-success';v.draftSaveConflict=!!s.draftSaveConflict;
   if(selectedDraft) {
     const draft=selectedDraft,id=draft.id,edit=patch=>this._editWorkspaceDraft(id,patch);
     v.draft={...draft,refs:draft.supportRefs.length,versionLabel:(draft.version?'Version '+draft.version:'Not saved')+(draft.dirty?' · unsaved changes':''),hasCitations:(draft.citations||[]).length>0,citationsLine:(draft.citations||[]).join(' · ')};
-    v.isEmailDraft=draft.purpose==='email';v.isCampaignDraft=draft.purpose==='campaign';v.isLinkedInDraft=draft.purpose==='linkedin';v.subjectLabel=draft.purpose==='email'||draft.purpose==='campaign'?'Subject':'Title';v.messageLabel=draft.purpose==='internal-note'?'Note':draft.purpose==='linkedin'?'Post':'Message';
-    v.senderLabel=s.gmailEmail||'Connect Gmail to send from your own account';v.senderActionLabel=s.gmailEmail?'Manage connection':'Connect Gmail';
+    v.isEmailDraft=draft.purpose==='email'||draft.purpose==='event';v.isCampaignDraft=draft.purpose==='campaign';v.isLinkedInDraft=draft.purpose==='linkedin';v.subjectLabel=['email','event','campaign'].includes(draft.purpose)?'Subject':'Title';v.messageLabel=draft.purpose==='internal-note'?'Note':draft.purpose==='linkedin'?'Post':'Message';
+    v.senderLabel=s.gmailEmail||'Sign in with Google to send from your own Gmail';v.senderActionLabel=s.gmailEmail?'Sign out':'Sign in with Google';
     v.campaignSenders=s.campaignSenders||[];v.editCampaignSender=e=>edit({campaignSender:e.target.value});
     v.editSubject=e=>edit({subject:e.target.value,title:e.target.value});v.editText=e=>edit({text:e.target.value});v.editRecipients=e=>edit({recipients:e.target.value});v.editCc=e=>edit({cc:e.target.value});v.editBcc=e=>edit({bcc:e.target.value});v.editRationale=e=>edit({rationale:e.target.value});v.editInternalNotes=e=>edit({internalNotes:e.target.value});v.editStatus=e=>edit({status:e.target.value});
     const contacts=(s.records.companies||[]).filter(c=>draft.accountIds.includes('company:'+c.id)).flatMap(c=>c.contacts||[]).filter(c=>c.email);

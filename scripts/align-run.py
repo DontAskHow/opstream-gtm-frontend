@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from draft_seeds import build as build_draft_seeds
 from gtm_metrics import (commit_for_close_month, commit_versus_target, date_only,
                          is_junk_name, snapshot_age_hours, snapshot_metrics)
 
@@ -102,6 +103,7 @@ def main():
     verified.setdefault("presentation", {})["priorities"] = hollie.get("marketingPriorities") or []
     verified.setdefault("meta", {})["owners"] = marketing.get("team") or []
     write("verified.json", verified)
+    write("draft-seeds.json", build_draft_seeds(marketing, hollie, records, day))
 
     book = snapshot_metrics(verified, records, today=day, sheet_review=review)
     month = day[:7]

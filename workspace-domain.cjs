@@ -1,6 +1,6 @@
 /* Shared browser/import representation. Original source records stay unchanged. */
 const workspaceDomain = (() => {
-  const purposes = ['email', 'campaign', 'linkedin', 'internal-note'];
+  const purposes = ['email', 'event', 'linkedin', 'campaign', 'internal-note'];
   const cleanTitle = value => String(value || '').replace(/ — editable, unsent draft$/, '');
   const purpose = d => purposes.includes(d.purpose) ? d.purpose : d.kind === 'Proposed correction' || d.type === 'Proposed correction' ? 'internal-note' : 'email';
   function document(d, index = 0) {
