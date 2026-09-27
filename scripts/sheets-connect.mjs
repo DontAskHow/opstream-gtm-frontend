@@ -135,7 +135,10 @@ export function createSheetsConnect({ loadClient, saveRefreshToken, fetchImpl, n
           who + ' authorized read-only access. The refresh token is stored as ' + REFRESH_SECRET_ID + '.',
         ),
       };
-    } catch {
+    } catch (err) {
+      const raw = err && err.code ? String(err.code) : '';
+      const code = /^[A-Za-z0-9]+$/.test(raw) ? raw : 'Error';
+      console.error('[sheets-connect] save failed: ' + code);
       return {
         ok: false,
         status: 500,

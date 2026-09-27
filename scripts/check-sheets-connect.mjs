@@ -104,16 +104,27 @@ const leakStart = await leak.start(REDIRECT);
 const leakResult = await leak.callback({ code: 'from-google', state: leakStart.state, redirectUri: REDIRECT });
 check('save failure hides token', leakResult.status === 500 && !leakResult.html.includes(REFRESH) && !leakResult.html.includes(ACCESS));
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const calls = [];
 await putSecretString(REFRESH_SECRET_ID, REFRESH, {
   request(action, payload) {
-    calls.push(action);
-    if (action === 'PutSecretValue') throw new SecretError('ResourceNotFoundException');
+    calls.push({ action, payload });
+    if (action === 'PutSecretValue') {
+      if (payload.SecretString !== REFRESH || payload.SecretId !== REFRESH_SECRET_ID) throw new Error('payload');
+      throw new SecretError('ResourceNotFoundException');
+    }
     if (payload.SecretString !== REFRESH || payload.Name !== REFRESH_SECRET_ID) throw new Error('payload');
     return Buffer.from('{}');
   },
 });
-check('create secret', calls.join(',') === 'PutSecretValue,CreateSecret');
+check('create secret', calls.map((call) => call.action).join(',') === 'PutSecretValue,CreateSecret');
+for (const call of calls) {
+  check(
+    'client token ' + call.action,
+    UUID.test(String(call.payload.ClientRequestToken || '')),
+    String(call.payload.ClientRequestToken || ''),
+  );
+}
 
 let deniedSave = false;
 try {

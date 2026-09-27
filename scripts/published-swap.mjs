@@ -297,14 +297,30 @@ export async function getSecretString(secretId, deps = {}) {
   return typeof parsed.SecretString === 'string' ? parsed.SecretString : '';
 }
 
+function logSecretSaveFailure(err) {
+  const wrapped = new SecretError(err && err.code ? err.code : 'Error');
+  console.error('[sheets-connect] save failed: ' + wrapped.code);
+  return wrapped;
+}
+
 export async function putSecretString(secretId, value, deps = {}) {
   if (typeof value !== 'string' || !value) throw new SecretError('EmptySecret');
   try {
-    await smCall('PutSecretValue', { SecretId: secretId, SecretString: value }, deps);
+    await smCall('PutSecretValue', {
+      SecretId: secretId,
+      SecretString: value,
+      ClientRequestToken: crypto.randomUUID(),
+    }, deps);
   } catch (err) {
-    if (!err || err.code !== 'ResourceNotFoundException') {
-      throw new SecretError(err && err.code ? err.code : 'Error');
+    if (!err || err.code !== 'ResourceNotFoundException') throw logSecretSaveFailure(err);
+    try {
+      await smCall('CreateSecret', {
+        Name: secretId,
+        SecretString: value,
+        ClientRequestToken: crypto.randomUUID(),
+      }, deps);
+    } catch (createErr) {
+      throw logSecretSaveFailure(createErr);
     }
-    await smCall('CreateSecret', { Name: secretId, SecretString: value }, deps);
   }
 }
