@@ -20,6 +20,7 @@ import base64
 import json
 import logging
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -42,8 +43,8 @@ LONG_TEXT_LIMIT = 8000
 
 # Vault connector names the canonical scripts pass, mapped to secret names.
 CONNECTOR_TO_SECRET = {
-    "custom.hubspot": "hubspot-token",
-    "hubspot": "hubspot-token",
+    "custom.hubspot": "hubspot-oauth",
+    "hubspot": "hubspot-oauth",
     "custom.fathom": "fathom-token",
     "fathom": "fathom-token",
     "custom.otterly": "otterly-token",
@@ -246,6 +247,9 @@ def materialize_token(raw: str, scope: str | None) -> str:
         if not scope:
             raise NeedsConnection("service-account JSON needs a Google API scope")
         return _service_account_token(parsed, scope)
+    endpoint = str(parsed.get("token_endpoint") or "")
+    if "hubapi.com" in endpoint or parsed.get("portal_id"):
+        raise NeedsConnection("HubSpot OAuth JSON cannot be used as a bearer token")
     if parsed.get("refresh_token") and parsed.get("client_id"):
         return _refresh_token(parsed, scope)
     for key in ("token", "access_token", "api_key", "apiKey", "value"):
@@ -448,3 +452,266 @@ def run_main(source: str, fn) -> None:
         sys.exit(EXIT_ERROR)
     log.info("sync complete: %s", summary)
     sys.exit(EXIT_OK)
+
+
+HUBSPOT_SECRET_ID = "opstream-gtm/hubspot-oauth"
+HUBSPOT_PORTAL_ID = "21303277"
+HUBSPOT_REGION = "us-east-2"
+_HUBSPOT_SEARCH = re.compile(r"^/crm/v3/objects/[^/]+/search$")
+_HUBSPOT_FIELDS = (
+    "portal_id", "client_id", "client_secret", "refresh_token", "token_endpoint", "api_base",
+)
+
+
+class SecretVersionChanged(Exception):
+    """AWSCURRENT moved between the read and the write."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def assert_hubspot_read(method, url):
+    """Allow GET, and POST only for CRM search. Every other call fails."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or (parsed.hostname or "") != "api.hubapi.com":
+        raise NeedsConnection("refusing to send a HubSpot credential to this host")
+    path = parsed.path or "/"
+    if len(path) > 1:
+        path = path.rstrip("/")
+    verb = (method or "").upper()
+    if verb == "GET":
+        return
+    if verb == "POST" and _HUBSPOT_SEARCH.match(path):
+        return
+    raise RuntimeError(
+        "refusing HubSpot %s %s; only GET and CRM search are allowed" % (verb, path)
+    )
+
+
+def _default_http(method, url, headers, body):
+    req = urllib.request.Request(url, data=body, headers=dict(headers or {}), method=method)
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=60) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        return exc.code, raw
+
+
+class SecretsManagerHubSpotStore:
+    """Read and rotate opstream-gtm/hubspot-oauth. Values are not logged."""
+
+    def __init__(self, secret_id=HUBSPOT_SECRET_ID, region=HUBSPOT_REGION, client=None):
+        self.secret_id = secret_id
+        self.region = region
+        self._client = client
+
+    def _sm(self):
+        if self._client is None:
+            import boto3
+            self._client = boto3.client("secretsmanager", region_name=self.region)
+        return self._client
+
+    def get_current(self):
+        try:
+            resp = self._sm().get_secret_value(SecretId=self.secret_id, VersionStage="AWSCURRENT")
+        except Exception as exc:
+            raise NeedsConnection(
+                "secret %s is not present (%s)" % (self.secret_id, type(exc).__name__)
+            )
+        raw = resp.get("SecretString") or ""
+        if not raw.strip():
+            raise NeedsConnection("secret %s is empty" % self.secret_id)
+        try:
+            doc = json.loads(raw)
+        except Exception:
+            raise NeedsConnection("secret %s is not JSON" % self.secret_id)
+        if not isinstance(doc, dict):
+            raise NeedsConnection("secret %s is not a JSON object" % self.secret_id)
+        return doc, str(resp.get("VersionId") or "")
+
+    def current_version(self):
+        try:
+            resp = self._sm().describe_secret(SecretId=self.secret_id)
+        except Exception as exc:
+            raise NeedsConnection(
+                "secret %s could not be described (%s)" % (self.secret_id, type(exc).__name__)
+            )
+        stages = resp.get("VersionIdsToStages") or {}
+        for version_id, labels in stages.items():
+            if labels and "AWSCURRENT" in labels:
+                return str(version_id)
+        raise NeedsConnection("secret %s has no AWSCURRENT version" % self.secret_id)
+
+    def put_current(self, document, expected_version_id):
+        version = self.current_version()
+        if version != expected_version_id:
+            raise SecretVersionChanged()
+        token = document.get("refresh_token") if isinstance(document, dict) else None
+        if not isinstance(token, str) or not token.strip():
+            raise NeedsConnection("refusing to store an empty HubSpot refresh token")
+        try:
+            self._sm().put_secret_value(
+                SecretId=self.secret_id,
+                SecretString=json.dumps(document),
+            )
+        except Exception as exc:
+            raise NeedsConnection(
+                "HubSpot refresh token rotation could not be saved (%s)" % type(exc).__name__
+            )
+
+
+class HubSpotClient:
+    """OAuth refresh for the existing Marketing Dashboard app.
+
+    The access token stays in memory and is refreshed two minutes before
+    expires_in. A new refresh token is written back to Secrets Manager
+    immediately. CRM calls are GET, plus POST /crm/v3/objects/{type}/search.
+    """
+
+    def __init__(self, store=None, http=None, clock=None, log=None, portal_id=HUBSPOT_PORTAL_ID):
+        self.store = store or SecretsManagerHubSpotStore()
+        self.http = http or _default_http
+        self.clock = clock or time.monotonic
+        self.log = log
+        self.portal_id = str(portal_id)
+        self.api_base = "https://api.hubapi.com"
+        self._doc = None
+        self._access = None
+        self._refresh_after = 0.0
+        self._portal_checked = False
+
+    def prepare(self):
+        self.access_token()
+
+    def access_token(self):
+        if self._access and self.clock() < self._refresh_after:
+            return self._access
+        return self._refresh()
+
+    def _validate_doc(self, doc):
+        for key in _HUBSPOT_FIELDS:
+            value = doc.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise NeedsConnection("HubSpot OAuth secret is missing %s" % key)
+        if str(doc["portal_id"]) != self.portal_id:
+            raise NeedsConnection(
+                "HubSpot secret portal_id is not %s; aborting HubSpot sync" % self.portal_id
+            )
+        token_url = urllib.parse.urlparse(doc["token_endpoint"])
+        api_url = urllib.parse.urlparse(doc["api_base"])
+        if token_url.scheme != "https" or token_url.hostname != "api.hubapi.com":
+            raise NeedsConnection("HubSpot token endpoint host is not allowed")
+        if not (token_url.path or "").startswith("/oauth/"):
+            raise NeedsConnection("HubSpot token endpoint path is not allowed")
+        if api_url.scheme != "https" or api_url.hostname != "api.hubapi.com":
+            raise NeedsConnection("HubSpot API host is not allowed")
+        self.api_base = doc["api_base"].rstrip("/")
+
+    def _persist_rotation(self, original_version, new_refresh):
+        if not isinstance(new_refresh, str) or not new_refresh.strip():
+            return False
+        if new_refresh == (self._doc or {}).get("refresh_token"):
+            return False
+        latest_version = self.store.current_version()
+        if latest_version != original_version:
+            self._doc, _version = self.store.get_current()
+            return False
+        updated = dict(self._doc)
+        updated["refresh_token"] = new_refresh
+        try:
+            self.store.put_current(updated, latest_version)
+        except SecretVersionChanged:
+            self._doc, _version = self.store.get_current()
+            return False
+        self._doc = updated
+        return True
+
+    def _check_portal(self, payload):
+        if "hub_id" in payload and str(payload.get("hub_id")) != self.portal_id:
+            raise NeedsConnection(
+                "HubSpot hub_id is not %s; aborting HubSpot sync" % self.portal_id
+            )
+        if self._portal_checked:
+            return
+        url = self.api_base + "/account-info/v3/details"
+        assert_hubspot_read("GET", url)
+        status, raw = self.http(
+            "GET", url,
+            {"Authorization": "Bearer " + self._access, "Accept": "application/json"},
+            None,
+        )
+        if status != 200:
+            raise NeedsConnection(
+                "HubSpot account-info returned HTTP %s; aborting HubSpot sync" % status
+            )
+        try:
+            info = json.loads(raw.decode("utf-8"))
+        except Exception:
+            raise NeedsConnection("HubSpot account-info was not JSON; aborting HubSpot sync")
+        if str(info.get("portalId")) != self.portal_id:
+            raise NeedsConnection(
+                "HubSpot portalId is not %s; aborting HubSpot sync" % self.portal_id
+            )
+        self._portal_checked = True
+
+    def _refresh(self):
+        doc, version = self.store.get_current()
+        self._doc = doc
+        self._validate_doc(doc)
+        form = urllib.parse.urlencode({
+            "grant_type": "refresh_token",
+            "client_id": doc["client_id"],
+            "client_secret": doc["client_secret"],
+            "refresh_token": doc["refresh_token"],
+        }).encode()
+        status, raw = self.http(
+            "POST",
+            doc["token_endpoint"],
+            {"Content-Type": "application/x-www-form-urlencoded"},
+            form,
+        )
+        if status != 200:
+            raise NeedsConnection("HubSpot token endpoint returned HTTP %s" % status)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception:
+            raise NeedsConnection("HubSpot token endpoint returned a non-JSON body")
+        access = payload.get("access_token")
+        if not isinstance(access, str) or not access:
+            raise NeedsConnection("HubSpot token endpoint did not return an access token")
+        try:
+            expires_in = int(payload["expires_in"])
+        except (KeyError, TypeError, ValueError):
+            raise NeedsConnection("HubSpot token endpoint did not return expires_in")
+        self._access = access
+        self._refresh_after = self.clock() + max(0, expires_in - 120)
+        rotated = self._persist_rotation(version, payload.get("refresh_token"))
+        if self.log is not None:
+            self.log.info(
+                "refresh ok, expires_in %s, rotated %s",
+                expires_in, "yes" if rotated else "no",
+            )
+        self._check_portal(payload)
+        return access
+
+    def request(self, method, url, body=None):
+        assert_hubspot_read(method, url)
+        token = self.access_token()
+        headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        status, raw = self.http(method.upper(), url, headers, data)
+        text = raw.decode("utf-8", errors="replace") if raw else ""
+        if status in (401, 403):
+            raise NeedsConnection("HubSpot returned %s. Not touching watermarks." % status)
+        try:
+            parsed = json.loads(text) if text.strip() else {}
+        except json.JSONDecodeError:
+            parsed = text
+        return status, parsed

@@ -173,7 +173,7 @@ class S3Store(Store):
 # it and are not a substitute for that token.
 SYNC_SCRIPTS = [
     ("sheets_sync.py", "google-sheets-refresh-token"),
-    ("hubspot_sync.py", "hubspot-token"),
+    ("hubspot_sync.py", "hubspot-oauth"),
     ("fathom_sync.py", "fathom-token"),
     ("ga4_sync.py", "google-sheets-refresh-token"),
     ("lemlist_sync.py", "lemlist-token"),
@@ -315,7 +315,11 @@ def main():
             continue
         env = os.environ.copy()
         env["BRAIN_DB"] = str(db_path)
-        env["GTM_SECRET_" + secret.upper().replace("-", "_")] = store.secret_value(secret)
+        # HubSpot reads opstream-gtm/hubspot-oauth itself so a rotated refresh
+        # token can be written back with the AWSCURRENT version id. The value
+        # is not copied into the environment.
+        if secret != "hubspot-oauth":
+            env["GTM_SECRET_" + secret.upper().replace("-", "_")] = store.secret_value(secret)
         if script in ("sheets_sync.py", "ga4_sync.py"):
             for extra in GOOGLE_CLIENT_SECRETS:
                 if store.secret_exists(extra):

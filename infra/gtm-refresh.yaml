@@ -56,14 +56,22 @@ Resources:
                 Resource:
                   - arn:aws:s3:::opstream-gtm-data-080403790510
                   - arn:aws:s3:::opstream-gtm-data-080403790510/*
-              # GetSecretValue on opstream-gtm/* covers the refresh token,
-              # hubspot-token, fathom-token, lemlist-token, otterly-token,
-              # and the Google OAuth client id and secret.
+              # GetSecretValue on opstream-gtm/* covers the Google refresh token,
+              # fathom-token, lemlist-token, otterly-token, and the Google
+              # OAuth client id and secret. PutSecretValue is not on this
+              # wildcard.
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
                 Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*
+              # HubSpot OAuth rotation is written back to this one secret.
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:PutSecretValue
+                Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/hubspot-oauth-*
 
   ExecutionRole:
     Type: AWS::IAM::Role

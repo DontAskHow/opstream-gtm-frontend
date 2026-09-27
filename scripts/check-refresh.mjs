@@ -49,7 +49,7 @@ const first = execFileSync('python3', ['refresh/run.py'], { cwd: root, env, enco
 console.log(first.slice(-800));
 const expectedSkips = [
   ['sheets_sync.py', 'google-sheets-refresh-token'],
-  ['hubspot_sync.py', 'hubspot-token'],
+  ['hubspot_sync.py', 'hubspot-oauth'],
   ['fathom_sync.py', 'fathom-token'],
   ['ga4_sync.py', 'google-sheets-refresh-token'],
   ['lemlist_sync.py', 'lemlist-token'],

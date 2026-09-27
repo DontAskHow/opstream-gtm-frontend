@@ -58,7 +58,7 @@ Create the other secrets only when you have the credential (Console → Secrets 
 | Secret name | Plaintext |
 | --- | --- |
 | `opstream-gtm/google-sheets-refresh-token` | written by `/admin/connect-sheets` |
-| `opstream-gtm/hubspot-token` | HubSpot private app token, read-only CRM, portal 21303277 |
+| `opstream-gtm/hubspot-oauth` | JSON for the existing Marketing Dashboard app: portal_id `21303277`, client_id, client_secret, refresh_token, token_endpoint `https://api.hubapi.com/oauth/2026-03/token`, api_base `https://api.hubapi.com`. Already in Secrets Manager. Do not create another app. |
 | `opstream-gtm/fathom-token` | Fathom API token |
 | `opstream-gtm/lemlist-token` | Lemlist API key |
 | `opstream-gtm/otterly-token` | Otterly token |
@@ -102,7 +102,7 @@ CloudShell's Docker disk is small. If the build fails for space, use the CloudSh
 
 The stack output `EbPolicyArn` is a managed policy. Console → IAM → Roles → `aws-elasticbeanstalk-ec2-role` → Add permissions → Attach policies → `opstream-gtm-eb-published-read`.
 
-That role can then read `published/*`, read and write `state/*`, read `opstream-gtm/google-oauth-client-id` and `opstream-gtm/google-oauth-client-secret`, and create or update `opstream-gtm/google-sheets-refresh-token`. The Fargate task role has `secretsmanager:GetSecretValue` on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*`, which includes that refresh token and the other sync secrets. Do not add environment properties on the Beanstalk environment. The bucket name is already in `refresh-config.json` inside the application zip.
+That role can then read `published/*`, read and write `state/*`, read `opstream-gtm/google-oauth-client-id` and `opstream-gtm/google-oauth-client-secret`, and create or update `opstream-gtm/google-sheets-refresh-token`. The Fargate task role has `secretsmanager:GetSecretValue` and `DescribeSecret` on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*`. `PutSecretValue` is only on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/hubspot-oauth-*`, so a rotated HubSpot refresh token is written back to that secret. Do not add environment properties on the Beanstalk environment. The bucket name is already in `refresh-config.json` inside the application zip.
 
 ### 5. Run it once
 

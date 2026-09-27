@@ -11,21 +11,21 @@ Long text fields truncated at 8000 chars (backfill convention).
 Watermark format in sync_state (source='hubspot'): JSON object mapping
 object_type -> ISO-8601 modified-date watermark.
 
-Auth: Secrets Manager opstream-gtm/hubspot-token (private app, read-only CRM,
-portal 21303277). A missing or rejected token exits 3 and does not move
-watermarks.
+Auth: Secrets Manager opstream-gtm/hubspot-oauth, the existing privately
+distributed Opstream Marketing Dashboard app (portal 21303277). The JSON
+holds portal_id, client_id, client_secret, refresh_token, token_endpoint,
+and api_base. This script refreshes that grant. It does not start a consent
+flow. Calls are GET, plus CRM search POST. A missing secret, a rejected
+token, or a portal other than 21303277 exits 3 and does not move watermarks.
 """
 
 import json
-import sys
-import time
 from datetime import datetime, timezone
 
 from common import (
-    EXIT_ERROR,
+    HubSpotClient,
     NeedsConnection,
     RateLimiter,
-    authed_request,
     db_connect,
     get_sync_state,
     run_main,
@@ -34,9 +34,6 @@ from common import (
 )
 
 SOURCE = "hubspot"
-BASE = "https://api.hubapi.com"
-ALLOWED_HOSTS = ["api.hubapi.com"]
-CONNECTORS = ["custom.hubspot", "hubspot"]
 # HubSpot API: max 100 requests per 10 seconds -> stay well under it.
 pace = RateLimiter(0.12)
 
@@ -90,7 +87,7 @@ def _to_ms(iso: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
-def search_objects(otype: str, modfield: str, props: list[str], since_ms: int):
+def search_objects(client, otype: str, modfield: str, props: list[str], since_ms: int):
     """Yield result dicts from the CRM search API, paginated."""
     after = None
     while True:
@@ -109,9 +106,8 @@ def search_objects(otype: str, modfield: str, props: list[str], since_ms: int):
         if after:
             body["after"] = after
         pace.wait()
-        status, payload = authed_request(
-            "POST", f"{BASE}/crm/v3/objects/{otype}/search",
-            CONNECTORS, ALLOWED_HOSTS, body=body,
+        status, payload = client.request(
+            "POST", f"{client.api_base}/crm/v3/objects/{otype}/search", body=body,
         )
         if status != 200:
             raise RuntimeError(f"HubSpot search {otype} returned HTTP {status}: {str(payload)[:300]}")
@@ -124,7 +120,7 @@ def search_objects(otype: str, modfield: str, props: list[str], since_ms: int):
             break
 
 
-def refresh_associations(con, otype: str, hs_id: str, log) -> int:
+def refresh_associations(client, con, otype: str, hs_id: str, log) -> int:
     """Re-pull all associations for one object; returns rows written."""
     cur = con.cursor()
     cur.execute(
@@ -140,10 +136,12 @@ def refresh_associations(con, otype: str, hs_id: str, log) -> int:
         for frm, to in ((otype, to_type), (to_type, otype)):
             if frm == to:
                 continue
-            url = f"{BASE}/crm/v4/objects/{frm}/{hs_id}/associations/{to}?limit=500"
+            url = f"{client.api_base}/crm/v4/objects/{frm}/{hs_id}/associations/{to}?limit=500"
             pace.wait()
             try:
-                status, payload = authed_request("GET", url, CONNECTORS, ALLOWED_HOSTS)
+                status, payload = client.request("GET", url)
+            except NeedsConnection:
+                raise
             except Exception as e:
                 log.warning("assoc fetch %s/%s -> %s failed: %s", frm, to, hs_id, e)
                 continue
@@ -170,6 +168,8 @@ def refresh_associations(con, otype: str, hs_id: str, log) -> int:
 
 
 def main_sync(log):
+    client = HubSpotClient(log=log)
+    client.prepare()
     watermark_raw, last_run, _note = get_sync_state(SOURCE)
     try:
         watermarks = json.loads(watermark_raw) if watermark_raw else {}
@@ -193,7 +193,7 @@ def main_sync(log):
             changed_ids = []
             max_seen = since_iso
             count = 0
-            for obj in search_objects(otype, modfield, props, since_ms):
+            for obj in search_objects(client, otype, modfield, props, since_ms):
                 hs_id = str(obj.get("id", ""))
                 properties = truncate_props(obj.get("properties", {}) or {})
                 if not hs_id:
@@ -213,7 +213,7 @@ def main_sync(log):
             # Refresh associations for changed objects only.
             assoc_written = 0
             for hs_id in changed_ids:
-                assoc_written += refresh_associations(con, otype, hs_id, log)
+                assoc_written += refresh_associations(client, con, otype, hs_id, log)
             con.commit()
             watermarks[otype] = max_seen
             total_upserted += count
