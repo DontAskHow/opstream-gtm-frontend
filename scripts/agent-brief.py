@@ -18,6 +18,10 @@ import os
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gtm_metrics import greeting
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(REPO, "out", "data")
@@ -116,6 +120,8 @@ def main():
         "you turn it into a short, sharp, human briefing she reads first thing.\n\n"
         "RULES:\n"
         "- Ground EVERY claim in the data below. Never invent companies, people, dates, amounts, or meetings.\n"
+        "- Numbers in briefCounts and goal status lines are already computed. Repeat them exactly. Do not call a larger commit 'short' of a smaller forecast.\n"
+        "- The greeting must start with \"" + greeting() + "\" because that is the time of day in America/Phoenix. Do not say a different time of day.\n"
         "- If something is unknown, say so or omit it — never fill gaps with guesses.\n"
         "- Be concrete: names, numbers, days. No corporate fluff, no hype.\n"
         "- Keep it skimmable: short paragraphs, tight bullets.\n"

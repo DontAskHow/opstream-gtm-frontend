@@ -13,6 +13,9 @@ or 'Unassigned' -- no invented person names.
 import sqlite3, json, os, re, sys
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gtm_metrics import date_only, is_open_pipeline, phoenix_today, probability_fraction, stage_display
+
 REPO = os.path.expanduser('~/workspace/opstream-gtm-frontend')
 DB = os.path.expanduser('~/workspace/brain/brain.db')
 OUT = os.path.join(REPO, 'out', 'data')
@@ -295,22 +298,23 @@ def main():
                 continue
             raw_stage = dp.get('dealstage')
             dlabel = stage_label(did, raw_stage)
-            prob = num(dp.get('hs_deal_stage_probability'))
+            prob = probability_fraction(num(dp.get('hs_deal_stage_probability')))
+            close_day = date_only(dp.get('closedate'))
             dref = f'hubspot:deals:{did}'
             add_evidence(dref, did, 'HubSpot', dfetched, f'HubSpot deal {did}',
                          f"{dp.get('dealname') or 'Untitled deal'} — stage {dlabel or 'not labeled'}, "
-                         f"amount {dp.get('amount') or 'not entered'}, close {iso_date(dp.get('closedate')) or 'not set'}",
+                         f"amount {dp.get('amount') or 'not entered'}, close {close_day or 'not set'}",
                          {'dealname': dp.get('dealname'), 'stage': dlabel,
                           'amount': dp.get('amount'),
-                          'probability': int(prob) if prob is not None else None,
-                          'close': iso_date(dp.get('closedate')), 'owner': owner_label(dp.get('hubspot_owner_id'))})
+                          'probability': None if prob is None else round(prob * 100, 1),
+                          'close': close_day, 'owner': owner_label(dp.get('hubspot_owner_id'))})
             deal_objs.append({
                 'id': 'deal-' + did, 'name': dp.get('dealname') or 'Untitled deal',
                 'stage': raw_stage, 'stageLabel': dlabel,
-                'displayLine': describe_deal(dp.get('dealname'), dlabel, num(dp.get('amount')), iso_date(dp.get('closedate'))),
+                'displayLine': describe_deal(dp.get('dealname'), dlabel, num(dp.get('amount')), close_day),
                 'amount': num(dp.get('amount')), 'currency': 'USD',
-                'probability': int(prob) if prob is not None else None,
-                'close': dp.get('closedate'), 'created': dp.get('createdate'),
+                'probability': None if prob is None else round(prob * 100, 1),
+                'close': close_day, 'created': date_only(dp.get('createdate')),
                 'owner': owner_label(dp.get('hubspot_owner_id')),
                 'closed': (raw_stage or '') in CLOSED_STAGES,
                 'history': [], 'amountHistory': [], 'closeHistory': [], 'refs': [dref]})
@@ -611,20 +615,26 @@ def main():
             cname = cp.get('name')
         if not cname:
             cname = (dp.get('dealname') or 'Untitled deal')
-        prob = num(dp.get('hs_deal_stage_probability'))
-        opportunities.append({
+        prob = probability_fraction(num(dp.get('hs_deal_stage_probability')))
+        label = stage_label(did, dp.get('dealstage'))
+        candidate = {
             'id': 'deal-' + did,
             'companyId': 'company:' + cid if cid else 'company:unknown',
             'name': cname,
+            'dealName': dp.get('dealname') or '',
             'owner': owner_label(dp.get('hubspot_owner_id')),
-            'stage': stage_label(did, dp.get('dealstage')),
+            'stage': label,
             'amount': num(dp.get('amount')),
-            'probability': (prob / 100) if prob is not None else None,
-            'close': dp.get('closedate'),
+            'probability': prob,
+            'close': date_only(dp.get('closedate')),
             'days': sheet_days.get(did),
             'note': '',
             'refs': [f'hubspot:deals:{did}'],
-        })
+            'closed': False,
+        }
+        if is_open_pipeline(candidate, phoenix_today()):
+            candidate['stage'] = stage_display(label)
+            opportunities.append(candidate)
     print(f'opportunities: {len(opportunities)}', flush=True)
 
     # ---------- leads ----------
@@ -680,15 +690,14 @@ def main():
     print(f'upcoming: {len(upcoming)}', flush=True)
 
     # ---------- report ----------
-    open_ds = [deals[i] for i in open_deal_ids if i in deals]
     weighted = 0.0
     stages = {}
-    for did in open_deal_ids:
-        dp, _ = deals.get(did, ({}, None))
-        amt = num(dp.get('amount')) or 0
-        prob = num(dp.get('hs_deal_stage_probability'))
-        weighted += amt * ((prob / 100) if prob is not None else 0)
-        sl = stage_label(did, dp.get('dealstage'))
+    for opp in opportunities:
+        amt = opp.get('amount') or 0
+        frac = opp.get('probability')
+        if frac is not None:
+            weighted += amt * frac
+        sl = opp.get('stage') or 'No stage'
         s = stages.setdefault(sl, {'stage': sl, 'count': 0, 'amount': 0})
         s['count'] += 1
         s['amount'] += amt
@@ -772,8 +781,9 @@ def main():
                      'completed': mtg_outcomes.get('COMPLETED', 0),
                      'recorded': len(fathom)},
         'pipeline': {'weighted': {'value': round(weighted, 2)},
+                     'open': {'value': round(sum((o.get('amount') or 0) for o in opportunities), 2)},
                      'stages': sorted(stages.values(), key=lambda s: -s['amount']),
-                     'scorecard': [{'label': 'Active deals', 'value': len(open_deal_ids)},
+                     'scorecard': [{'label': 'Active deals', 'value': len(opportunities)},
                                    {'label': 'Discovery calls', 'value': len(fathom)}]},
         'spend': {'months': months, 'channels': channels,
                   'campaigns': campaigns, 'advertising': []},
@@ -796,7 +806,10 @@ def main():
             'suggestedDrafts': [],
             'upcoming': upcoming,
         },
-        'quick': {'leads': len(lead_list), 'mql': mql_total, 'sql': sql_total},
+        # Lifecycle-stage totals are not the headline. The workspace counts
+        # leads by lead date, MQL as meetings booked, and SQL as meetings held.
+        'quick': {'leads': None, 'mql': None, 'sql': None,
+                  'note': 'Computed in the workspace. MQL is a meeting booked; SQL is a meeting held.'},
         'report': report,
         # Top-level web keeps the frontend contract stable: data-bindings.js
         # reads verified.web (GA4 extract). Missing fields stay null.

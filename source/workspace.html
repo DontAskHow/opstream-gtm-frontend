@@ -448,7 +448,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div style="display:grid;grid-template-columns:repeat({{ barCols }},minmax(0,1fr));gap:6px;border-top:1px solid var(--color-divider);padding-top:6px">
                 <sc-for list="{{ weeks }}" as="w" hint-placeholder-count="10"><span style="font-size:11px;color:var(--color-neutral-700);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ w.label }}</span></sc-for>
               </div>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Webinar registrations and event badge scans count as leads. Qualification is counted only when a separate MQL or SQL date is recorded.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">New leads are counted by lead date. Marketing qualified is a meeting booked in the period. Sales qualified is a meeting held. Dates are America/Phoenix.</p>
             </section>
             <section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">By source · {{ periodRange }}</h6><button onClick="{{ exportSources }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
@@ -456,7 +456,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                 <thead><tr><th>Source</th><th style="text-align:right">Leads</th><th style="text-align:right">MQL</th><th style="text-align:right">SQL</th><th style="text-align:right">SQL / leads</th></tr></thead>
                 <tbody><sc-for list="{{ channels }}" as="c" hint-placeholder-count="5"><tr><td>{{ c.channel }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.leads }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.mql }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.sql }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.rate }}</td></tr></sc-for></tbody>
               </table>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Lead Tracker, each stage counted by its own date, so MQL and SQL can exceed leads for a source in a short period. What counts as Lead, MQL and SQL differs by source; see <button onClick="{{ goData }}" style="font:inherit;background:none;border:0;padding:0;color:inherit;text-decoration:underline;text-underline-offset:3px;cursor:pointer">definitions</button>.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Same definitions as the cards: leads by lead date, MQL by meetings booked, SQL by meetings held. A meeting with no lead source is listed as Unattributed so the columns add up to the cards.</p>
             </section>
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
@@ -974,11 +974,10 @@ class Component extends DCLogic {
     const REC = st.records || { companies: [] };
     // Honest collection stamp for every "collected …" string below.
     const genAt = (st.records || {}).generatedAt;
-    const collectedShort = genAt ? new Date(genAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '—';
-    const phxTime = iso => { try { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Phoenix' }); } catch { return ''; } };
-    const collectedLong = genAt ? collectedShort + ', ' + phxTime(genAt) + ' Phoenix time' : collectedShort;
-    const fmtD = d => (d = d == null ? '' : String(d)) ? new Date((d.length === 10 ? d + 'T12:00:00Z' : (d.length === 16 ? d + ':00Z' : d))).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : '—';
-    const fmtDT = d => (d = d == null ? '' : String(d)) && d.length >= 16 ? fmtD(d) + ' · ' + phxTime(d.length === 16 ? d + ':00Z' : d) : fmtD(d);
+    const collectedShort = genAt ? workspaceModel.formatDate(genAt) : '—';
+    const collectedLong = genAt ? workspaceModel.formatDateTime(genAt) : collectedShort;
+    const fmtD = d => workspaceModel.formatDate(d);
+    const fmtDT = d => workspaceModel.formatDateTime(d);
     const money = n => n === null || n === undefined ? 'no amount' : '$' + Math.round(n).toLocaleString('en-US');
     const findCo = idOrName => this._verifiedAccount(idOrName);
     const goCo = (idOrName) => e => { e && e.stopPropagation && e.stopPropagation(); const c = findCo(idOrName); if (c) { this.setState({ screen: 'account', accountId: c.id, evidence: false, timelineAll: false, peopleAll: false }); window.scrollTo(0, 0); } else ev('sheet:' + idOrName)(e); };
@@ -1052,10 +1051,16 @@ class Component extends DCLogic {
     // ---- Proactive briefing: what needs a human, per role ----
     const opps = st.verified?.opportunities || [];
     const oppByName = Object.fromEntries(opps.map(o => [o.name, o]));
-    const rankedDeals = [...dealsRaw].sort((a, b) => (b[6] ?? -1) - (a[6] ?? -1));
-    const totalPipe = rankedDeals.reduce((n, d) => n + (d[3] || 0), 0);
-    const weightedPipe = opps.reduce((n, o) => n + (o.amount || 0) * (o.probability || 0), 0);
-    const unqualifiedLeads = (st.verified?.leads || []).filter(l => !l.mql);
+    const todayPhx = workspaceModel.phoenixToday();
+    const pipeNow = workspaceModel.pipelineTotals(opps, todayPhx);
+    const totalPipe = pipeNow.openAmount;
+    const weightedPipe = pipeNow.weighted || 0;
+    const boundsNow = workspaceModel.periodBounds(st.period || 'quarter', st.start, st.end, todayPhx);
+    const funnelNow = workspaceModel.funnel(st.verified?.leads || [], REC, boundsNow.start, boundsNow.end);
+    const unworkedInfo = workspaceModel.unworkedLeads(st.verified?.leads || [], st.sheetReview);
+    const quietNow = workspaceModel.quietDeals(opps, REC, todayPhx);
+    const rankedDeals = [...dealsRaw].sort((a, b) => (Number(b[3]) || 0) - (Number(a[3]) || 0));
+    const unqualifiedLeads = (st.verified?.leads || []).filter(l => !workspaceModel.dateOnly(l.mql));
     const unsentDrafts = drafts.filter(d => !d.version).length;
     const draftForCompany = (company, rationale) => () => { const cc = findCo(company); const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + company, company, text: '', rationale, refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: cc ? cc.contacts.slice(0, 2).map(x => x.name).join(', ') : '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); };
     const dealEvidenceId = company => { const cc = findCo(company); const dd = cc && (cc.deals.find(d => !d.closed) || cc.deals[0]); return dd ? dd.id : null; };
@@ -1064,7 +1069,7 @@ class Component extends DCLogic {
       const daysKnown = days !== null && days !== undefined;
       return {
         n: i + 1, title: 'Move ' + company + ' out of ' + stage,
-        context: usd(arr) + ' · ' + prob + '% · ' + (daysKnown ? days + ' days in stage' : 'stage age not in extract') + ' · close ' + close + ' · ' + owner,
+        context: usd(arr) + ' · ' + prob + '% · ' + (daysKnown ? days + ' days in stage' : 'stage age not in extract') + ' · close ' + fmtD(close) + ' · ' + owner,
         why: (note ? note + ' ' : '') + (daysKnown ? 'No recorded stage movement in ' + days + ' days' + (i === 0 ? ' — the longest-stuck deal in the pipeline.' : '.') : 'Stage age is not in the CRM extract; ranked by pipeline order.'),
         confidence: 'Medium · ' + (daysKnown ? 'days-in-stage is the only staleness signal collected.' : 'based on open pipeline records.'),
         changed: cc && cc.lastContact ? 'Last contact ' + fmtD(cc.lastContact) + '.' : '',
@@ -1073,7 +1078,7 @@ class Component extends DCLogic {
         hasDealEvidence: !!evid, dealEvidenceGo: evid ? ev('deal:' + evid) : null,
       };
     });
-    if (unqualifiedLeads.length) briefingActions.push({ n: briefingActions.length + 1, title: 'Qualify ' + unqualifiedLeads.length + ' new leads', context: unqualifiedLeads.slice(0, 4).map(l => l.name).join(', ') + (unqualifiedLeads.length > 4 ? ' · +' + (unqualifiedLeads.length - 4) + ' more' : ''), why: 'These leads have no MQL date — nobody has decided whether they are worth a meeting yet.', confidence: 'High · straight from the lead tracker.', changed: '', primary: 'Review new leads', primaryGo: this.go('accounts', { accounts: 'leads' }), hasDealEvidence: false });
+    if (unqualifiedLeads.length) briefingActions.push({ n: briefingActions.length + 1, title: 'Qualify ' + unworkedInfo.count + ' new leads', context: unqualifiedLeads.slice(0, 4).map(l => l.name).join(', ') + (unqualifiedLeads.length > 4 ? ' · +' + (unqualifiedLeads.length - 4) + ' more' : ''), why: 'These leads have no MQL date — nobody has decided whether they are worth a meeting yet.', confidence: 'High · straight from the lead tracker.', changed: '', primary: 'Review new leads', primaryGo: this.go('accounts', { accounts: 'leads' }), hasDealEvidence: false });
     if (unsentDrafts) briefingActions.push({ n: briefingActions.length + 1, title: 'Review ' + unsentDrafts + ' unsent draft' + (unsentDrafts > 1 ? 's' : ''), context: 'Drafts waiting in the workspace', why: 'Drafts are created but never sent — a human reviews and sends each one.', confidence: 'High · counted from your drafts.', changed: '', primary: 'Open drafts', primaryGo: goDrafts, hasDealEvidence: false });
     // ---- Hollie operator: invisible background operator output (data/hollie.json) ----
     const hop = st.hollie || null;
@@ -1107,9 +1112,9 @@ class Component extends DCLogic {
     const hb = hop ? hop.brief : null;
     const hollieBriefCards = hb ? [
       { title: 'Meetings today & tomorrow', line: hb.meetings.items.length ? hb.meetings.items.map(m => m.title + ' · ' + fmtDT(m.start)).join(' / ') : 'None scheduled', note: hb.meetings.note, go: this.go('meetings', { meetings: 'upcoming' }), goLabel: 'Open meetings' },
-      { title: 'Deals gone quiet', line: hb.quietDeals.items.length + ' with no engagement in 14+ days', note: hb.quietDeals.note, go: goFollow, goLabel: 'Open follow-ups' },
+      { title: 'Deals gone quiet', line: quietNow.length + ' with no engagement in ' + workspaceModel.QUIET_DAYS + '+ days', note: hb.quietDeals.note, go: goFollow, goLabel: 'Open follow-ups' },
       { title: 'Follow-ups owed', line: hb.followupsOwed.items.length + ' calls with open action items', note: hb.followupsOwed.note, go: goFollow, goLabel: 'Open follow-ups' },
-      { title: 'New leads', line: hb.newLeads.items.length + ' unworked', note: hb.newLeads.note, go: goLeads, goLabel: 'Open new leads' },
+      { title: 'New leads', line: unworkedInfo.count + ' unworked', note: 'No meeting booked' + (unworkedInfo.source === 'sheet' ? ' · sheet is authoritative' : ''), go: goLeads, goLabel: 'Open new leads' },
     ] : [];
     const hollieAutonomy = hop ? [
       { label: 'Meeting prep', text: (hop.autonomyText || {}).meeting_prep },
@@ -1142,7 +1147,7 @@ class Component extends DCLogic {
     const hasAgentBriefNew = agentBriefNew.length > 0;
     const hasAgentBriefTop = agentBriefTop.length > 0;
     const hasAgentBriefWatch = agentBriefWatch.length > 0;
-    const agentBriefGreeting = ab ? (ab.greeting || '') : '';
+    const agentBriefGreeting = workspaceModel.alignGreeting(ab ? (ab.greeting || '') : workspaceModel.greeting(), new Date());
     const agentBriefGenNote = ab && ab.generatedAt ? 'Written ' + fmtDT(ab.generatedAt) : '';
     // ---- Heartbeat: periodic proactive pulse (data/heartbeat.json) ----
     const pulse = st.heartbeat || null;
@@ -1168,20 +1173,20 @@ class Component extends DCLogic {
     }));
     const hasHeartbeatFixes = heartbeatFixes.length > 0;
     const approvals = st.approvals || {};
-    const stuckDeals = rankedDeals.filter(d => (d[6] ?? 0) >= 8);
-    const stuckValue = stuckDeals.reduce((n, d) => n + (d[3] || 0), 0);
-    const qv = st.verified?.quick || {};
+    const quietValue = quietNow.reduce((n, d) => n + (Number(d.amount) || 0), 0);
     const briefingMetrics = [
-      { label: 'Open pipeline', value: rankedDeals.length ? usd(totalPipe) : '—' },
-      { label: 'Weighted pipeline', value: rankedDeals.length ? usd(weightedPipe) : '—' },
-      { label: 'Stuck 8+ days', value: rankedDeals.length ? usd(stuckValue) + ' across ' + stuckDeals.length + ' deals' : '—' },
-      { label: 'Leads / MQL / SQL', value: (qv.leads ?? '—') + ' / ' + (qv.mql ?? '—') + ' / ' + (qv.sql ?? '—') },
+      { label: 'Open pipeline', value: pipeNow.count ? usd(totalPipe) : '—' },
+      { label: 'Weighted pipeline', value: pipeNow.count ? usd(weightedPipe) : '—' },
+      { label: 'Quiet ' + workspaceModel.QUIET_DAYS + '+ days', value: pipeNow.count ? usd(quietValue) + ' across ' + quietNow.length + ' deals' : '—' },
+      { label: 'Leads / MQL / SQL', value: funnelNow.leads + ' / ' + funnelNow.mql + ' / ' + funnelNow.sql },
     ];
-    const topDeal = rankedDeals[0];
+    const topDeal = workspaceModel.largestDeal(pipeNow.deals);
+    const topCompany = topDeal ? (this._verifiedAccount(topDeal.companyId) || this._verifiedAccount(topDeal.name)) : null;
+    const topQuietDays = topCompany ? workspaceModel.daysQuiet(topCompany, todayPhx) : null;
+    const share = topDeal ? workspaceModel.closeDateShare(pipeNow.deals, topDeal.close) : null;
     const briefingDecisions = topDeal ? [
-      { title: 'Push ' + topDeal[0] + ' or let it slip', why: topDeal[0] + ' is the largest deal (' + usd(topDeal[3]) + ') and the longest in stage (' + topDeal[6] + ' days). The close date is ' + fmtD(topDeal[5]) + '. Either get a pilot proposal in front of them this week or accept the close slipping.', confidence: 'Medium · company record; close dates are owner estimates, not buyer commitments.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal[0]) },
-      { title: rankedDeals.filter(d => d[5] === topDeal[5]).length + ' of ' + rankedDeals.length + ' deals share a ' + fmtD(topDeal[5]) + ' close', why: 'If they all move at once, pilot delivery and compliance review stack up in the same window. Decide now whether to sequence them or staff up.', confidence: 'Medium · close dates are owner estimates, not buyer commitments.', evidenceLabel: 'Review by close date', evidenceGo: this.go('accounts', { accounts: 'deals', sort: 'close' }) },
-    ] : [];
+      { title: 'Push ' + topDeal.name + ' or let it slip', why: topDeal.name + ' is the largest open deal (' + usd(topDeal.amount || 0) + '). The close date is ' + fmtD(topDeal.close) + '. ' + (topQuietDays != null ? 'It has been quiet ' + topQuietDays + ' days.' : 'No past engagement date is on file.'), confidence: 'Computed from open deals after excluding past close dates, renewals, current agreements, Disqualified and On Hold.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal.name) },
+    ].concat(share && share.count >= 2 ? [{ title: share.count + ' of ' + share.total + ' open deals share a ' + fmtD(share.day) + ' close date', why: 'These deals are grouped by the Phoenix calendar date of the close, not the raw timestamp.', confidence: 'Computed from the same open-pipeline set as the headline.', evidenceLabel: 'Review by close date', evidenceGo: this.go('accounts', { accounts: 'deals', sort: 'close' }) }] : []) : [];
     return {
       ...(() => {
         const mode = st.systemState ?? this.props.systemState ?? 'normal';
@@ -1204,7 +1209,7 @@ class Component extends DCLogic {
       meetingsNote: st.records ? (new Set(allRecs.map(r => r.id)).size) + ' recordings · ' + (REC.unmatchedRecordings || []).length + ' with companies outside the 31 extracted accounts · CRM calendar entries for upcoming' : 'Loading meeting records…',
       evidenceOpen: !!st.evidence, openEvidence: goEvidence, ev: evVal, evReviewSample: ev('review-sample'), evRecordingSample: ev('recording-sample'), evTim13: ev('tim-13'), evDraftRefs: ev('draft-refs'), closeEvidence: () => this.setState({ evidence: false }), stop: e => e.stopPropagation(),
       priorities: [],
-      briefingIntro: 'The workspace leads with what changed and what needs your judgment. Drafts are created but never sent; nothing leaves this workspace without you.',
+      briefingIntro: workspaceModel.greeting() + '. The workspace leads with what changed and what needs your judgment. Drafts are created but never sent; nothing leaves this workspace without you.',
       isHollie: true,
       briefingEmpty: rankedDeals.length === 0, briefingMetrics, briefingDecisions,
       hasHollieOp: !!hop, noHollieOp: !hop,
@@ -1239,10 +1244,10 @@ class Component extends DCLogic {
       perfTabs: seg([['demand', 'Demand'], ['spend', 'Spend'], ['web', 'Website & AI']], st.perf, 'perf'),
       perfDemand: st.perf === 'demand', perfSpend: st.perf === 'spend', perfWeb: st.perf === 'web',
       periods: seg([['six', 'Six weeks'], ['quarter', 'Quarter to date'], ['year', '2026'], ['custom', 'Custom']], st.period, 'period'),
-      periodRange: pd.range, isCustom: st.period === 'custom', customStart: st.start || '2026-08-01', customEnd: st.end || new Date().toISOString().slice(0, 10),
+      periodRange: pd.range, isCustom: st.period === 'custom', customStart: st.start || '2026-08-01', customEnd: st.end || workspaceModel.phoenixToday(),
       setStart: e => this.setState({ start: e.target.value }), setEnd: e => this.setState({ end: e.target.value }),
       barsTitle: st.period === 'year' || (st.period === 'custom' && !pd.unit) ? 'New leads by month' : 'New leads by week',
-      scopeNote: st.perf === 'web' ? 'Website: May 18 – Sep 7 (analytics start). AI visibility: monitored answers through Aug 24. No period filter applies.' : st.perf === 'spend' ? 'Spend: Jan – Sep 2026 by month, as entered in the budget workbook. Campaign reports as of Sep 1. No period filter applies.' : 'Period applies to the lead, MQL and SQL counts. Pipeline is the current state; meeting counts are Jul – Aug.',
+      scopeNote: st.perf === 'web' ? 'Website: May 18 – Sep 7 (analytics start). AI visibility: monitored answers through Aug 24. No period filter applies.' : st.perf === 'spend' ? 'Spend: Jan – Sep 2026 by month, as entered in the budget workbook. Campaign reports as of Sep 1. No period filter applies.' : 'The period applies to new leads, meetings booked and meetings held. Open pipeline is the current book. All dates are America/Phoenix.',
       demandMetrics: [{"label":"New leads","value":"0","delta":"Company record","note":"","go":null},{"label":"Marketing qualified","value":"0","delta":"Company record","note":"","go":null},{"label":"Sales qualified","value":"0","delta":"Company record","note":"","go":null},{"label":"Meetings completed","value":"0","delta":"Company record","note":"","go":null},{"label":"Recordings","value":"0","delta":"Company record","note":"","go":null}],
       weeks: pd.bars.map(([label, leads]) => ({ label, leads, title: pd.unit + label + ': ' + leads + ' new leads', leadH: Math.round(leads / barMax * 100) + '%' })),
       barCols: pd.bars.length,
@@ -1351,7 +1356,7 @@ class Component extends DCLogic {
       meetingTabs: seg([['upcoming', 'Upcoming'], ['past', 'Past']], st.meetings, 'meetings'),
       meetingGroups: this.memo('meetingGroups', st.meetings + ':' + (REC.generatedAt || ''), () => {
         const ownerOf = r => (r.recordedBy || '').split(' ')[0];
-        const todayStr = new Date().toISOString().slice(0, 10); const plus = (d, n) => { const t = new Date(d + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+        const todayStr = workspaceModel.phoenixToday(); const plus = (d, n) => { const t = new Date(d + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
         const monthKey = d => d.slice(0, 7);
         const monthLabel = k => new Date(k + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
         let items;
@@ -1373,7 +1378,7 @@ class Component extends DCLogic {
       draftFeedback: st.draftFeedback || null,
       draftFeedbackClass: st.draftFeedbackClass || 'form-success',
       get meetingsEmpty() { return this.meetingGroups.length === 0; },
-      readingRules: [{ title: 'Missing spend is not zero', text: 'August and September have no actuals entered. They show as not entered, never as underspend.' }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'Leads, MQLs and SQLs come from the tracker; completed meetings from the CRM; recordings from Fathom. They are separate populations.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. Only the tracker decides qualification.' }, { title: 'Each source has its own date', text: 'The extract was generated from the company brain (HubSpot, Fathom, Sheets, GA4).' }],
+      readingRules: [{ title: 'Missing spend is not zero', text: 'August and September have no actuals entered. They show as not entered, never as underspend.' }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'New leads use the lead date. Marketing qualified means a meeting was booked. Sales qualified means a meeting was held (a recording, or a CRM meeting marked held). They are separate counts, not stages of one population.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. They are not counted as meetings booked or meetings held.' }, { title: 'Each source has its own date', text: 'The extract was generated from the company brain (HubSpot, Fathom, Sheets, GA4).' }],
       sources: [],
       definitions: [{ source: 'Inbound', lead: 'Gated content (excl. spam/jobs); simple email form', mql: 'Demo request, meeting booked, pricing, contact form', sql: 'Meeting happened' }, { source: 'Outbound', lead: 'Prospect replied with positive engagement', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'Events', lead: 'Gave us contact info / badge scanned', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'RFP', lead: 'Said they want to send an RFI/RFP', mql: 'Sent RFI/RFP', sql: 'Invitation to start demo' }]
     };

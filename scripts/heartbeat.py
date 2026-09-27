@@ -34,6 +34,10 @@ import os
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gtm_metrics import days_quiet, greeting, is_open_pipeline, phoenix_today
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(REPO, "out", "data")
@@ -324,15 +328,22 @@ def main():
     new_mm = [m for m in mismatches if mmkey(m) not in prev_mmkeys][:6]
 
     opps = ver.get("opportunities") or []
+    today = phoenix_today()
+    rec = load_json(os.path.join(DATA, "records.json")) or {}
+    companies = {c.get("id"): c for c in (rec.get("companies") or [])}
+    def quiet_days_for(o):
+        cid = str(o.get("companyId") or "").replace("company:", "")
+        company = companies.get(cid) or next((c for c in companies.values() if c.get("name") == o.get("name")), None)
+        return days_quiet(company, today) if company else None
     def opline(o):
         return {
-            "name": o.get("name"), "company": o.get("company"),
+            "name": o.get("name"), "company": o.get("company") or o.get("name"),
             "stage": o.get("stage"), "amount": o.get("amount"),
-            "days": o.get("days"), "close": o.get("close"),
+            "daysQuiet": quiet_days_for(o), "close": o.get("close"),
         }
-    # Loudest signals: commit/bestcase deals gone quiet, biggest amounts.
+    # Quiet days come from the shared engagement calculation, not days-in-stage.
     quiet_commit = sorted(
-        [o for o in opps if (o.get("days") or 0) >= 30],
+        [o for o in opps if is_open_pipeline(o, today) and (quiet_days_for(o) or 0) >= 14],
         key=lambda o: (o.get("amount") or 0), reverse=True,
     )[:6]
 
@@ -361,6 +372,8 @@ def main():
         "check the product's pulse and surface what genuinely deserves attention.\n\n"
         "RULES:\n"
         "- Ground EVERY claim in the data below. Never invent companies, people, dates, or amounts.\n"
+        "- Quiet-day figures are already computed (daysQuiet). Repeat those numbers; do not calculate another.\n"
+        "- It is " + greeting() + " in America/Phoenix. Match that time of day if you greet anyone.\n"
         "- Be specific and actionable: name the deal/company, the number, the implication.\n"
         "- Prefer new/changed things (newQueueItems, newMismatches, resolved items) over restating the standing queue.\n"
         "- If the health check flags a warning, include it as an insight with kind 'health'.\n"

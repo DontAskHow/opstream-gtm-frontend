@@ -1,7 +1,7 @@
 // Values come from the retained source collection. The original beta owns the UI.
 const verifiedFormat = {
   number:n=>n==null?'—':Math.round(n).toLocaleString('en-US'),
-  date:d=>d?new Date(d.slice(0,10)+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'}):'—',
+  date:d=>workspaceModel.formatDate(d),
   percent:n=>n==null?'—':(n*100).toLocaleString('en-US',{maximumFractionDigits:1})+'%',
   add:(d,n)=>new Date(Date.parse(d+'T12:00:00Z')+n*86400000).toISOString().slice(0,10)
 };
@@ -16,12 +16,13 @@ Component.prototype._loadVerified = async function () {
     let heartbeat=null;try{heartbeat=await read('heartbeat');}catch{}
     let heartbeatFixes=null;try{heartbeatFixes=await read('heartbeat-fixes');}catch{}
     let proposals=[];try{const pr=await fetch('data/crm-proposals.json',{cache:'no-store'});if(pr.ok){const pj=await pr.json();proposals=Array.isArray(pj)?pj:[];}}catch{}
-    this.setState({verified,records,verifiedEvidence:evidence,draftSeeds,sheetLabels,hollie,agentBrief,heartbeat,heartbeatFixes,proposals,verifiedError:null,checking:false,checkedAt:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});
+    let sheetReview=null;try{sheetReview=await read('sheet-review');}catch{}
+    this.setState({verified,records,verifiedEvidence:evidence,draftSeeds,sheetLabels,hollie,agentBrief,heartbeat,heartbeatFixes,proposals,sheetReview,verifiedError:null,checking:false,checkedAt:workspaceModel.formatTime(new Date().toISOString())});
     try{
       const banner=document.getElementById('topBanner');
       if(banner){
         const isDemo=/synthetic|demo/i.test(verified.snapshotId||'');
-        const cDate=records.generatedAt?new Date(records.generatedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}):'';
+        const cDate=records.generatedAt?workspaceModel.formatDate(records.generatedAt):'';
         banner.textContent=isDemo
           ? 'PUBLIC DEMO · All data is synthetic · Changes stay in your browser · Email and Slack are disabled'
           : 'Company data · HubSpot, Fathom, Sheets, GA4'+(cDate?' · collected '+cDate:'')+' · Drafts stay in your browser · Nothing is sent without approval';
@@ -30,13 +31,8 @@ Component.prototype._loadVerified = async function () {
   } catch {this.setState({checking:false,verifiedError:'The collected data could not be loaded. Reload the page to try again.'});}
 };
 Component.prototype._verifiedRange = function () {
-  const s=this.state,t=new Date().toISOString().slice(0,10);
-  const add=(d,n)=>new Date(Date.parse(d+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
-  if(s.period==='six')return [add(t,-42),t];
-  if(s.period==='year')return [add(t,-365),t];
-  if(s.period==='custom')return [s.start||add(t,-56),s.end||t].sort();
-  const now=new Date(),qs=new Date(Date.UTC(now.getUTCFullYear(),Math.floor(now.getUTCMonth()/3)*3,1)).toISOString().slice(0,10);
-  return [qs,t];
+  const s=this.state,b=workspaceModel.periodBounds(s.period,s.start,s.end);
+  return [b.start,b.end];
 };
 Component.prototype._verifiedAccount = function (idOrName) {
   const data=this.state.records,verified=this.state.verified;if(!data||!idOrName)return null;
@@ -47,7 +43,8 @@ Component.prototype._verifiedAccount = function (idOrName) {
   return data.companies.find(c=>c.id===linked||(c.related||[]).some(r=>r.id===id||r.id===linked))||null;
 };
 Component.prototype._verifiedOpportunityRows = function () {
-  return (this.state.verified?.opportunities||[]).map(o=>[o.name,o.owner||'—',o.stage,o.amount,o.probability==null?null:o.probability*100,o.close,o.days,o.note]);
+  const today=workspaceModel.phoenixToday();
+  return (this.state.verified?.opportunities||[]).filter(o=>workspaceModel.isOpenPipeline(o,today)).map(o=>[o.name,o.owner||'—',workspaceModel.stageDisplay(o.stage),o.amount,o.probability==null?null:Math.round(workspaceModel.probabilityFraction(o.probability)*100),workspaceModel.dateOnly(o.close),o.days,o.note]);
 };
 Component.prototype._verifiedLeadRows = function () {
   return (this.state.verified?.leads||[]).map(r=>[r.name,r.source,r.owner||'—',verifiedFormat.date(r.lead),r.note,verifiedFormat.date(r.mql),verifiedFormat.date(r.sql)]);
@@ -76,10 +73,11 @@ Component.prototype.renderVals = function () {
   try{
     const gen=s.records&&s.records.generatedAt?s.records.generatedAt:(d&&d.meta&&d.meta.generatedAt)||'';
     const cdt=gen?new Date(gen):null;
-    v.collectedShort=cdt?cdt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}):'';
-    v.collectedLong=cdt?cdt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'})+', '+cdt.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'UTC'}):'';
-    const nowD=new Date(),mon=new Date(nowD);mon.setDate(nowD.getDate()-((nowD.getDay()+6)%7));
-    v.weekOf='Week of '+mon.toLocaleDateString('en-US',{month:'long',day:'numeric'});
+    v.collectedShort=gen?workspaceModel.formatDate(gen):'';
+    v.collectedLong=gen?workspaceModel.formatDateTime(gen):'';
+    const todayPhx=workspaceModel.phoenixToday();
+    const weekStart=workspaceModel.addDays(todayPhx,-((new Date(todayPhx+'T12:00:00Z').getUTCDay()+6)%7));
+    v.weekOf='Week of '+workspaceModel.formatDate(weekStart);
     v.priorityIntro='The deals and follow-ups most at risk, from the collected record.';
     v.priorityNotice='Drafts stay in this browser until you approve them \u2014 nothing is sent automatically.';
   }catch{}
@@ -88,30 +86,46 @@ Component.prototype.renderVals = function () {
   const invalidMeeting=s.screen==='meeting'&&s.meetingId&&![...s.records.companies.flatMap(c=>c.recordings),...s.records.unmatchedRecordings].some(r=>r.id===s.meetingId);
   if(invalidAccount||invalidMeeting){v.notLoading=false;v.isLoading=false;v.bannerShown=true;v.banner={bg:'var(--color-surface)',fg:'var(--color-text)',btnBg:'transparent',title:'Record unavailable',text:'This record is not in the collected data.',action:'Back to '+(invalidAccount?'accounts':'meetings'),go:this.go(invalidAccount?'accounts':'meetings')};return v;}
   v.priorities=d.presentation.priorities.map((p,i)=>({n:String(i+1),title:p.title,why:p.why,next:p.next,caveat:p.caveat,primary:p.primary.label,primaryGo:this._verifiedTarget(p.primary.target),secondary:p.secondary?.label||'',secondaryGo:p.secondary?this._verifiedTarget(p.secondary.target):()=>{}}));
-  v.upcoming=d.presentation.upcoming.map(item=>({when:new Date(item.date+'T12:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'}),title:item.title,prep:item.prep,go:this._verifiedTarget(item.target)}));
-  const [start,end]=this._verifiedRange(),inRange=date=>!!date&&date>=start&&date<=end;
-  const count=key=>d.leads.filter(r=>inRange(r[key])).length;
-  const period=f.date(start)+' – '+f.date(end)+(s.period==='year'?' (tracker starts in April)':'');
+  v.upcoming=d.presentation.upcoming.map(item=>({when:workspaceModel.formatDate(item.date),title:item.title,prep:item.prep,go:this._verifiedTarget(item.target)}));
+  const [start,end]=this._verifiedRange(),inRange=date=>workspaceModel.inRange(date,start,end);
+  const funnelCounts=workspaceModel.funnel(d.leads,s.records,start,end);
+  const period=f.date(start)+' – '+f.date(end);
   const goLeads=contributor=>this.go('accounts',{accounts:'leads',contributor,search:'',owner:'Everyone'});
-  v.demandMetrics.slice(0,3).forEach((m,i)=>{const key=['lead','mql','sql'][i];m.value=f.number(count(key));m.delta=period;m.note=i===0?f.number(d.leads.filter(r=>r.source==='Webinar'&&inRange(r.lead)).length)+' webinar registrants · Lead Tracker':'By '+key.toUpperCase()+' date';m.go=goLeads(key);});
-  const mtg=d.report.meetings||{},meetingRange=f.date(mtg.start)+' – '+f.date(mtg.end);
-  v.demandMetrics[3].value=f.number(mtg.completed);v.demandMetrics[4].value=f.number(mtg.recorded);
+  const headline=[
+    ['New leads',funnelCounts.leads,'By lead date'],
+    ['Marketing qualified',funnelCounts.mql,'Meetings booked'],
+    ['Sales qualified',funnelCounts.sql,'Meetings held']
+  ];
+  v.demandMetrics.slice(0,3).forEach((m,i)=>{m.value=f.number(headline[i][1]);m.delta=period;m.note=headline[i][2];m.label=headline[i][0];m.go=goLeads(['lead','mql','sql'][i]);});
+  const activity=workspaceModel.activityFromRecords(s.records);
+  const completedMeetings=activity.meetings.filter(m=>inRange(m.start)&&/complete|held|completed/i.test(m.outcome||'')).length;
+  const recordedMeetings=activity.recordings.filter(r=>inRange(r.date)).length;
+  v.demandMetrics[3].value=f.number(completedMeetings);v.demandMetrics[4].value=f.number(recordedMeetings);
   const goPastMeetings=this.go('meetings',{meetings:'past'});
-  for(const m of v.demandMetrics.slice(3)){m.delta=meetingRange;m.note=m.label==='Recordings'?'Fathom · counted separately':'HubSpot completed outcomes';m.go=goPastMeetings;}
+  v.demandMetrics[3].delta=period;v.demandMetrics[3].note='CRM meetings marked held';v.demandMetrics[3].go=goPastMeetings;
+  v.demandMetrics[4].delta=period;v.demandMetrics[4].note='Fathom recordings, counted on their own';v.demandMetrics[4].go=goPastMeetings;
   v.periodRange=period;
   const monthly=s.period==='year'||(Date.parse(end)-Date.parse(start))/86400000>120;
   let at=monthly?start.slice(0,7)+'-01':s.period==='custom'?start:f.add(start,-((new Date(start+'T12:00:00Z').getUTCDay()+6)%7));
   const bars=[];
   while(at<=end){const next=monthly?new Date(Date.UTC(+at.slice(0,4),+at.slice(5,7),1,12)).toISOString().slice(0,10):f.add(at,7);const last=f.add(next,-1);const leads=d.leads.filter(r=>inRange(r.lead)&&r.lead>=at&&r.lead<=last).length;bars.push({date:at,label:monthly?new Date(at+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',timeZone:'UTC'}):f.date(at),leads});at=next;}
   const max=Math.max(1,...bars.map(b=>b.leads));v.weeks=bars.map(b=>({...b,title:(monthly?'':'Week of ')+b.label+': '+b.leads+' new leads',leadH:Math.round(b.leads/max*100)+'%'}));v.barCols=bars.length;v.barsTitle=monthly?'New leads by month':'New leads by week';
-  v.channels=[...new Set(d.leads.map(r=>r.source))].map(channel=>{const rows=d.leads.filter(r=>r.source===channel),n=k=>rows.filter(r=>inRange(r[k])).length;const leads=n('lead'),mql=n('mql'),sql=n('sql');return{channel,leads,mql,sql,rate:leads?Math.round(sql/leads*100)+'%':'—'};}).filter(r=>r.leads||r.mql||r.sql).sort((a,b)=>b.leads-a.leads||a.channel.localeCompare(b.channel));
-  v.quickNumbers[0].value=f.number(d.quick.leads);v.quickNumbers[1].value=f.number(d.quick.mql);v.quickNumbers[2].value=f.number(d.quick.sql);
-  v.quickNumbers[3].value=f.number(mtg.completed);v.quickNumbers[3].delta='CRM through '+f.date(mtg.end)+' · '+f.number(mtg.recorded)+' recordings separately';
-  v.quickNumbers[4].value=d.report.pipeline.weighted.value==null?'—':'$'+(d.report.pipeline.weighted.value/1e6).toFixed(2)+'M';
-  const grouped=new Map();for(const stage of d.report.pipeline.stages){const g=grouped.get(stage.stage)||{stage:stage.stage,count:0,amount:0};g.count+=stage.count;g.amount+=stage.amount;grouped.set(g.stage,g);}
-  const stageOrder=v.stages.map(g=>g.stage),shortStage=stage=>(stage||'').replace(/ \(Deal\)$/,'');
-  const stageMax=Math.max(1,...[...grouped.values()].map(g=>g.amount));v.stages=[...grouped.values()].sort((a,b)=>stageOrder.indexOf(shortStage(a.stage))-stageOrder.indexOf(shortStage(b.stage))).map(g=>({...g,stage:shortStage(g.stage),amount:'$'+f.number(g.amount/1000)+'K',w:Math.round(g.amount/stageMax*100)+'%'}));
-  v.scorecard=d.report.pipeline.scorecard.map(r=>({label:r.label,value:f.number(r.value)}));
+  v.channels=workspaceModel.channels(d.leads,s.records,start,end).map(r=>({...r,rate:r.leads?Math.round(r.sql/r.leads*100)+'%':'—'}));
+  v.quickNumbers[0].value=f.number(funnelCounts.leads);v.quickNumbers[1].value=f.number(funnelCounts.mql);v.quickNumbers[2].value=f.number(funnelCounts.sql);
+  v.quickNumbers[0].delta=period;v.quickNumbers[1].delta=period;v.quickNumbers[2].delta=period;
+  v.quickNumbers[1].label='Marketing qualified';v.quickNumbers[2].label='Sales qualified';
+  v.quickNumbers[3].value=f.number(completedMeetings);v.quickNumbers[3].delta=period+' · '+f.number(recordedMeetings)+' recordings separately';
+  const pipe=workspaceModel.pipelineTotals(d.opportunities,workspaceModel.phoenixToday());
+  const moneyShort=n=>n==null?'—':'$'+f.number(n);
+  v.quickNumbers[4].value=pipe.weighted==null?'—':moneyShort(pipe.weighted);
+  v.quickNumbers[4].delta=moneyShort(pipe.openAmount)+' open · same deals';
+  const stageMax=Math.max(1,...pipe.stages.map(g=>g.amount));
+  v.stages=pipe.stages.map(g=>({stage:g.stage,count:g.count,amount:'$'+f.number(g.amount/1000)+'K',w:Math.round(g.amount/stageMax*100)+'%'}));
+  v.scorecard=[
+    {label:'Open pipeline',value:moneyShort(pipe.openAmount)},
+    {label:'Weighted pipeline',value:moneyShort(pipe.weighted)},
+    {label:'Active deals',value:f.number(pipe.count)}
+  ];
   v.spendMonths=d.report.spend.months.map(m=>({month:new Date(m.month+'-15T12:00:00Z').toLocaleDateString('en-US',{month:'long',timeZone:'UTC'}),budget:f.number(m.planned),actual:f.number(m.actual),diff:m.actual==null||m.partial?'Not comparable':(m.actual>=m.planned?'+':'−')+f.number(Math.abs(m.actual-m.planned)),tag:m.actual==null?'Not entered':m.partial?'Partly entered':'',tagDisplay:m.actual==null||m.partial?'inline-flex':'none'}));
   const spendMax=Math.max(1,...d.report.spend.channels.map(c=>c.amount));v.spendChannels=d.report.spend.channels.map(c=>({name:c.name,amount:f.number(c.amount),w:Math.round(c.amount/spendMax*100)+'%'}));
   v.ads=d.report.spend.campaigns.filter(c=>c.sent||c.replies||c.bounces||c.linkedinSent).map(c=>({name:c.name+' · email',sent:f.number(c.sent),replies:f.number(c.replies),bounces:f.number(c.bounces),note:'Collected '+v.collectedShort+'. LinkedIn separately: '+f.number(c.linkedinSent)+' sent, '+f.number(c.linkedinReplies)+' replies.'}));
@@ -131,12 +145,13 @@ Component.prototype.renderVals = function () {
     {name:'Lemlist',used:'Outbound campaigns',updated:v.collectedShort,color:'var(--color-text)',count:d.report.spend.campaigns.length+' campaigns',gaps:'Send and reply statistics were not available.'}
   ];
   if(s.perf==='web')v.scopeNote='Website: '+webRange+' · www.opstream.ai only. AI: '+f.number(web.aiCount)+' completed monitored answers through '+f.date(web.aiEnd)+'. No period filter applies.';
-  if(s.perf==='spend')v.scopeNote='Spend: Jan – Dec 2026, as entered in the workbook. Campaign counts use the '+v.collectedShort+' collection; advertising dates are shown per source.';
+  else if(s.perf==='spend')v.scopeNote='Spend: Jan – Dec 2026, as entered in the workbook. Campaign counts use the '+v.collectedShort+' collection; advertising dates are shown per source.';
+  else v.scopeNote='The period '+period+' applies to new leads, meetings booked and meetings held. Open pipeline is the current book. All dates are America/Phoenix.';
   const query=(s.search||'').trim().toLowerCase(),owner=s.owner||'Everyone';
-  const selected=d.opportunities.filter(o=>(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage].join(' ').toLowerCase().includes(query)));
+  const selected=d.opportunities.filter(o=>workspaceModel.isOpenPipeline(o,workspaceModel.phoenixToday())&&(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage].join(' ').toLowerCase().includes(query)));
   selected.sort((a,b)=>workspaceModel.compare(a,b,s.sort||'weighted'));
-  v.deals=selected.map(o=>({company:o.name,owner:o.owner||'—',stage:o.stage,arr:o.amount==null?'—':'$'+f.number(o.amount),prob:f.percent(o.probability),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note:o.note,go:()=>{const c=this._verifiedAccount(o.companyId)||this._verifiedAccount(o.name);if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}}));
-  v.dealsCount=selected.length+' of '+d.opportunities.length+' open opportunities';
+  v.deals=selected.map(o=>({company:o.name,owner:o.owner||'—',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note:o.note,go:()=>{const c=this._verifiedAccount(o.companyId)||this._verifiedAccount(o.name);if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}}));
+  v.dealsCount=selected.length+' of '+pipe.count+' open opportunities';
   const leadRows=d.leads.filter(r=>(owner==='Everyone'||r.owner===owner)&&(!query||[r.name,r.source,r.note].join(' ').toLowerCase().includes(query))&&(s.contributor?inRange(r[s.contributor]):!!r.lead)).sort((a,b)=>workspaceModel.compareLeads(a,b));
   v.leads=leadRows.map(r=>({company:r.name,source:r.source,owner:r.owner||'—',date:f.date(r.lead),note:r.note,mql:f.date(r.mql),sql:f.date(r.sql)}));
   v.leadsEmpty=leadRows.length===0;v.dealsEmpty=selected.length===0;

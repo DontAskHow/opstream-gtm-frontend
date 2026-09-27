@@ -18,8 +18,14 @@ Empty sections carry an honest note instead of fabricated items.
 """
 import hashlib
 import json
+import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gtm_metrics import (QUIET_DAYS as SHARED_QUIET_DAYS, commit_versus_target,
+                         days_quiet, is_open_pipeline, last_engagement, phoenix_today,
+                         unworked_count)
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "out" / "data"
@@ -30,7 +36,7 @@ AUTONOMY_FILE = ROOT / "scripts" / "hollie-autonomy.json"
 REVIEW_FILE = DATA / "sheet-review.json"
 OUT_FILE = DATA / "hollie.json"
 
-QUIET_DAYS = 14          # no engagement in 14+ days => deal gone quiet
+QUIET_DAYS = SHARED_QUIET_DAYS  # single threshold shared with the workspace
 RECENT_CALL_DAYS = 90    # only recent Fathom calls seed follow-up drafts
 PREP_WINDOW_DAYS = 7
 RESURFACE_DAYS = 7
@@ -101,7 +107,7 @@ def drawer_key(ref, company_id):
 
 
 def main():
-    today = date.today()
+    today = date.fromisoformat(phoenix_today())
     now_iso = datetime.now(timezone.utc).isoformat()
 
     records = load_json(DATA / "records.json", {})
@@ -169,7 +175,9 @@ def main():
         lc = day(c.get("lastContact"))
         if lc and lc <= today_s and (best is None or lc > best):
             best, best_ref = lc, None
-        co_eng[cid] = {"last": best, "ref": best_ref}
+        # The date itself comes from the shared metric so every surface
+        # (queue, brief, heartbeat, briefing) quotes one quiet-day count.
+        co_eng[cid] = {"last": last_engagement(c, today_s), "ref": best_ref}
 
     co_by_id = {c.get("id"): c for c in companies}
 
@@ -259,6 +267,13 @@ def main():
         dq = days_ago(last, today) if last else None
         for d_ in c.get("deals") or []:
             if d_.get("closed"):
+                continue
+            if not is_open_pipeline({
+                "stage": d_.get("stageLabel") or d_.get("stage"),
+                "dealName": d_.get("name") or "",
+                "close": d_.get("close"),
+                "closed": False,
+            }, today.isoformat()):
                 continue
             open_deals.append((c, d_, last, dq))
     quiet = [(c, d_, last, dq) for (c, d_, last, dq) in open_deals
@@ -574,6 +589,7 @@ def main():
         "evidence": ok_refs(d_.get("refs")),
         "drawerKeys": drawer_keys(ok_refs(d_.get("refs")), c.get("id")),
     } for (c, d_, last, dq) in quiet[:10]],
+        "total": len(quiet),
         "note": None if quiet else "Every open deal has recorded engagement in the last %d days." % QUIET_DAYS}
 
     rec_by_date = []
@@ -600,13 +616,14 @@ def main():
     brief_followups = {"items": owed,
                        "note": None if owed else "No unresolved Fathom action items in the last %d days." % RECENT_CALL_DAYS}
 
+    unworked_total = unworked_count(verified.get("leads") or [], review)
     new_leads = [l for l in (verified.get("leads") or []) if not l.get("mql")]
     new_leads.sort(key=lambda l: l.get("lead") or "", reverse=True)
     lead_items = [{"leadId": l.get("id"), "name": l.get("name"), "source": l.get("source"),
                    "leadDate": l.get("lead"), "owner": l.get("owner"), "note": l.get("note")}
                   for l in new_leads[:8]]
-    brief_leads = {"items": lead_items,
-                   "note": None if lead_items else "No unworked leads found."}
+    brief_leads = {"items": lead_items, "total": unworked_total,
+                   "note": None if unworked_total else "No unworked leads found."}
 
     # ---------- prep briefs (auto, next 7 days) ----------
     prep = []
@@ -747,6 +764,13 @@ def main():
         for d_ in c.get("deals") or []:
             if d_.get("closed"):
                 continue
+            if not is_open_pipeline({
+                "stage": d_.get("stageLabel") or d_.get("stage"),
+                "dealName": d_.get("name") or "",
+                "close": d_.get("close"),
+                "closed": False,
+            }, today.isoformat()):
+                continue
             b = bucket_of(d_.get("stageLabel"))
             if b in bucket_value and d_.get("amount"):
                 bucket_value[b] += d_["amount"]
@@ -764,15 +788,14 @@ def main():
 
     goal_defs = [
         ("commit", "Land the %s commit" % month_name,
-         "%s in commit stages%s" % (
-             usd0(bucket_value["commit"]),
-             (" vs %s forecast" % usd0(targets.get("commit"))) if targets.get("commit") else "")),
+         commit_versus_target(bucket_value["commit"], targets.get("commit")).get("text")
+         or ("%s in commit stages" % usd0(bucket_value["commit"]))),
         ("bestcase", "Turn best case into commit",
          "%s sitting in %s" % (usd0(bucket_value["bestcase"]),
                                 (buckets.get("bestcase") or {}).get("label") or "best-case stages")),
         ("pipeline", "Keep the pipeline fed",
-         "%s early pipeline · %d recent unworked leads on the tracker" % (
-             usd0(bucket_value["pipeline"]), lt.get("recentUnworked") or 0)),
+         "%s early pipeline · %d unworked leads" % (
+             usd0(bucket_value["pipeline"]), unworked_total)),
         ("forecast", "Keep the forecast honest",
          "%d sheet-vs-HubSpot mismatches · %d open deals missing amounts" % (
              n_mismatch, n_no_amount)),
@@ -809,8 +832,8 @@ def main():
                                       "sheet_review", "unworked_lead", "crm_update")},
             "queueByGoal": {g["id"]: sum(1 for it in queue if it.get("goal") == g["id"])
                             for g in goals},
-            "briefCounts": {"meetingsToday": len(soon), "quietDeals": len(brief_quiet["items"]),
-                            "followupsOwed": len(owed), "newLeads": len(lead_items)},
+            "briefCounts": {"meetingsToday": len(soon), "quietDeals": brief_quiet["total"],
+                            "followupsOwed": len(owed), "newLeads": unworked_total},
             "prepBriefs": len(prep),
         },
     }
