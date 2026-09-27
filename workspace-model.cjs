@@ -433,7 +433,7 @@ const workspaceModel = {
         leads:this.formatMetric(b.leads,b.average),
         mql:this.formatMetric(b.mql,b.average),
         sql:this.formatMetric(b.sql,b.average),
-        note:b.average?'Per week across the last 6 weeks. Not the six-week total.':b.key==='week'?'Monday through today, America/Phoenix.':'Calendar quarter through today.',
+        note:b.average?'Per week across the last 6 weeks, through '+this.formatDate(b.end)+'. Not the six-week total.':b.key==='week'?'Monday through '+this.formatDate(b.end)+', America/Phoenix.':'Calendar quarter through '+this.formatDate(b.end)+'.',
         cpl:b.key==='quarter'?'See each source':'not connected',
         cplNote:b.key==='quarter'?'Quarter cost per lead is on the source table. A missing month is not connected, not zero.':'Spend is recorded by month, so a weekly cost per lead is not connected.'
       })),
@@ -515,6 +515,82 @@ const workspaceModel = {
     const important=[],unrated=[],less=[];
     for(const p of priorities){const rating=ratings?.[p.id];(rating==='important'?important:rating==='not-important'?less:unrated).push(p);}
     return {main:[...important,...unrated],less};
+  },
+  asOf(generatedAt) {
+    return this.dateOnly(generatedAt)||this.phoenixToday();
+  },
+  snapshotAge(generatedAt, now=new Date()) {
+    const t=Date.parse(generatedAt);
+    if(!Number.isFinite(t))return null;
+    return (now.getTime()-t)/3600000;
+  },
+  relativeDays(iso, today) {
+    today=today||this.phoenixToday();
+    const d=this.dateOnly(iso);
+    if(!d)return null;
+    const [y,m,day]=d.split('-').map(Number);
+    const [Y,M,D]=today.split('-').map(Number);
+    return Math.round((Date.UTC(Y,M-1,D)-Date.UTC(y,m-1,day))/86400000);
+  },
+  relativeLabel(iso, today) {
+    const n=this.relativeDays(iso, today);
+    if(n==null)return '';
+    if(n===0)return 'today';
+    if(n===1)return 'yesterday';
+    if(n>1)return n+' days ago';
+    if(n===-1)return 'tomorrow';
+    return 'in '+(-n)+' days';
+  },
+  sheetOverrides(review) {
+    const out=new Map();
+    const slot=id=>{const k=String(id||'').replace(/^deal-/,''); if(!k)return null; if(!out.has(k))out.set(k,{}); return out.get(k);};
+    const money=v=>{const n=Number(String(v??'').replace(/[^0-9.\-]/g,'')); return Number.isFinite(n)&&String(v??'').replace(/[^0-9.\-]/g,'')!==''?n:null;};
+    for(const row of (review&&review.mismatches)||[]){
+      const s=slot(row.dealId); if(!s)continue;
+      const field=String(row.field||'').toLowerCase();
+      if(field==='amount'){const n=money(row.sheet); if(n!=null){s.amount=n; s.hubspotAmount=money(row.hubspot);}}
+      else if(field.includes('close')){s.close=this.dateOnly(row.sheet)||row.sheet; s.hubspotClose=row.hubspot;}
+      else if(field==='stage'){s.stage=String(row.sheet||'').split(' (')[0].trim(); s.hubspotStage=row.hubspot;}
+    }
+    for(const deal of (review&&review.deals)||[]){
+      const s=slot(deal.id); if(!s)continue;
+      if(deal.amount!=null)s.amount=Number(deal.amount);
+      if(deal.close)s.close=this.dateOnly(deal.close)||deal.close;
+      if(deal.stage)s.stage=String(deal.stage).split(' (')[0].trim();
+      if(deal.owner)s.owner=String(deal.owner);
+    }
+    return out;
+  },
+  applySheetDeal(deal, overrides) {
+    if(!deal||!overrides)return deal;
+    const id=String(deal.id||'').replace(/^deal-/,'');
+    const ov=overrides.get?overrides.get(id):overrides[id];
+    if(!ov)return deal;
+    const next={...deal}; const diffs=[];
+    if(ov.amount!=null&&next.amount!==ov.amount){next.hubspotAmount=next.amount; next.amount=ov.amount; diffs.push('amount');}
+    const sheetClose=ov.close?this.dateOnly(ov.close)||ov.close:null;
+    if(sheetClose&&this.dateOnly(next.close)!==sheetClose){next.hubspotClose=next.close; next.close=sheetClose; diffs.push('close');}
+    if(ov.stage){
+      const current=String(next.stageLabel||next.stage||'');
+      if(!current.toLowerCase().includes(String(ov.stage).toLowerCase())){
+        next.hubspotStage=current||ov.hubspotStage; next.stage=ov.stage; next.stageLabel=ov.stage; diffs.push('stage');
+      }
+    }
+    if(ov.owner&&/^owner\s+\d+/i.test(String(next.owner||''))){next.owner=ov.owner; diffs.push('owner');}
+    if(diffs.length)next.hubspotDiffers=diffs;
+    return next;
+  },
+  isJunkName(value) {
+    const low=String(value||'').toLowerCase();
+    return low.includes('mozilla firefox')||low.includes('system verification test');
+  },
+  accountName(companyName, dealName) {
+    const name=this.companyName(companyName);
+    const deal=this.companyName(dealName);
+    if(this.isJunkName(name)||this.isJunkName(deal))return null;
+    if(/^(renewal|current agreement)$/i.test(name||''))return null;
+    if(/\bkidde\b/i.test(deal||'')&&/\bcarrier\b/i.test(name||''))return 'Kidde Global Solutions';
+    return name||null;
   },
   modeInstructions(mode) {
     return mode==='marketing'

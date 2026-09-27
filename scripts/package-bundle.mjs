@@ -17,6 +17,7 @@ export const BUNDLE_REQUIRED = [
   'scripts/agent-server.mjs',
   'scripts/workspace-facts.mjs',
   'out/index.html',
+  'refresh-config.json',
 ];
 
 const SKIP_DIR = new Set(['__pycache__', 'node_modules']);
@@ -39,7 +40,7 @@ function copyFiltered(src, dest) {
 export function stageBundle(dest) {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dest, { recursive: true });
-  for (const name of ['Procfile', 'package.json', 'package-lock.json', 'workspace-model.cjs']) {
+  for (const name of ['Procfile', 'package.json', 'package-lock.json', 'workspace-model.cjs', 'refresh-config.json']) {
     fs.copyFileSync(path.join(root, name), path.join(dest, name));
   }
   copyFiltered(path.join(root, 'scripts'), path.join(dest, 'scripts'));
@@ -59,7 +60,7 @@ export function writeZip(zipPath) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const zipPath = path.resolve(process.argv[2] || '/opt/cursor/artifacts/opstream-gtm-v8.3.zip');
+  const zipPath = path.resolve(process.argv[2] || '/opt/cursor/artifacts/opstream-gtm-v9.zip');
   writeZip(zipPath);
   const listed = execFileSync('unzip', ['-l', zipPath], { encoding: 'utf8' });
   for (const rel of BUNDLE_REQUIRED) {

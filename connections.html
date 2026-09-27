@@ -7,5 +7,4 @@
   <div class="connection-row"><div><strong>Slack mention DMs</strong><p>{{ slackConnectionLabel }}</p></div><sc-if value="{{ canManageSlack }}"><button class="btn btn-secondary" onClick="{{ connectSlack }}" disabled="{{ slackConnectionDisabled }}">{{ slackConnectLabel }}</button></sc-if></div>
   <sc-if value="{{ canTestSlack }}"><div class="connection-row"><div><strong>Check Slack delivery</strong><p>Send one clearly labeled test to the person who connected Slack.</p><sc-if value="{{ slackTestReceipt }}"><p role="status">{{ slackTestReceipt }}</p></sc-if></div><button class="btn btn-secondary" onClick="{{ testSlack }}" disabled="{{ slackTestDisabled }}">{{ slackTestLabel }}</button></div></sc-if>
   <sc-if value="{{ connectionError }}"><p class="form-error" role="alert">{{ connectionError }}</p></sc-if>
-  <form action="/auth/logout" method="post"><button class="text-control" type="submit">Sign out</button></form>
 </section></sc-if>

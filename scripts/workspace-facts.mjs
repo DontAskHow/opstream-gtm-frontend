@@ -115,7 +115,9 @@ function readJson(file) {
 export function loadWorkspace(dataDir) {
   const verified = readJson(path.join(dataDir, 'verified.json'));
   const records = readJson(path.join(dataDir, 'records.json'));
-  return computeFacts(verified, records);
+  let sheetReview = null;
+  try { sheetReview = readJson(path.join(dataDir, 'sheet-review.json')); } catch { sheetReview = null; }
+  return computeFacts(verified, records, null, sheetReview);
 }
 
 // One index for the whole extract. companyForOpportunity scans every company
@@ -148,9 +150,10 @@ function companyForIndexed(opportunity, index) {
   return index.byId.get(id) || holders[0] || index.byName.get(opportunity.name) || null;
 }
 
-export function computeFacts(verified, records, today) {
-  today = today || model.phoenixToday();
-  const annotated = model.annotateOpportunities(verified?.opportunities || [], records);
+export function computeFacts(verified, records, today, sheetReview) {
+  today = today || model.asOf(records?.generatedAt);
+  const overrides = model.sheetOverrides(sheetReview);
+  const annotated = model.annotateOpportunities(verified?.opportunities || [], records).map(o => model.applySheetDeal(o, overrides));
   const pipe = model.pipelineTotals(annotated, today);
   const bounds = model.periodBounds('quarter', null, null, today);
   const funnel = model.funnel(verified?.leads || [], records, bounds.start, bounds.end);
@@ -241,6 +244,14 @@ export function computeFacts(verified, records, today) {
   }
   lines.push('OPEN PIPELINE: ' + metrics.openCount + ' deals, ' + metrics.openAmountLabel + ' open, ' + (metrics.weightedLabel || 'weighted n/a') + ' weighted.');
   lines.push('QUARTER ' + bounds.start + ' – ' + bounds.end + ': ' + funnel.leads + ' leads / ' + funnel.mql + ' MQL / ' + funnel.sql + ' SQL.');
+  const marketing = model.marketingView(verified?.leads || [], records, verified?.report?.spend, today);
+  lines.push('MARKETING BRIEF (America/Phoenix ' + today + '). Repeat these figures. Do not invent another weekly count.');
+  for (const interval of marketing.intervals || []) {
+    lines.push('- ' + interval.label + ': ' + interval.leads + ' leads, MQL ' + interval.mql + ', SQL ' + interval.sql + '. ' + interval.note);
+  }
+  for (const source of marketing.sources || []) {
+    lines.push('- SOURCE ' + source.channel + ': this week ' + source.week + ', 6-week average ' + source.six + ', quarter ' + source.quarter + ', cost per lead ' + source.cpl + '.');
+  }
   const byAmount = (a, b) => (b.amount || 0) - (a.amount || 0) || String(a.company).localeCompare(String(b.company));
   const describe = d => d.tag + ': ' + d.company + ' — ' + (d.dealName || d.company) + ', ' + d.amountLabel + ', stage ' + d.stage + ', owner ' + d.owner + ', close ' + (d.close || 'not entered') + ', quiet days ' + (d.daysQuiet == null ? 'n/a' : d.daysQuiet) + '.';
   for (const d of deals.filter(d => d.inOpenBook).sort(byAmount)) lines.push(describe(d));

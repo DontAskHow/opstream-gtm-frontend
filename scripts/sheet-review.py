@@ -23,12 +23,13 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "out" / "data" / "sheet-review.json"
-DB = os.path.expanduser("~/workspace/brain/brain.db")
+OUT = Path(os.environ.get("OUT_DATA") or (ROOT / "out" / "data")) / "sheet-review.json"
+DB = os.environ.get("BRAIN_DB") or os.path.expanduser("~/workspace/brain/brain.db")
 SHEET = "pipeline_meeting1_v2"
 
 MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -169,6 +170,9 @@ CLOSED_WORDS = ("closed", "lost", "won")
 
 
 def main():
+    if not os.path.isfile(DB):
+        print("brain.db is missing at %s. Refusing to write synthetic data." % DB, file=sys.stderr)
+        return 1
     now = datetime.now(timezone.utc).isoformat()
     con = sqlite3.connect(DB)
     cur = con.cursor()
@@ -233,12 +237,18 @@ def main():
         sb = bucket_of_stage(sd["stage"], buckets)
         hb = bucket_of_prob(hd["probability"])
         if sb and hb and sb != hb:
+            raw_stage = str(hd.get("stage") or "").strip()
+            if raw_stage and not raw_stage.isdigit() and "probability" not in raw_stage.lower():
+                hub_label = raw_stage
+            elif raw_stage:
+                hub_label = "HubSpot stage id %s" % raw_stage
+            else:
+                hub_label = "not available"
             mismatches.append({
                 "dealId": did, "name": sd["name"] or hd["name"],
                 "company": sd["company"], "field": "stage",
-                "sheet": "%s (%s)" % (sd["stage"], buckets[sb]["label"]),
-                "hubspot": "probability %s%% (%s)" % (
-                    int(hd["probability"]), buckets[hb]["label"]),
+                "sheet": sd["stage"],
+                "hubspot": hub_label,
                 "sheetBucket": sb, "hubspotBucket": hb,
             })
         if sd["amount"] is not None and hd["amount"] is not None:
@@ -265,9 +275,13 @@ def main():
                     "sheet": sd["close"], "hubspot": hd["close"],
                 })
 
+    deals_out = [dict(sd, id=did) for did, sd in sheet_deals.items()
+                 if not any(w in sd["stage"].lower() for w in CLOSED_WORDS)]
+
     # ---------- Lead Tracker ----------
     lt_total = lt_unworked = lt_mql_no_sql = lt_recent_unworked = 0
     lt_recent_mql = []
+    leads_out = []
     cutoff = "2026-07-27"  # ~60 days before the Sep 25 run; recomputed below
     try:
         from datetime import date as _date, timedelta as _td
@@ -285,6 +299,17 @@ def main():
         lead_d = parse_mdy(row[3])
         mql = parse_mdy(row[4])
         sql = parse_mdy(row[5])
+        leads_out.append({
+            "company": str(row[0]).strip(),
+            "name": str(row[0]).strip(),
+            "source": str(row[1]).strip() if len(row) > 1 else "",
+            "owner": str(row[2]).strip() if len(row) > 2 else "",
+            "lead": lead_d,
+            "leadDate": lead_d,
+            "mql": mql,
+            "sql": sql,
+            "note": str(row[6]).strip() if len(row) > 6 and row[6] else "",
+        })
         if not mql:
             lt_unworked += 1
             if lead_d and lead_d >= cutoff:
@@ -308,6 +333,8 @@ def main():
         },
         "mismatches": mismatches,
         "sheetOnly": sheet_only,
+        "deals": deals_out,
+        "leads": leads_out,
         "leadTracker": {
             "total": lt_total,
             "unworked": lt_unworked,
@@ -332,4 +359,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

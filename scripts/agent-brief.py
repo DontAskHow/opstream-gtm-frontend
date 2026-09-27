@@ -21,10 +21,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gtm_metrics import greeting, snapshot_metrics
+from gtm_metrics import date_only, greeting, snapshot_metrics
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(REPO, "out", "data")
+DATA = os.environ.get("OUT_DATA") or os.path.join(REPO, "out", "data")
 HOLLIE_JSON = os.path.join(DATA, "hollie.json")
 BRIEF_JSON = os.path.join(DATA, "agent-brief.json")
 CHAT_CLI = os.path.expanduser("~/workspace/skills/openai/bin/chat.py")
@@ -44,6 +44,10 @@ def load_json(path):
 
 
 def call_openai(payload):
+    key = os.environ.get("OPENAI_API_KEY") or ""
+    if key and not os.path.exists(CHAT_CLI):
+        from openai_direct import chat_completion
+        return chat_completion(payload, key)
     # NOTE: do not use subprocess.run(input=...) here — in this environment
     # writing to stdin explicitly is the reliable pattern (see agent-server.mjs).
     proc = subprocess.Popen(
@@ -59,6 +63,9 @@ def call_openai(payload):
 
 
 def main():
+    if os.environ.get("GTM_FACTS_ONLY") == "1":
+        log("facts brief already written for this run")
+        return 0
     hop = load_json(HOLLIE_JSON)
     if not hop or not isinstance(hop.get("queue"), list):
         log("hollie.json missing or has no queue — skipping (fail-soft).")
@@ -102,7 +109,9 @@ def main():
 
     verified = load_json(os.path.join(DATA, "verified.json"))
     records = load_json(os.path.join(DATA, "records.json"))
-    book = snapshot_metrics(verified, records) if verified and records else None
+    review = load_json(os.path.join(DATA, "sheet-review.json"))
+    today = date_only((records or {}).get("generatedAt")) if records else None
+    book = snapshot_metrics(verified, records, today=today, sheet_review=review) if verified and records else None
     open_book = None
     if book:
         open_book = {
@@ -197,6 +206,7 @@ def main():
 
     out = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "runId": hop.get("runId"),
         "model": MODEL,
         "greeting": str(parsed.get("greeting") or "")[:300],
         "paragraphs": strlist(parsed.get("paragraphs"), 5),
@@ -213,6 +223,12 @@ def main():
     if not out["paragraphs"] and not out["whatsNew"]:
         log("Model returned an empty brief — keeping previous file.")
         return 0
+    if book and book.get("openAmount") is not None:
+        label = "$%s" % f"{round(book['openAmount']):,}"
+        blob = " ".join(out["paragraphs"] + [out["greeting"]])
+        if label not in blob:
+            log("model did not repeat the open-book amount %s — keeping the facts brief" % label)
+            return 0
 
     tmp = BRIEF_JSON + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

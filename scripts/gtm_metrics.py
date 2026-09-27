@@ -473,12 +473,18 @@ def _list_status_excluded(deal, today):
     return not is_open_pipeline(probe, today)
 
 
-def snapshot_metrics(verified, records, today=None):
-    """Headline numbers the page computes. Jobs repeat this object; they do not recompute it."""
-    today = today or phoenix_today()
+def snapshot_metrics(verified, records, today=None, sheet_review=None):
+    """Headline numbers the page computes. Jobs repeat this object; they do not recompute it.
+
+    `today` defaults to the Phoenix date of the collection, not the viewer's clock.
+    Sheet amount and close date replace HubSpot when sheet_review records a difference.
+    """
     verified = verified or {}
     records = records or {}
+    today = today or date_only((records or {}).get("generatedAt")) or phoenix_today()
     annotated = annotate_opportunities(verified.get("opportunities") or [], records)
+    overrides = sheet_overrides(sheet_review)
+    annotated = [apply_sheet_deal(o, overrides) for o in annotated]
     pipe = pipeline_totals(annotated, today)
     start, end = quarter_bounds(today)
     counts = funnel(verified.get("leads") or [], records, start, end)
@@ -510,7 +516,7 @@ def snapshot_metrics(verified, records, today=None):
         deals.append({
             "id": opp.get("id"),
             "name": opp.get("name"),
-            "companyName": company_name((company or {}).get("name") or opp.get("name")),
+            "companyName": account_name((company or {}).get("name"), opp.get("dealName") or opp.get("name")) or company_name((company or {}).get("name") or opp.get("name")),
             "dealName": opp.get("dealName") or "",
             "amount": opp.get("amount"),
             "stage": stage_display(opp.get("stage")),
@@ -556,3 +562,188 @@ def snapshot_metrics(verified, records, today=None):
         "openDeals": open_deals,
         "deals": deals,
     }
+
+
+def parse_money(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    raw = re.sub(r"[^0-9.\-]", "", str(value))
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def sheet_overrides(review):
+    """Sheet amount, close date, stage, and owner win where the review recorded them."""
+    out = {}
+    for deal in (review or {}).get("deals") or []:
+        did = str(deal.get("id") or "").replace("deal-", "")
+        if not did:
+            continue
+        slot = out.setdefault(did, {})
+        if deal.get("amount") is not None:
+            slot["amount"] = float(deal["amount"])
+        if deal.get("close"):
+            slot["close"] = date_only(deal.get("close"))
+        if deal.get("stage"):
+            slot["stage"] = str(deal["stage"]).split(" (")[0].strip()
+        if deal.get("owner"):
+            slot["owner"] = str(deal["owner"]).strip()
+    for row in (review or {}).get("mismatches") or []:
+        did = str(row.get("dealId") or "").replace("deal-", "")
+        if not did:
+            continue
+        slot = out.setdefault(did, {})
+        field = str(row.get("field") or "").lower()
+        if field == "amount":
+            amount = parse_money(row.get("sheet"))
+            if amount is not None:
+                slot["amount"] = amount
+                slot["hubspotAmount"] = parse_money(row.get("hubspot"))
+        elif "close" in field:
+            slot["close"] = date_only(row.get("sheet")) or row.get("sheet")
+            slot["hubspotClose"] = row.get("hubspot")
+        elif field == "stage":
+            sheet = str(row.get("sheet") or "")
+            slot["stage"] = sheet.split(" (")[0].strip()
+            slot["hubspotStage"] = row.get("hubspot")
+    return out
+
+
+def apply_sheet_deal(deal, overrides):
+    if not deal:
+        return deal
+    did = str(deal.get("id") or "").replace("deal-", "")
+    ov = (overrides or {}).get(did)
+    if not ov:
+        return deal
+    nxt = dict(deal)
+    diffs = []
+    if ov.get("amount") is not None and nxt.get("amount") != ov["amount"]:
+        nxt["hubspotAmount"] = nxt.get("amount")
+        nxt["amount"] = ov["amount"]
+        diffs.append("amount")
+    sheet_close = date_only(ov.get("close")) if ov.get("close") else None
+    if sheet_close and date_only(nxt.get("close")) != sheet_close:
+        nxt["hubspotClose"] = nxt.get("close")
+        nxt["close"] = sheet_close
+        diffs.append("close")
+    if ov.get("stage"):
+        current = str(nxt.get("stageLabel") or nxt.get("stage") or "")
+        if ov["stage"].lower() not in current.lower():
+            nxt["hubspotStage"] = current or ov.get("hubspotStage")
+            nxt["stage"] = ov["stage"]
+            nxt["stageLabel"] = ov["stage"]
+            diffs.append("stage")
+    owner = str(nxt.get("owner") or "")
+    if ov.get("owner") and re.match(r"owner\s+\d+", owner, flags=re.I):
+        nxt["owner"] = ov["owner"]
+        diffs.append("owner")
+    if diffs:
+        nxt["hubspotDiffers"] = diffs
+    return nxt
+
+
+def is_commit_stage(label):
+    lab = str(label or "").lower()
+    return "decision" in lab or "legal" in lab
+
+
+def commit_for_close_month(deals, month, today):
+    """Commit-stage deals whose close date is in `month` and has not passed."""
+    rows = []
+    for deal in deals or []:
+        stage = deal.get("stageLabel") or deal.get("stage") or ""
+        if not is_commit_stage(stage):
+            continue
+        shaped = {
+            "stage": stage,
+            "dealName": deal.get("dealName") or deal.get("name") or "",
+            "close": deal.get("close"),
+            "closed": deal.get("closed") is True,
+            "name": deal.get("companyName") or deal.get("name") or "",
+        }
+        if not is_open_pipeline(shaped, today):
+            continue
+        close = date_only(deal.get("close"))
+        if not close or close[:7] != month:
+            continue
+        rows.append(deal)
+    amount = sum(float(d.get("amount") or 0) for d in rows)
+    return {"month": month, "amount": amount, "count": len(rows), "deals": rows}
+
+
+def snapshot_age_hours(generated_at, now=None):
+    if not generated_at:
+        return None
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    raw = str(generated_at).strip()
+    try:
+        if raw.endswith("Z"):
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        else:
+            dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    return (now - dt).total_seconds() / 3600.0
+
+
+def is_junk_name(value):
+    low = str(value or "").lower()
+    return "mozilla firefox" in low or "system verification test" in low
+
+
+def account_name(company_name_value, deal_name=None):
+    name = company_name(company_name_value)
+    deal = company_name(deal_name)
+    if is_junk_name(name) or is_junk_name(deal):
+        return None
+    if re.fullmatch(r"renewal|current agreement", name or "", flags=re.I):
+        return None
+    if re.search(r"\bkidde\b", deal or "", flags=re.I) and re.search(r"\bcarrier\b", name or "", flags=re.I):
+        return "Kidde Global Solutions"
+    return name or None
+
+
+def person_name(raw):
+    s = str(raw or "").strip()
+    if not s:
+        return "", ""
+    if "@" in s and " " not in s:
+        local = s.split("@")[0]
+        parts = [p for p in re.split(r"[._]+", local) if p]
+        full = " ".join(p.capitalize() for p in parts)
+        return (parts[0].capitalize() if parts else "", full)
+    if "," in s:
+        last, first = [p.strip() for p in s.split(",", 1)]
+        first_tok = first.split()[0] if first else ""
+        return first_tok, (first + " " + last).strip()
+    parts = s.split()
+    return (parts[0].strip(",.;:") if parts else "", s)
+
+
+def customer_facing_action(text):
+    low = str(text or "").lower()
+    if not low.strip():
+        return False
+    blocked = ("building maintenance", "pest control", "office cleanliness",
+               "report intake", "validation bug", "to engineers", "internal only")
+    return not any(b in low for b in blocked)
+
+
+def is_internal_meeting(company_name_value, title, invitees):
+    if re.search(r"\bopstream\b", str(company_name_value or ""), flags=re.I):
+        return True
+    if re.search(r"\bopstream\b", str(title or ""), flags=re.I):
+        return True
+    emails = [str((i or {}).get("email") or "").lower() for i in (invitees or []) if (i or {}).get("email")]
+    return bool(emails) and all(e.endswith("@opstream.ai") for e in emails)

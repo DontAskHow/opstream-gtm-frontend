@@ -31,7 +31,8 @@ Component.prototype._loadVerified = async function () {
   } catch {this.setState({checking:false,verifiedError:'The collected data could not be loaded. Reload the page to try again.'});}
 };
 Component.prototype._verifiedRange = function () {
-  const s=this.state,b=workspaceModel.periodBounds(s.period,s.start,s.end);
+  const s=this.state,asOf=workspaceModel.asOf(s.records&&s.records.generatedAt);
+  const b=workspaceModel.periodBounds(s.period,s.start,s.end,asOf);
   return [b.start,b.end];
 };
 Component.prototype._verifiedAccount = function (idOrName) {
@@ -43,12 +44,27 @@ Component.prototype._verifiedAccount = function (idOrName) {
   return data.companies.find(c=>c.id===linked||(c.related||[]).some(r=>r.id===id||r.id===linked))||null;
 };
 Component.prototype._verifiedOpportunityRows = function () {
-  const today=workspaceModel.phoenixToday();
-  const opportunities=workspaceModel.annotateOpportunities(this.state.verified?.opportunities,this.state.records);
-  return opportunities.filter(o=>workspaceModel.isOpenPipeline(o,today)).map(o=>[o.name,o.owner||'—',workspaceModel.stageDisplay(o.stage),o.amount,o.probability==null?null:Math.round(workspaceModel.probabilityFraction(o.probability)*100),workspaceModel.dateOnly(o.close),o.days,o.note]);
+  const today=workspaceModel.asOf(this.state.records&&this.state.records.generatedAt);
+  const overrides=workspaceModel.sheetOverrides(this.state.sheetReview);
+  const opportunities=workspaceModel.annotateOpportunities(this.state.verified?.opportunities,this.state.records).map(o=>workspaceModel.applySheetDeal(o,overrides));
+  return opportunities.filter(o=>workspaceModel.isOpenPipeline(o,today)&&!workspaceModel.isJunkName(o.name)&&!workspaceModel.isJunkName(o.dealName)).map(o=>{
+    const company=workspaceModel.companyForOpportunity(o,this.state.records);
+    const name=workspaceModel.accountName(company&&company.name,o.dealName||o.name)||workspaceModel.companyName(company&&company.name)||workspaceModel.companyName(o.name);
+    if(!name||/^(renewal|current agreement)$/i.test(name))return null;
+    return [name,o.owner||'—',workspaceModel.stageDisplay(o.stage),o.amount,o.probability==null?null:Math.round(workspaceModel.probabilityFraction(o.probability)*100),workspaceModel.dateOnly(o.close),o.days,o.note||''];
+  }).filter(Boolean);
 };
 Component.prototype._verifiedLeadRows = function () {
-  return (this.state.verified?.leads||[]).map(r=>[r.name,r.source,r.owner||'—',verifiedFormat.date(r.lead),r.note,verifiedFormat.date(r.mql),verifiedFormat.date(r.sql)]);
+  const sheet=(this.state.sheetReview&&this.state.sheetReview.leads)||[];
+  const rows=sheet.length?sheet.map(r=>[r.company||r.name,r.source||'—',r.owner||'—',verifiedFormat.date(r.lead||r.leadDate),r.note||'',verifiedFormat.date(r.mql),verifiedFormat.date(r.sql)])
+    :(this.state.verified?.leads||[]).filter(r=>{
+      const note=String(r.note||'').toLowerCase();
+      const name=String(r.name||'');
+      if(note==='subscriber'||note.includes('newsletter'))return false;
+      if(name.includes('@'))return false;
+      return true;
+    }).map(r=>[r.name,r.source,r.owner||'—',verifiedFormat.date(r.lead),r.note,verifiedFormat.date(r.mql),verifiedFormat.date(r.sql)]);
+  return rows;
 };
 Component.prototype.loadTranscript = async function (id) {
   if(!id||this.state.transcripts?.[id]!==undefined)return;
@@ -76,8 +92,13 @@ Component.prototype.renderVals = function () {
     const cdt=gen?new Date(gen):null;
     v.collectedShort=gen?workspaceModel.formatDateTime(gen):'';
     v.collectedLong=v.collectedShort;
-    const todayPhx=workspaceModel.phoenixToday();
+    const todayPhx=workspaceModel.asOf(s.records&&s.records.generatedAt);
     const weekStart=workspaceModel.addDays(todayPhx,-((new Date(todayPhx+'T12:00:00Z').getUTCDay()+6)%7));
+    const ageH=workspaceModel.snapshotAge(gen);
+    v.snapshotAgeHours=ageH==null?null:Math.round(ageH*10)/10;
+    v.dataAgeDays=ageH==null?null:Math.floor(ageH/24);
+    v.dataStale=ageH!=null&&ageH>24;
+    v.dataAgeLabel=ageH==null?'':(v.dataAgeDays>=1?('Data is '+v.dataAgeDays+' day'+(v.dataAgeDays===1?'':'s')+' old'):('Collected '+Math.max(0,Math.round(ageH))+' hours ago'));
     v.weekOf='Week of '+workspaceModel.formatDate(weekStart);
     v.priorityIntro='The deals and follow-ups most at risk, from the collected record.';
     v.priorityNotice='Drafts stay in this browser until you approve them \u2014 nothing is sent automatically.';
@@ -95,7 +116,7 @@ Component.prototype.renderVals = function () {
   const headline=[
     ['New leads',funnelCounts.leads,'By lead date'],
     ['Marketing qualified',funnelCounts.mql,'Meetings booked'],
-    ['Sales qualified',funnelCounts.sql,'Meetings held']
+    ['Sales qualified',funnelCounts.sql,'Meetings held (recording or CRM marked held)']
   ];
   v.demandMetrics.slice(0,3).forEach((m,i)=>{m.value=f.number(headline[i][1]);m.delta=period;m.note=headline[i][2];m.label=headline[i][0];m.go=goLeads(['lead','mql','sql'][i]);});
   const activity=workspaceModel.activityFromRecords(s.records);
@@ -103,7 +124,7 @@ Component.prototype.renderVals = function () {
   const recordedMeetings=activity.recordings.filter(r=>inRange(r.date)).length;
   v.demandMetrics[3].value=f.number(completedMeetings);v.demandMetrics[4].value=f.number(recordedMeetings);
   const goPastMeetings=this.go('meetings',{meetings:'past'});
-  v.demandMetrics[3].delta=period;v.demandMetrics[3].note='CRM meetings marked held';v.demandMetrics[3].go=goPastMeetings;
+  v.demandMetrics[3].delta=period;v.demandMetrics[3].note='CRM meetings marked completed. Not the same as sales qualified, which also counts a recording.';v.demandMetrics[3].label='Meetings completed';v.demandMetrics[3].go=goPastMeetings;
   v.demandMetrics[4].delta=period;v.demandMetrics[4].note='Fathom recordings, counted on their own';v.demandMetrics[4].go=goPastMeetings;
   v.periodRange=period;
   const monthly=s.period==='year'||(Date.parse(end)-Date.parse(start))/86400000>120;
@@ -120,17 +141,20 @@ Component.prototype.renderVals = function () {
   v.channelFoot=v.showChannelLinkNote
     ?'Same definitions as the cards: leads by lead date, MQL by meetings booked, SQL by meetings held. These rows are not a conversion funnel.'
     :'Same definitions as the cards: leads by lead date, MQL by meetings booked, SQL by meetings held. A meeting with no lead source is listed as Unattributed so the columns add up to the cards.';
-  const marketing=workspaceModel.marketingView(d.leads,s.records,d.report&&d.report.spend,workspaceModel.phoenixToday());
+  const asOf=workspaceModel.asOf(s.records&&s.records.generatedAt);
+  const marketing=workspaceModel.marketingView(d.leads,s.records,d.report&&d.report.spend,asOf);
   v.marketingIntervals=marketing.intervals;
   v.marketingSources=marketing.sources;
   v.marketingEmpty=marketing.sources.length===0;
+  v.marketingEmptyNote=v.marketingEmpty?'No leads in this week, the last six weeks, or the quarter.':'';
   if(s.period==='six'){for(const m of v.demandMetrics.slice(0,3))m.note=(m.note?m.note+' · ':'')+'Six-week total. The weekly average is in the marketing table.';}
   v.quickNumbers[0].value=f.number(funnelCounts.leads);v.quickNumbers[1].value=f.number(funnelCounts.mql);v.quickNumbers[2].value=f.number(funnelCounts.sql);
   v.quickNumbers[0].delta=period;v.quickNumbers[1].delta=period;v.quickNumbers[2].delta=period;
   v.quickNumbers[1].label='Marketing qualified';v.quickNumbers[2].label='Sales qualified';
   v.quickNumbers[3].value=f.number(completedMeetings);v.quickNumbers[3].delta=period+' · '+f.number(recordedMeetings)+' recordings separately';
-  const opportunities=workspaceModel.annotateOpportunities(d.opportunities,s.records);
-  const pipe=workspaceModel.pipelineTotals(opportunities,workspaceModel.phoenixToday());
+  const overrides=workspaceModel.sheetOverrides(s.sheetReview);
+  const opportunities=workspaceModel.annotateOpportunities(d.opportunities,s.records).map(o=>workspaceModel.applySheetDeal(o,overrides));
+  const pipe=workspaceModel.pipelineTotals(opportunities,asOf);
   const moneyShort=n=>n==null?'—':'$'+f.number(n);
   v.quickNumbers[4].value=pipe.weighted==null?'—':moneyShort(pipe.weighted);
   v.quickNumbers[4].delta=moneyShort(pipe.openAmount)+' open · same deals';
@@ -141,26 +165,44 @@ Component.prototype.renderVals = function () {
     {label:'Weighted pipeline',value:moneyShort(pipe.weighted)},
     {label:'Active deals',value:f.number(pipe.count)}
   ];
-  v.spendMonths=d.report.spend.months.map(m=>({month:new Date(m.month+'-15T12:00:00Z').toLocaleDateString('en-US',{month:'long',timeZone:'UTC'}),budget:f.number(m.planned),actual:f.number(m.actual),diff:m.actual==null||m.partial?'Not comparable':(m.actual>=m.planned?'+':'−')+f.number(Math.abs(m.actual-m.planned)),tag:m.actual==null?'Not entered':m.partial?'Partly entered':'',tagDisplay:m.actual==null||m.partial?'inline-flex':'none'}));
-  const spendMax=Math.max(1,...d.report.spend.channels.map(c=>c.amount));v.spendChannels=d.report.spend.channels.map(c=>({name:c.name,amount:f.number(c.amount),w:Math.round(c.amount/spendMax*100)+'%'}));
+  const moneyCell=n=>n==null?'—':'$'+f.number(n);
+  v.spendMonths=(d.report.spend.months||[]).map(m=>({month:new Date(m.month+'-15T12:00:00Z').toLocaleDateString('en-US',{month:'long',timeZone:'UTC'}),budget:moneyCell(m.planned),actual:moneyCell(m.actual),diff:m.actual==null||m.partial?'Not comparable':(m.actual>=m.planned?'+':'−')+moneyCell(Math.abs(m.actual-m.planned)),tag:m.actual==null?'Not entered':m.partial?'Partly entered':'',tagDisplay:m.actual==null||m.partial?'inline-flex':'none'}));
+  const spendMax=Math.max(1,...d.report.spend.channels.map(c=>c.amount));v.spendChannels=d.report.spend.channels.map(c=>({name:c.name,amount:moneyCell(c.amount),w:Math.round(c.amount/spendMax*100)+'%'}));
   v.ads=d.report.spend.campaigns.filter(c=>c.sent||c.replies||c.bounces||c.linkedinSent).map(c=>({name:c.name+' · email',sent:f.number(c.sent),replies:f.number(c.replies),bounces:f.number(c.bounces),note:'Collected '+v.collectedShort+'. LinkedIn separately: '+f.number(c.linkedinSent)+' sent, '+f.number(c.linkedinReplies)+' replies.'}));
   for(const report of d.report.spend.advertising){const sum=k=>report.rows.reduce((n,r)=>n+(r[k]||0),0);v.ads.push({name:report.name,sent:f.number(sum('impressions')),replies:f.number(sum('conversions')),bounces:'—',note:report.period+' Platform conversions, not qualified leads.'});}
   const web=d.web||{},webRange=f.date(web.start)+' – '+f.date(web.end),webVisits=web.visits||[],webChannels=web.channels||[],webPages=web.pages||[];
-  v.webMetrics=[{label:'Website visits',value:f.number(web.sessions),note:webRange+' · www.opstream.ai'},{label:'Engaged visits',value:f.percent(web.engaged),note:f.number(web.engagedSessions)+' engaged sessions'},{label:'Page views',value:f.number(web.pageViews),note:'Same period'},{label:'AI answers linking to Opstream',value:f.percent(web.aiCited),note:f.number(web.aiCount)+' completed answers · through '+f.date(web.aiEnd)},{label:'AI answers mentioning Opstream',value:f.percent(web.aiMentioned),note:'Same completed answers'}];
+  v.webMetrics=[{label:'Website visits',value:f.number(web.sessions),note:webRange+' · www.opstream.ai'},{label:'Page views',value:f.number(web.pageViews),note:'Same period'}];
+  if(typeof web.engaged==='number')v.webMetrics.splice(1,0,{label:'Engaged visits',value:f.percent(web.engaged),note:f.number(web.engagedSessions)+' engaged sessions'});
+  if(typeof web.aiCount==='number')v.webMetrics.push({label:'AI answers linking to Opstream',value:f.percent(web.aiCited),note:f.number(web.aiCount)+' completed answers · through '+f.date(web.aiEnd)},{label:'AI answers mentioning Opstream',value:f.percent(web.aiMentioned),note:'Same completed answers'});
   const webMax=Math.max(1,...webVisits.map(w=>w.value));v.webWeeks=webVisits.map(w=>({label:f.date(w.date),title:'Week of '+f.date(w.date)+': '+f.number(w.value)+' visits',h:Math.round(w.value/webMax*100)+'%'}));
   v.webCols=v.webWeeks.length;
   v.webSources=webChannels.map(c=>({name:c.name,visits:f.number(c.sessions),engaged:f.percent(c.sessions?c.engagedSessions/c.sessions:null),ke:c.keyEvents}));
   const spendMonthsHave=(d.report.spend.months||[]).some(m=>m.planned!=null||m.actual!=null);
-  const spendChannelsHave=(d.report.spend.channels||[]).length>0;
+  const spendChannelsHave=(d.report.spend.channels||[]).some(c=>c.amount!=null);
   v.spendConnected=spendMonthsHave||spendChannelsHave;
+  v.showSpend=v.spendConnected;
   v.adsConnected=(v.ads||[]).length>0;
-  v.webConnected=web.sessions!=null||webChannels.length>0||webPages.length>0;
+  v.webConnected=typeof web.sessions==='number'&&web.sessions>0;
+  v.showWeb=v.webConnected;
+  v.showSpendMonths=(d.report.spend.months||[]).some(m=>m.planned!=null||m.actual!=null);
+  v.showWebWeeks=(v.webWeeks||[]).length>0;
+  v.showWebSources=(v.webSources||[]).length>0;
+  v.showAi=typeof web.aiCount==='number';
+  v.webRangeLabel=webRange;
+  v.showOwnerNotes=!(v.movementsEmpty);
   v.connectionLines=[
     {name:'Spend',line:spendMonthsHave?'Spend is connected for the months with actuals.':spendChannelsHave?'Monthly spend is not connected. Channel totals are recorded without a month.':'Spend: not connected'},
     {name:'Ads',line:v.adsConnected?'Ads are connected.':'Ads: not connected'},
-    {name:'Website & AI',line:v.webConnected?'Website & AI is connected.':'Website & AI: not connected'}
+    {name:'Website & AI',line:v.webConnected?(typeof web.aiCount==='number'?'Website and AI figures are in this collection.':'Website sessions are in this collection. AI answers: not connected.'):'Website & AI: not connected'}
   ];
+  const runId=s.hollie&&s.hollie.runId;
+  v.runMismatch=!!(runId&&((s.agentBrief&&s.agentBrief.runId&&s.agentBrief.runId!==runId)||(s.heartbeat&&s.heartbeat.runId&&s.heartbeat.runId!==runId)||(s.heartbeatFixes&&s.heartbeatFixes.runId&&s.heartbeatFixes.runId!==runId)));
+  v.runMismatchNote=v.runMismatch?'This section is from a different run than the queue. It is hidden so the page shows one set of numbers.':'';
+  if(v.runMismatch){v.hasAgentBrief=false;v.hasHeartbeat=false;v.hasHeartbeatFixes=false;v.agentBriefParas=[];v.heartbeatInsights=[];v.heartbeatSummary='';v.heartbeatFixes=[];}
+  if(!v.showWeb&&v.perfTabs)v.perfTabs=v.perfTabs.filter(t=>t.id!=='web');
+  if(!v.showSpend&&v.perfTabs)v.perfTabs=v.perfTabs.filter(t=>t.id!=='spend');
   v.landing=webPages.slice(0,10).map(p=>({page:p.name,visits:f.number(p.sessions),engaged:f.number(p.engagedSessions),ke:p.keyEvents}));
+  v.showLanding=(v.landing||[]).length>0;
   // The Data view's source table: describe what is actually in this extract.
   v.sources=[
     {name:'HubSpot CRM',used:'Accounts, deals, contacts, notes, calls, calendar',updated:v.collectedShort,color:'var(--color-text)',count:f.number(s.records.companies.length)+' companies',gaps:'Email counts are shown; email bodies are not included.'},
@@ -176,14 +218,15 @@ Component.prototype.renderVals = function () {
   const prelim=opportunities.map(o=>{
     const company=workspaceModel.companyForOpportunity(o,s.records);
     return {o,company,rawOwner:o.owner||company?.owner||''};
-  }).filter(x=>workspaceModel.listStatus(x.o,todayPhx)!=='excluded');
+  }).filter(x=>workspaceModel.listStatus(x.o,asOf)!=='excluded'&&!workspaceModel.isJunkName(x.o.name)&&!workspaceModel.isJunkName(x.o.dealName)&&!workspaceModel.isJunkName(x.company&&x.company.name));
   const resolved=workspaceModel.resolveOwners([...prelim.map(x=>x.rawOwner),...d.leads.map(r=>r.owner)]);
   const infoFor=raw=>resolved.get(String(raw??''))||workspaceModel.ownerInfo(raw);
   const accountRows=prelim.map(({o,company,rawOwner})=>{
     const info=infoFor(rawOwner);
     const last=company?workspaceModel.lastEngagement(company,todayPhx):null;
     const quietDays=company?workspaceModel.daysQuiet(company,todayPhx):null;
-    return {...o,owner:info.label,ownerKey:info.key,ownerTitle:info.title,lastEngagement:last,quietDays,companyRecord:company};
+    const liveQuiet=company?workspaceModel.relativeDays(last,workspaceModel.phoenixToday()):null;
+    return {...o,owner:info.label,ownerKey:info.key,ownerTitle:info.title,lastEngagement:last,quietDays:liveQuiet!=null?liveQuiet:quietDays,companyRecord:company};
   }).filter(o=>(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage,o.owner].join(' ').toLowerCase().includes(query)));
   const deduped=new Map();
   for(const o of accountRows){
@@ -198,14 +241,43 @@ Component.prototype.renderVals = function () {
   const optionRows=[...prelim.map(({rawOwner})=>infoFor(rawOwner)),...d.leads.map(r=>infoFor(r.owner))].filter(info=>info.label&&info.label!=='Unassigned');
   v.ownerOptions=[...new Map(optionRows.map(info=>[info.label,info])).values()].sort((a,b)=>a.label.localeCompare(b.label)).map(info=>({name:info.label,title:info.title||''}));
   v.peopleNote=v.ownerOptions.length?('Owners in the collected record: '+v.ownerOptions.map(o=>o.name).join(' · ')+'. The owner filter uses these values.'):'Owner information was not in the collected record.';
-  v.showLastNote=selected.some(o=>String(o.note||'').trim());
+  v.showLastNote=selected.some(o=>String(o.note||'').trim()||(o.hubspotDiffers&&o.hubspotDiffers.length));
   v.lastNoteDisplay=v.showLastNote?'table-cell':'none';
-  v.deals=selected.map(o=>({company:workspaceModel.companyName(o.name),owner:o.owner,ownerTitle:o.ownerTitle||'',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note:o.note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement)+(o.quietDays!=null?' · '+o.quietDays+' days quiet':''):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}}));
+  v.deals=selected.map(o=>{
+    const companyName=workspaceModel.accountName(o.companyRecord&&o.companyRecord.name,o.dealName||o.name)||workspaceModel.accountName(o.name,o.dealName);
+    if(!companyName)return null;
+    const flag=o.hubspotDiffers&&o.hubspotDiffers.length?'HubSpot differs':'';
+    const note=[flag,String(o.note||'').trim()].filter(Boolean).join(' · ');
+    return {company:companyName,owner:o.owner,ownerTitle:o.ownerTitle||'',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement)+(o.quietDays!=null?' · '+workspaceModel.relativeLabel(o.lastEngagement,workspaceModel.phoenixToday()):''):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}};
+  }).filter(Boolean);
   v.dealsCount=selected.length+' accounts · '+pipe.count+' open deals';
-  const leadRows=d.leads.map(r=>{const info=infoFor(r.owner);return {...r,owner:info.label,ownerTitle:info.title};}).filter(r=>(owner==='Everyone'||r.owner===owner)&&(!query||[r.name,r.source,r.note,r.owner].join(' ').toLowerCase().includes(query))&&(s.contributor?inRange(r[s.contributor]):!!r.lead)).sort((a,b)=>workspaceModel.compareLeads(a,b));
-  v.leads=leadRows.map(r=>({company:r.name,source:workspaceModel.sourceLabel(r.source),owner:r.owner||'—',ownerTitle:r.ownerTitle||'',date:f.date(r.lead),note:r.note,mql:f.date(r.mql),sql:f.date(r.sql)}));
+  const sheetLeadRows=(s.sheetReview&&s.sheetReview.leads)||[];
+  const tracker=s.sheetReview&&s.sheetReview.leadTracker;
+  const notSubscriber=r=>{const note=String(r.note||'').toLowerCase();const name=String(r.company||r.name||'');return note!=='subscriber'&&!note.includes('newsletter')&&!name.includes('@');};
+  let leadBase;
+  if(sheetLeadRows.length){
+    leadBase=sheetLeadRows.filter(notSubscriber).map(r=>({...r,name:r.company||r.name,lead:r.lead||r.leadDate||null}));
+    v.leadTrackerNote='';
+  }else if(tracker&&tracker.total){
+    leadBase=(tracker.recentMqlNoSql||[]).filter(notSubscriber).map(r=>({name:r.company,source:r.source,owner:r.owner,lead:null,mql:r.mqlDate||null,sql:null,note:'Recent MQL on the Lead Tracker'}));
+    v.leadTrackerNote='Lead Tracker has '+tracker.total+' companies ('+tracker.unworked+' unworked). Full rows are not in this collection, so only the recent MQL rows on file are listed. Newsletter subscribers are not listed.';
+    v.marketingSources=[];
+    v.marketingEmpty=true;
+    v.marketingEmptyNote='Lead source breakdown is not in this collection. The Lead Tracker has '+tracker.total+' companies. Full rows were not extracted, so HubSpot contacts are not shown as sources.';
+  }else{
+    leadBase=(d.leads||[]).filter(notSubscriber);
+    v.leadTrackerNote='';
+  }
+  const leadRows=leadBase.map(r=>{const info=infoFor(r.owner);return {...r,owner:info.label,ownerTitle:info.title};}).filter(r=>(owner==='Everyone'||r.owner===owner)&&(!query||[r.name,r.source,r.note,r.owner].join(' ').toLowerCase().includes(query))&&(s.contributor?inRange(r[s.contributor]||r.lead||r.mql):true)).sort((a,b)=>workspaceModel.compareLeads(a,b));
+  v.leads=leadRows.map(r=>({company:r.name,source:workspaceModel.sourceLabel(r.source),owner:r.owner||'—',ownerTitle:r.ownerTitle||'',date:f.date(r.lead||r.mql),note:r.note,mql:f.date(r.mql),sql:f.date(r.sql)}));
   v.leadsEmpty=leadRows.length===0;v.dealsEmpty=selected.length===0;
-  v.leadsCount=leadRows.length+' tracker records'+(s.contributor?' · '+s.contributor.toUpperCase()+' date '+period:' with a lead date');
+  v.leadsCount=sheetLeadRows.length?(leadRows.length+' Lead Tracker rows'):(tracker&&tracker.total?(leadRows.length+' recent MQL rows from the Lead Tracker'):(leadRows.length+' tracker records'+(s.contributor?' · '+s.contributor.toUpperCase()+' date '+period:' with a lead date')));
+  if(sheetLeadRows.length){
+    const sheetView=workspaceModel.marketingView(leadBase,s.records,d.report&&d.report.spend,asOf);
+    v.marketingSources=sheetView.sources;
+    v.marketingEmpty=sheetView.sources.length===0;
+    v.marketingEmptyNote=v.marketingEmpty?'No Lead Tracker rows in this week, the last six weeks, or the quarter.':'';
+  }
   v.accountTabs.forEach(t=>{const go=t.go;t.go=()=>{this.setState({contributor:null});go();};});
   v.exportLabel=s.accounts==='leads'?'Export '+leadRows.length+' leads':s.accounts==='follow'?'Export follow-ups':'Export '+selected.length+' opportunities';
   if(s.accounts==='leads')v.exportAccounts=()=>this.csv('leads.csv',['Company','Source','Owner','Lead date','Notes','MQL date','SQL date'],leadRows.map(r=>[r.name,r.source,r.owner,r.lead,r.note,r.mql,r.sql]));

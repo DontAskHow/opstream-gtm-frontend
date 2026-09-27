@@ -1,0 +1,8 @@
+{
+  "dataBucket": "opstream-gtm-data-080403790510",
+  "region": "us-east-2",
+  "publishedPrefix": "published",
+  "statePrefix": "state",
+  "brainKey": "data/brain/brain.db",
+  "pollMinutes": 10
+}

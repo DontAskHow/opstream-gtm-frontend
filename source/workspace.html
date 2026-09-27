@@ -152,6 +152,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
       </sc-for>
     </nav>
     <button onClick="{{ goData }}" style="margin-left:auto;font:inherit;font-size:13px;background:none;border:0;padding:6px 0;color:var(--color-neutral-700);cursor:pointer;text-align:left">Collected {{ collectedShort }} · <span style="text-decoration:underline;text-underline-offset:3px">About this data</span></button>
+    <sc-if value="{{ dataStale }}"><div role="status" style="padding:8px 16px;background:var(--color-accent-100);color:var(--color-accent-900);font-size:13px">{{ dataAgeLabel }}</div></sc-if>
   <button class="workspace-account-button" onClick="{{ showConnections }}">Connections</button></header>
 
   <sc-if value="{{ bannerShown }}" hint-placeholder-val="{{ false }}">
@@ -188,7 +189,6 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
   <div class="connection-row"><div><strong>Slack mention DMs</strong><p>{{ slackConnectionLabel }}</p></div><sc-if value="{{ canManageSlack }}"><button class="btn btn-secondary" onClick="{{ connectSlack }}" disabled="{{ slackConnectionDisabled }}">{{ slackConnectLabel }}</button></sc-if></div>
   <sc-if value="{{ canTestSlack }}"><div class="connection-row"><div><strong>Check Slack delivery</strong><p>Send one clearly labeled test to the person who connected Slack.</p><sc-if value="{{ slackTestReceipt }}"><p role="status">{{ slackTestReceipt }}</p></sc-if></div><button class="btn btn-secondary" onClick="{{ testSlack }}" disabled="{{ slackTestDisabled }}">{{ slackTestLabel }}</button></div></sc-if>
   <sc-if value="{{ connectionError }}"><p class="form-error" role="alert">{{ connectionError }}</p></sc-if>
-  <form action="/auth/logout" method="post"><button class="text-control" type="submit">Sign out</button></form>
 </section></sc-if>
 
 <!-- BRIEFING -->
@@ -220,8 +220,11 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <thead><tr><th>Source</th><th class="money">This week</th><th class="money">6-week average</th><th class="money">Quarter</th><th class="money">Cost / lead</th></tr></thead>
               <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td class="money">{{ c.week }}</td><td class="money">{{ c.six }}</td><td class="money">{{ c.quarter }}</td><td class="money">{{ c.cpl }}</td></tr></sc-for></tbody>
             </table></div>
-            <sc-if value="{{ marketingEmpty }}"><p class="muted-copy">No leads in this week, the last six weeks, or the quarter.</p></sc-if>
+            <sc-if value="{{ marketingEmpty }}"><p class="muted-copy">{{ marketingEmptyNote }}</p></sc-if>
             <sc-for list="{{ connectionLines }}" as="c"><p style="margin:8px 0 0;font-size:14px">{{ c.line }}</p></sc-for>
+            <sc-if value="{{ hasMarketingQueue }}"><div class="section-rule" style="margin-top:16px"><h6 style="margin:0">Marketing queue</h6></div>
+              <sc-for list="{{ marketingQueue }}" as="q"><p style="font-size:14px;margin:8px 0"><strong>{{ q.n }}. {{ q.title }}</strong> — {{ q.why }}</p></sc-for>
+            </sc-if>
           </section>
         </sc-if>
         <sc-if value="{{ briefingEmpty }}">
@@ -232,6 +235,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <sc-if value="{{ hasHollieOp }}">
                     <section>
                       <div class="section-rule"><h6 style="margin:0">Morning brief</h6><span style="font-size:12px;color:var(--color-neutral-700)">{{ hollieGenNote }}</span></div>
+                      <sc-if value="{{ runMismatch }}"><p class="muted-copy">{{ runMismatchNote }}</p></sc-if>
                       <sc-if value="{{ hasAgentBrief }}">
                         <div class="take-card">
                           <div>
@@ -489,7 +493,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               </sc-for>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Leads by source</h6><button onClick="{{ exportSources }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
-            <sc-if value="{{ marketingEmpty }}" hint-placeholder-val="{{ false }}"><p style="margin:12px 0;font-size:13px;color:var(--color-neutral-700)">No leads in these intervals.</p></sc-if>
+            <sc-if value="{{ marketingEmpty }}" hint-placeholder-val="{{ false }}"><p style="margin:12px 0;font-size:13px;color:var(--color-neutral-700)">{{ marketingEmptyNote }}</p></sc-if>
             <div class="table-scroll"><table class="table" style="font-size:14px">
               <thead><tr><th>Source</th><th class="money">This week</th><th class="money">6-week average</th><th class="money">Quarter</th><th class="money">Cost / lead</th></tr></thead>
               <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td class="money">{{ c.week }}</td><td class="money">{{ c.six }}</td><td class="money">{{ c.quarter }}</td><td class="money">{{ c.cpl }}</td></tr></sc-for></tbody>
@@ -547,7 +551,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               </div>
               <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Company scorecard. All pipeline values are owner estimates, not buyer commitments.</p>
             </section>
-            <section style="flex:1 1 320px;min-width:0">
+            <sc-if value="{{ showOwnerNotes }}"><section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Latest owner notes</h6><button onClick="{{ goDeals }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">All opportunities</button></div>
               <sc-for list="{{ movements }}" as="m" hint-placeholder-count="6">
                 <button onClick="{{ m.go }}" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:10px 0;font:inherit;color:inherit;cursor:pointer">
@@ -555,9 +559,8 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <span style="font-size:13px;color:var(--color-neutral-800);grid-column:1/-1">{{ m.change }}</span>
                 </button>
               </sc-for>
-              <sc-if value="{{ movementsEmpty }}"><p style="margin:0;font-size:14px;color:var(--color-neutral-800)">No owner notes were found — the “Last meeting / what happened” column came back empty.</p></sc-if>
               <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">"Last meeting / what happened" column, owner pipeline sheets, collected {{ collectedShort }}.</p>
-            </section>
+            </section></sc-if>
           </div>
         </sc-if>
 
@@ -565,14 +568,14 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           <sc-if value="{{ !spendConnected }}"><p style="margin:0;font-size:14px">Spend: not connected</p></sc-if>
           <sc-if value="{{ spendConnected }}">
           <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
-            <section style="flex:1 1 320px;min-width:0">
+            <sc-if value="{{ showSpendMonths }}"><section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Plan vs recorded, 2026</h6><button onClick="{{ exportSpend }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
               <div class="table-scroll"><table class="table" style="font-size:14px">
                 <thead><tr><th>Month</th><th class="money">Planned</th><th class="money">Recorded</th><th class="money">Difference</th></tr></thead>
                 <tbody><sc-for list="{{ spendMonths }}" as="m" hint-placeholder-count="9"><tr><td>{{ m.month }} <span class="tag tag-neutral" style="margin-left:6px;display:{{ m.tagDisplay }}">{{ m.tag }}</span></td><td class="money">{{ m.budget }}</td><td class="money">{{ m.actual }}</td><td class="money">{{ m.diff }}</td></tr></sc-for></tbody>
               </table></div>
               <p style="margin:12px 0 0;font-size:13px;color:var(--color-neutral-800);line-height:1.5">Monthly budget. Missing actuals mean not entered, not zero.</p>
-            </section>
+            </section></sc-if>
             <section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Where the money went</h6><span style="font-size:12px;color:var(--color-neutral-700)">Recorded Jan – Jul · by channel</span></div>
               <sc-for list="{{ spendChannels }}" as="v" hint-placeholder-count="6">
@@ -610,10 +613,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               </div>
             </sc-for>
           </div>
-          <p style="margin:0;font-size:13px;color:var(--color-neutral-800);line-height:1.5;max-width:76ch">Website figures are for www.opstream.ai only. Staging, localhost and preview hosts are excluded. AI visibility uses completed monitored answers in the retained collection; failed answers are excluded.</p>
-          <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+          <p style="margin:0;font-size:13px;color:var(--color-neutral-800);line-height:1.5;max-width:76ch">Website figures are for www.opstream.ai only. Staging, localhost and preview hosts are excluded.<sc-if value="{{ showAi }}"> AI visibility uses completed monitored answers in the retained collection; failed answers are excluded.</sc-if></p>
+          <sc-if value="{{ showWebWeeks }}"><div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
             <section style="flex:1 1 320px;min-width:0">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Visits by week</h6><span style="font-size:12px;color:var(--color-neutral-700)">www.opstream.ai · May – Sep</span></div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Visits by week</h6><span style="font-size:12px;color:var(--color-neutral-700)">www.opstream.ai · {{ webRangeLabel }}</span></div>
               <div style="display:grid;grid-template-columns:repeat({{ webCols }},minmax(0,1fr));gap:6px;align-items:end;height:160px;padding-top:16px">
                 <sc-for list="{{ webWeeks }}" as="w" hint-placeholder-count="10"><div style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0" title="{{ w.title }}"><div style="background:var(--color-accent-2);height:{{ w.h }}"></div></div></sc-for>
               </div>
@@ -621,18 +624,17 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                 <sc-for list="{{ webWeeks }}" as="w" hint-placeholder-count="10"><span style="font-size:11px;color:var(--color-neutral-700);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ w.label }}</span></sc-for>
               </div>
             </section>
-            <section style="flex:1 1 320px;min-width:0">
-              <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">How visitors arrive · May 18 – Sep 7</h6></div>
+            <sc-if value="{{ showWebSources }}"><section style="flex:1 1 320px;min-width:0">
+              <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">How visitors arrive · {{ webRangeLabel }}</h6></div>
               <table class="table" style="font-size:14px"><thead><tr><th>Channel</th><th style="text-align:right">Visits</th><th style="text-align:right">Engaged</th><th style="text-align:right">Key events</th></tr></thead>
               <tbody><sc-for list="{{ webSources }}" as="s" hint-placeholder-count="6"><tr><td>{{ s.name }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ s.visits }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ s.engaged }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ s.ke }}</td></tr></sc-for></tbody></table>
-            </section>
-          </div>
-          <section>
-            <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Top 10 landing pages · May 18 – Sep 7</h6></div>
+            </section></sc-if>
+          </div></sc-if>
+          <sc-if value="{{ showLanding }}"><section>
+            <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Top 10 landing pages · {{ webRangeLabel }}</h6></div>
             <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:560px"><thead><tr><th>Page</th><th style="text-align:right">Visits</th><th style="text-align:right">Engaged</th><th style="text-align:right">Key events</th></tr></thead>
             <tbody><sc-for list="{{ landing }}" as="l" hint-placeholder-count="8"><tr><td style="font-variant-numeric:tabular-nums;overflow-wrap:anywhere">{{ l.page }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ l.visits }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ l.engaged }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ l.ke }}</td></tr></sc-for></tbody></table></div>
-            <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">Sample landing pages illustrate engagement and key-event comparisons.</p>
-          </section>
+          </section></sc-if>
           </sc-if>
         </sc-if>
       </div>
@@ -688,7 +690,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             <tbody><sc-for list="{{ leads }}" as="l" hint-placeholder-count="12"><tr><td class="company" style="font-weight:600">{{ l.company }}</td><td>{{ l.source }}</td><td title="{{ l.ownerTitle }}" style="white-space:nowrap">{{ l.owner }}</td><td class="money">{{ l.date }}</td><td class="money">{{ l.mql }}</td><td class="money">{{ l.sql }}</td><td style="font-size:13px;color:var(--color-neutral-800)">{{ l.note }}</td></tr></sc-for></tbody>
           </table></div>
           <sc-if value="{{ leadsEmpty }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:14px;color:var(--color-neutral-800)"><span>{{ emptyNote }}</span><button onClick="{{ clearSearch }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">Clear search and owner</button></div></sc-if>
-          <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ leadsCount }} · Lead Tracker, newest lead dates first. 62 webinar registrants have no owner and no qualification dates.</p>
+          <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ leadsCount }}<sc-if value="{{ leadTrackerNote }}"> · {{ leadTrackerNote }}</sc-if></p>
         </sc-if>
       </div>
     </sc-if>
@@ -1011,7 +1013,8 @@ class Component extends DCLogic {
     const webWeeksRaw = [];
     // Opportunity rows are provided by the data adapter.
     const dealsRaw = this._verifiedOpportunityRows();
-    const followRaw = [];
+    const owedItems = ((((st.hollie || {}).brief || {}).followupsOwed || {}).items) || [];
+    const followRaw = owedItems.map(f => [f.company || f.title || 'Follow-up', f.date || '', (f.actions || []).filter(Boolean).join('; ') || ((f.actionCount || 0) + ' action items from the recording'), 'Review the draft. Nothing is sent from here.', 'Action items come from the recording. Whether they were finished is not tracked.', null, f.queueId || null]);
     const leadsRaw = this._verifiedLeadRows();
     const ownerOptions=[...new Set([...dealsRaw.map(d=>d[1]),...leadsRaw.map(l=>l[2])].filter(o=>o&&o!=='—'))].sort().map(name=>({name}));
     const meetingOwnerOptions=[...new Set([...(st.records?.companies||[]).flatMap(c=>[workspaceModel.displayOwner(c.owner),...(c.recordings||[]).map(r=>workspaceModel.displayOwner(r.recordedBy))])].filter(n=>n&&n!=='Unassigned'))].sort().map(name=>({name,title:workspaceModel.ownerInfo(name).title}));
@@ -1151,9 +1154,9 @@ class Component extends DCLogic {
     const stagesAgg = stageOrder.map(stage => { const rows = dealsRaw.filter(d => d[2] === stage); return [stage, rows.length, rows.reduce((n, d) => n + d[3], 0)]; }).concat([]);
     const maxStage = Math.max(...stagesAgg.map(x => x[2]));
     // ---- Proactive briefing: what needs a human, per role ----
-    const opps = workspaceModel.annotateOpportunities(st.verified?.opportunities || [], REC);
+    const opps = workspaceModel.annotateOpportunities(st.verified?.opportunities || [], REC).map(o => workspaceModel.applySheetDeal(o, workspaceModel.sheetOverrides(st.sheetReview)));
     const oppByName = Object.fromEntries(opps.map(o => [o.name, o]));
-    const todayPhx = workspaceModel.phoenixToday();
+    const todayPhx = workspaceModel.asOf(REC.generatedAt);
     const pipeNow = workspaceModel.pipelineTotals(opps, todayPhx);
     const totalPipe = pipeNow.openAmount;
     const weightedPipe = pipeNow.weighted || 0;
@@ -1162,7 +1165,7 @@ class Component extends DCLogic {
     const unworkedInfo = workspaceModel.unworkedLeads(st.verified?.leads || [], st.sheetReview);
     const quietNow = workspaceModel.quietDeals(opps, REC, todayPhx);
     const rankedDeals = [...dealsRaw].sort((a, b) => (Number(b[3]) || 0) - (Number(a[3]) || 0));
-    const unqualifiedLeads = (st.verified?.leads || []).filter(l => !workspaceModel.dateOnly(l.mql));
+    const unqualifiedLeads = (st.verified?.leads || []).filter(l => !workspaceModel.dateOnly(l.mql) && !/subscriber|newsletter/i.test(String(l.note||'')) && !String(l.name||'').includes('@'));
     const unsentDrafts = drafts.filter(d => !d.version).length;
     const draftForCompany = (company, rationale) => () => { const cc = findCo(company); const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + company, company, text: '', rationale, refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: cc ? cc.contacts.slice(0, 2).map(x => x.name).join(', ') : '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); };
     const dealEvidenceId = company => { const cc = findCo(company); const dd = cc && (cc.deals.find(d => !d.closed) || cc.deals[0]); return dd ? dd.id : null; };
@@ -1188,17 +1191,18 @@ class Component extends DCLogic {
     const drawerLabel = k => k.indexOf('deal:') === 0 ? 'Deal record' : k.indexOf('crm-meeting:') === 0 ? 'Meeting record' : k.indexOf('recording:') === 0 ? 'Call notes' : k.indexOf('note:') === 0 ? 'CRM note' : k.indexOf('call:') === 0 ? 'Call record' : k.indexOf('company:') === 0 ? 'Company record' : 'Record';
     const dedupeKeys = keys => [...new Set(keys || [])];
     const seedDraft = (q) => () => { const existing = (st.newDrafts || []).find(x => x.seedId === q.id); if (existing && existing.id) { this.setState({ screen: 'drafts', draftId: existing.id, draftPurpose: 'email', evidence: false }); window.scrollTo(0, 0); return; } const seed = q.draftSeed || {}; const body = String(seed.body || '').trim() || followUpText(q.company, q.actions, ''); const id = 'seed:' + q.id; const item = { id, kind: 'Follow-up', seedId: q.id, purpose: 'email', title: seed.subject || ('Follow up with ' + (q.company || 'account')), subject: seed.subject || ('Follow up with ' + (q.company || 'account')), company: q.company || 'No company linked', text: body, rationale: 'From the call notes. ' + (q.why || '') + ' Drafts are never sent automatically.', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: seed.recipients || '', saved: false }; this.setState({ newDrafts: [...(st.newDrafts || []), item], draftId: id, draftPurpose: 'email', screen: 'drafts', evidence: false, draftFeedback: 'Draft created from the call notes. Nothing sends from here.', draftFeedbackClass: 'form-success' }); window.scrollTo(0, 0); };
-    const nudgeDraft = (q) => () => { const existing = (st.newDrafts || []).findIndex(x => x.seedId === q.id); if (existing >= 0) { this.setState({ screen: 'drafts', draft: baseDrafts.length - (st.newDrafts || []).length + existing }); window.scrollTo(0, 0); return; } const cc = q.company ? findCo(q.company) : null; const contactName = cc && cc.contacts[0] ? cc.contacts[0].name.split(' ')[0] : 'there'; const nudgeText = 'Hi ' + contactName + ',\n\nWanted to check in on ' + (q.deal && q.deal !== q.company ? q.deal + ' at ' + q.company : q.company || 'our conversation') + '. ' + (q.daysQuiet ? "It's been " + q.daysQuiet + ' days since we last connected' : 'We haven\'t connected in a while') + ', and I wanted to see where things stand on your end.\n\n' + (q.stage ? 'Last we spoke, this was in ' + q.stage + '. ' : '') + 'Is this still a priority, or has something changed?\n\nHappy to jump on a quick call if helpful.\n\nBest,\nHollie'; const list = [...(st.newDrafts || []), { kind: 'Follow-up', seedId: q.id, title: 'Nudge ' + (q.company || 'account'), company: q.company || 'No company linked', text: nudgeText, rationale: (q.why || '') + ' Drafts are never sent automatically. Edit the generated nudge above to match your voice.', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: cc ? cc.contacts.slice(0, 2).map(x => x.name).join(', ') : '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts', draftFeedback: 'Draft created with a starting nudge — edit it to match your voice, then use Copy for Gmail to paste it into Gmail.', draftFeedbackClass: 'form-success' }); window.scrollTo(0, 0); };
+    const nudgeDraft = (q) => () => { const existing = (st.newDrafts || []).findIndex(x => x.seedId === q.id); if (existing >= 0) { this.setState({ screen: 'drafts', draft: baseDrafts.length - (st.newDrafts || []).length + existing }); window.scrollTo(0, 0); return; } const cc = q.company ? findCo(q.company) : null; const rawContact = cc && cc.contacts[0] ? String(cc.contacts[0].name || '') : ''; const contactName = rawContact.indexOf(',') >= 0 ? rawContact.split(',')[1].trim().split(' ')[0] : (rawContact.split(' ')[0] || ''); const nudgeText = 'Hi ' + (contactName || 'there') + ',\n\nChecking in' + (q.company ? ' with ' + q.company : '') + '. ' + (q.lastEngagement ? 'The last interaction on file is ' + q.lastEngagement + '.' : 'I do not have a recent interaction date on file.') + '\n\nIs this still a priority?\n\nHappy to jump on a short call.'; const list = [...(st.newDrafts || []), { kind: 'Follow-up', seedId: q.id, title: 'Nudge ' + (q.company || 'account'), company: q.company || 'No company linked', text: nudgeText, rationale: (q.why || '') + ' Drafts are never sent automatically. Edit the generated nudge above to match your voice.', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: cc ? cc.contacts.slice(0, 2).map(x => x.name).join(', ') : '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts', draftFeedback: 'Draft created with a starting nudge — edit it to match your voice, then use Copy for Gmail to paste it into Gmail.', draftFeedbackClass: 'form-success' }); window.scrollTo(0, 0); };
     const kindLabel = { followup_draft: 'Follow-up draft', stale_deal: 'Stale deal', unworked_lead: 'Unworked lead', crm_update: 'CRM update', meeting_prep: 'Meeting prep', sheet_review: 'Sheet check' };
     const mdText = s => String(s == null ? '' : s).replace(/\[([^\]]+)\]\([^)\s]+\)/g, '$1');
     const isTestItem = text => /mozilla firefox|system verification test/i.test(String(text || ''));
     const cleanCopy = text => String(text == null ? '' : text).replace(/\bnewSinceLastBrief\b/gi, 'new');
-    const hollieQueue = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id] && !isTestItem(q.title) && !isTestItem(q.why)).map((q, i) => {
+    const viewerToday = workspaceModel.phoenixToday();
+    const hollieQueueAll = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id] && !isTestItem(q.title) && !isTestItem(q.why) && (q.audience || 'sales') !== 'marketing').map((q, i) => {
       const confirmKey = st.confirmQueue;
       const pm = q.kind === 'followup_draft' ? ['Open draft', seedDraft(q)] : q.kind === 'stale_deal' ? ['Draft nudge', nudgeDraft(q)] : q.kind === 'unworked_lead' ? ['Review leads', goLeads] : q.kind === 'sheet_review' ? (q.companyId ? ['Review in account', goCo(q.companyId)] : ['Review deals', goDeals]) : q.kind === 'crm_update' ? ['Review deals', goDeals] : ['Open meetings', goMeetings];
       const confirmGo = (action, fn) => () => { const key = q.id + ':' + action; if (confirmKey === key) { this.setState({ confirmQueue: null }); fn(); } else { this.setState({ confirmQueue: key }); setTimeout(() => { if (this.state.confirmQueue === key) this.setState({ confirmQueue: null }); }, 6000); } };
       return {
-        id: q.id, companyId: q.companyId, n: q.n || (i + 1), title: q.title, isNew: !!q.isNew, needsDecision: !!q.needsDecision,
+        id: q.id, companyId: q.companyId, n: i + 1, title: (q.kind === 'stale_deal' && q.lastEngagement) ? String(q.title).replace(/quiet \d+ days/, 'quiet ' + workspaceModel.relativeDays(q.lastEngagement, viewerToday) + ' days') : q.title, isNew: !!q.isNew, needsDecision: !!q.needsDecision, audience: q.audience || 'sales',
         kind: kindLabel[q.kind] || q.kind,
         goal: q.goal || 'pipeline',
         context: [q.company, (q.deal && q.deal !== q.company ? q.deal : null), q.stage].filter(Boolean).join(' · '),
@@ -1215,9 +1219,31 @@ class Component extends DCLogic {
         evidenceLinks: dedupeKeys(q.drawerKeys).slice(0, 3).map(k => ({ label: drawerLabel(k), go: ev(k) })),
       };
     }) : [];
+    const hollieQueue = hollieQueueAll;
+    const marketingQueue = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id] && q.audience === 'marketing' && !isTestItem(q.title)).map((q, i) => ({ n: i + 1, title: q.title, why: q.why })) : [];
+    const viewerTomorrow = workspaceModel.addDays(viewerToday, 1);
+    const seenSoon = new Set();
+    const soonNow = [];
+    for (const c of REC.companies || []) {
+      const dealBlob = (c.deals || []).map(d => d.name).join(' ');
+      if (workspaceModel.isJunkName(c.name) || workspaceModel.isJunkName(dealBlob)) continue;
+      const companyLabel = workspaceModel.accountName(c.name, dealBlob) || workspaceModel.companyName(c.name);
+      if (!companyLabel || /^(renewal|current agreement)$/i.test(companyLabel)) continue;
+      for (const m of c.meetings || []) {
+        const d = workspaceModel.dateOnly(m.start);
+        if (d !== viewerToday && d !== viewerTomorrow) continue;
+        if (/opstream/i.test(c.name || '') || /opstream/i.test(m.title || '')) continue;
+        const emails = (m.invitees || []).map(i => String(i.email || '').toLowerCase()).filter(Boolean);
+        if (emails.length && emails.every(e => e.endsWith('@opstream.ai'))) continue;
+        const key = m.id || (d + '|' + m.title);
+        if (seenSoon.has(key)) continue;
+        seenSoon.add(key);
+        soonNow.push(m.title + ' · ' + fmtDT(m.start) + ' · ' + workspaceModel.relativeLabel(m.start, viewerToday) + (companyLabel ? ' · ' + companyLabel : ''));
+      }
+    }
     const hb = hop ? hop.brief : null;
     const hollieBriefCards = hb ? [
-      { title: 'Meetings today & tomorrow', line: hb.meetings.items.length ? hb.meetings.items.map(m => m.title + ' · ' + fmtDT(m.start)).join(' / ') : 'None scheduled', note: hb.meetings.note, go: this.go('meetings', { meetings: 'upcoming' }), goLabel: 'Open meetings' },
+      { title: 'Meetings today & tomorrow', line: soonNow.length ? soonNow.join(' / ') : 'None scheduled', note: 'Built from the calendar when the page renders. Times are America/Phoenix.', go: this.go('meetings', { meetings: 'upcoming' }), goLabel: 'Open meetings' },
       { title: 'Deals gone quiet', line: quietNow.length + ' with no engagement in ' + workspaceModel.QUIET_DAYS + '+ days', note: hb.quietDeals.note, go: goFollow, goLabel: 'Open follow-ups' },
       { title: 'Follow-ups owed', line: hb.followupsOwed.items.length + ' calls with open action items', note: hb.followupsOwed.note, go: goFollow, goLabel: 'Open follow-ups' },
       { title: 'New leads', line: unworkedInfo.count + ' unworked', note: 'No meeting booked' + (unworkedInfo.source === 'sheet' ? ' · sheet is authoritative' : ''), go: goLeads, goLabel: 'Open new leads' },
@@ -1231,7 +1257,7 @@ class Component extends DCLogic {
     ].filter(a => a.text) : [];
     const holliePrep = hop ? (hop.prep || []).map(pr => ({
       title: pr.title, startLine: fmtDT(pr.start) + (pr.company ? ' · ' + pr.company : ''),
-      agenda: pr.suggestedAgenda || [],
+      agenda: (pr.suggestedAgenda || []).map(line => { const m = String(line).match(/^Last engagement (\d{4}-\d{2}-\d{2})/); if (!m) return line; return 'Last engagement ' + workspaceModel.formatDate(m[1]) + ' · ' + workspaceModel.relativeLabel(m[1], viewerToday); }),
       actions: (pr.unresolvedActions || []).map(a => mdText(a.action) + (a.from ? ' — ' + a.from : '')),
       lastCallLine: pr.lastCall ? (pr.lastCall.title || 'Last call') + ' · ' + (pr.lastCall.date || '') : '',
       lastCallSummary: pr.lastCall ? (pr.lastCall.summary || []).slice(0, 2).map(mdText) : [],
@@ -1288,10 +1314,10 @@ class Component extends DCLogic {
     ];
     const topDeal = workspaceModel.largestDeal(pipeNow.deals);
     const topCompany = topDeal ? (this._verifiedAccount(topDeal.companyId) || this._verifiedAccount(topDeal.name)) : null;
-    const topQuietDays = topCompany ? workspaceModel.daysQuiet(topCompany, todayPhx) : null;
+    const topQuietDays = topCompany ? workspaceModel.daysQuiet(topCompany, workspaceModel.phoenixToday()) : null;
     const share = topDeal ? workspaceModel.closeDateShare(pipeNow.deals, topDeal.close) : null;
     const briefingDecisions = topDeal ? [
-      { title: 'Push ' + workspaceModel.companyName(topDeal.name) + ' or let it slip', why: workspaceModel.companyName(topDeal.name) + ' is the largest open deal (' + usd(topDeal.amount || 0) + '). The close date is ' + fmtD(topDeal.close) + '. ' + (topQuietDays != null ? 'It has been quiet ' + topQuietDays + ' days.' : 'No past engagement date is on file.'), confidence: 'Computed from open deals after excluding past close dates, renewals, current agreements, Disqualified and On Hold.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal.name) },
+      { title: 'Push ' + workspaceModel.companyName(topDeal.name) + ' or let it slip', why: workspaceModel.companyName(topDeal.name) + ' is the largest open deal (' + usd(topDeal.amount || 0) + '). The close date is ' + fmtD(topDeal.close) + '. ' + (topQuietDays != null ? 'Last interaction was ' + topQuietDays + ' days ago.' : 'No past engagement date is on file.'), confidence: 'Computed from open deals after excluding past close dates, renewals, current agreements, Disqualified and On Hold. Amounts use the sheet when it disagrees with HubSpot.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal.name) },
     ].concat(share && share.count >= 2 ? [{ title: share.count + ' of ' + share.total + ' open deals share a ' + fmtD(share.day) + ' close date', why: 'These deals are grouped by the Phoenix calendar date of the close, not the raw timestamp.', confidence: 'Computed from the same open-pipeline set as the headline.', evidenceLabel: 'Review by close date', evidenceGo: this.go('accounts', { accounts: 'deals', sort: 'close' }) }] : []) : [];
     return {
       ...(() => {
@@ -1327,7 +1353,7 @@ class Component extends DCLogic {
       hasHollieOp: !!hop, noHollieOp: !hop,
       hollieGenNote: hop ? 'Assistant run ' + fmtD((hop.generatedAt || '').slice(0, 10)) + ' · ' + (hop.queue || []).length + ' items in queue' : '',
       hollieBriefCards, hollieAutonomy,
-      hollieQueue, hollieQueueEmpty: hollieQueue.length === 0,
+      hollieQueue, marketingQueue, hasMarketingQueue: marketingQueue.length > 0, hollieQueueEmpty: hollieQueue.length === 0,
       hollieQueueEmptyNote: hop ? 'Queue is clear — nothing new from the assistant since the last run.' : '',
       hollieNewCount: hollieQueue.filter(q => q.isNew).length,
       hollieNewNote: (() => { const n = hollieQueue.filter(q => q.isNew).length; return n > 0 ? n + ' new or updated since the last run — look for the · new tag.' : 'Nothing new since the last run.'; })(),
@@ -1364,7 +1390,7 @@ class Component extends DCLogic {
       weeks: pd.bars.map(([label, leads]) => ({ label, leads, title: pd.unit + label + ': ' + leads + ' new leads', leadH: Math.round(leads / barMax * 100) + '%' })),
       barCols: pd.bars.length,
       channels: pd.src.map(([channel, leads, mql, sql]) => ({ channel, leads, mql, sql, rate: leads ? Math.round(sql / leads * 100) + '%' : '—' })),
-      marketingIntervals: [], marketingSources: [], marketingEmpty: true,
+      marketingIntervals: [], marketingSources: [], marketingEmpty: true, marketingEmptyNote: 'No leads in this week, the last six weeks, or the quarter.',
       stages: stagesAgg.map(([stage, count, amt]) => ({ stage, count, amount: k(amt), w: Math.round(amt / maxStage * 100) + '%' })),
       scorecard: [],
       movements: dealsRaw.filter(d => (d[7] || '').trim()).slice(0, 6).map(d => ({ name: d[0], meta: d[1] + ' · ' + d[2], change: d[7], go: ev('sheet:' + d[0]) })),
@@ -1440,7 +1466,7 @@ class Component extends DCLogic {
           'Recipient(s): ' + (d.recipients || 'unknown'),
           d.rationale ? 'Context: ' + d.rationale : '',
           d.text ? 'Current draft text (improve or rewrite): ' + d.text.slice(0, 2000) : 'No draft text yet — write from scratch.',
-          'Return the email with a clear subject line first (as "Subject: ..."), then the body. Keep it concise and professional. Sign as Hollie.'].filter(Boolean).join('\n');
+          'Return the email with a clear subject line first (as "Subject: ..."), then the body. Keep it concise and professional. Sign with the deal owner when that owner is a person\'s name. Otherwise leave it unsigned.'].filter(Boolean).join('\n');
         this.setState({ generating: true, draftFeedback: null });
         try {
           const r = await fetch('/api/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: ctx, history: [] }) });
@@ -1463,7 +1489,7 @@ class Component extends DCLogic {
       checkUpdates: () => { this.setState({ checking: true }); setTimeout(() => this.setState({ checking: false, checked: now() }), 1200); },
       reviewRequested: !!st.reviewRequested, refreshLabel: st.reviewRequested ? 'Review requested' : 'Refresh the review', refreshNote: st.reviewRequested ? 'Requested ' + st.reviewRequested + '. The workspace stays usable while it runs; Today will show "new review available" when it finishes.' : 'Runs on the data already collected. Takes several minutes.',
       refreshReview: () => this.setState({ reviewRequested: now() }),
-      deals: filteredDeals.sort((a, b) => { const sort = st.sort || 'weighted'; if (sort === 'name') return a[0].localeCompare(b[0]); if (sort === 'days') return (b[6] ?? -1) - (a[6] ?? -1); if (sort === 'close') { const key = d => { const m = String(d[5]) === 'Apr 30' ? ['', 'Apr', '26'] : String(d[5]).match(/^(\w{3}) (\d{2})$/); return m ? '20' + m[2] + '-' + ({ Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' })[m[1]] : (d[5] || ''); }; return key(a).localeCompare(key(b)); } return b[3] * b[4] - a[3] * a[4]; }).map(([company, owner, stage, arr, prob, close, days, note]) => ({ company, owner, stage, arr: usd(arr), prob: prob == null ? '—' : prob + '%', close, days: days === null ? '—' : days, daysColor: days !== null && days > 120 ? red : ink, note, go: goCo(company) })),      followUps: followRaw.map(([name, meta, reason, next, uncertainty, draftIndex]) => ({ name, meta, reason, next, uncertainty, go: goCo(name), openLabel: 'Open account', draftGo: () => { this.setState({ screen: 'drafts', draft: draftIndex }); window.scrollTo(0, 0); } })),
+      deals: filteredDeals.sort((a, b) => { const sort = st.sort || 'weighted'; if (sort === 'name') return a[0].localeCompare(b[0]); if (sort === 'days') return (b[6] ?? -1) - (a[6] ?? -1); if (sort === 'close') { const key = d => { const m = String(d[5]) === 'Apr 30' ? ['', 'Apr', '26'] : String(d[5]).match(/^(\w{3}) (\d{2})$/); return m ? '20' + m[2] + '-' + ({ Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' })[m[1]] : (d[5] || ''); }; return key(a).localeCompare(key(b)); } return b[3] * b[4] - a[3] * a[4]; }).map(([company, owner, stage, arr, prob, close, days, note]) => ({ company, owner, stage, arr: usd(arr), prob: prob == null ? '—' : prob + '%', close, days: days === null ? '—' : days, daysColor: days !== null && days > 120 ? red : ink, note, go: goCo(company) })),      followUps: followRaw.map(([name, meta, reason, next, uncertainty, draftIndex, queueId]) => ({ name, meta, reason, next, uncertainty, go: goCo(name), openLabel: 'Open account', draftGo: () => { const q = ((hop && hop.queue) || []).find(x => x.id === queueId); if (q && q.draftSeed) seedDraft(q)(); else goCo(name)(); } })),
       leads: filteredLeads.map(([company, source, owner, date, note, mql, sql]) => ({ company, source, owner, date, note, mql: mql || '—', sql: sql || '—' })),
       timeline: [],
       accountSources: [],

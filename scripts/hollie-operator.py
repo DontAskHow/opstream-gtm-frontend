@@ -18,18 +18,22 @@ Empty sections carry an honest note instead of fabricated items.
 """
 import hashlib
 import json
+import os
+import re
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gtm_metrics import (QUIET_DAYS as SHARED_QUIET_DAYS, commit_versus_target,
-                         days_quiet, is_open_pipeline, last_engagement, phoenix_today,
-                         unworked_count)
+from gtm_metrics import (QUIET_DAYS as SHARED_QUIET_DAYS, account_name,
+                         apply_sheet_deal, commit_for_close_month, commit_versus_target,
+                         customer_facing_action, date_only, days_quiet, is_internal_meeting,
+                         is_junk_name, is_open_pipeline, last_engagement, person_name,
+                         sheet_overrides, unworked_count)
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "out" / "data"
-VAR = ROOT / "var"
+DATA = Path(os.environ.get("OUT_DATA") or (ROOT / "out" / "data"))
+VAR = Path(os.environ.get("HOLLIE_STATE_DIR") or (ROOT / "var"))
 STATE_FILE = VAR / "hollie-operator-state.json"
 FEEDBACK_FILE = DATA / "hollie-feedback.json"
 AUTONOMY_FILE = ROOT / "scripts" / "hollie-autonomy.json"
@@ -40,8 +44,7 @@ QUIET_DAYS = SHARED_QUIET_DAYS  # single threshold shared with the workspace
 RECENT_CALL_DAYS = 90    # only recent Fathom calls seed follow-up drafts
 PREP_WINDOW_DAYS = 7
 RESURFACE_DAYS = 7
-CAPS = {"followup_draft": 8, "stale_deal": 8, "unworked_lead": 6,
-        "crm_update": 2, "sheet_review": 5}
+PINS_FILE = ROOT / "scripts" / "priority-pins.json"
 
 
 def load_json(p, default):
@@ -75,16 +78,59 @@ def short_hash(*parts):
 
 
 def clean_md(s):
-    """Strip markdown links/images to plain text for draft bodies."""
+    """Strip markdown links, images, and emphasis to plain text."""
     import re
     s = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", s or "")
     s = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", s)
+    s = re.sub(r"[*_]{1,3}", "", s)
+    s = re.sub(r"(?m)^#+\s*", "", s)
     return s
 
 
 def first_name(raw):
-    n = str(raw or "").split(" ")[0].strip().strip(",.;:")
-    return n
+    first, _full = person_name(raw)
+    return first
+
+
+def join_names(names):
+    names = [n for n in names if n]
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return names[0] + " and " + names[1]
+    return ", ".join(names[:-1]) + ", and " + names[-1]
+
+
+def newest_key(iso):
+    """String key that sorts newest dates first when compared ascending."""
+    raw = iso or "0000-00-00"
+    return "".join(str(9 - int(ch)) if ch.isdigit() else ch for ch in raw)
+
+
+def non_english(text):
+    if re.search(r"[\u0590-\u05FF\u0600-\u06FF]", text or ""):
+        return "[Summary is not in English] " + text
+    return text
+
+
+def real_owner_name(owner):
+    lab = str(owner or "").strip()
+    if not lab or re.match(r"^(unassigned|owner)(\s|#|$)", lab, flags=re.I):
+        return ""
+    _first, full = person_name(lab)
+    return full if full and not re.match(r"^owner\b", full, flags=re.I) else ""
+
+
+def subscriber_lead(lead):
+    note = str((lead or {}).get("note") or "").lower()
+    name = str((lead or {}).get("name") or (lead or {}).get("company") or "")
+    if note == "subscriber" or "newsletter" in note:
+        return True
+    if "@" in name:
+        return True
+    return False
 
 
 def drawer_key(ref, company_id):
@@ -107,8 +153,8 @@ def drawer_key(ref, company_id):
 
 
 def main():
-    today = date.fromisoformat(phoenix_today())
     now_iso = datetime.now(timezone.utc).isoformat()
+    run_id = os.environ.get("GTM_RUN_ID") or ("run-" + now_iso.replace(":", "").replace("+", "Z")[:20])
 
     records = load_json(DATA / "records.json", {})
     verified = load_json(DATA / "verified.json", {})
@@ -122,6 +168,8 @@ def main():
 
     companies = records.get("companies") or []
     ev_keys = set(evidence.keys()) if isinstance(evidence, dict) else set()
+    snap = date_only(records.get("generatedAt"))
+    today = date.fromisoformat(snap) if snap else date.fromisoformat(date_only(now_iso) or "1970-01-01")
 
     def ok_refs(refs):
         out = []
@@ -189,6 +237,17 @@ def main():
     review = load_json(REVIEW_FILE, {})
     fcast = review.get("forecast") or {}
     buckets = fcast.get("buckets") or {}
+    overrides = sheet_overrides(review)
+
+    def with_sheet(deal):
+        return apply_sheet_deal(dict(deal or {}), overrides)
+
+    def signer_for(company):
+        for deal in (company or {}).get("deals") or []:
+            owner = real_owner_name(with_sheet(deal).get("owner") or deal.get("owner"))
+            if owner:
+                return owner
+        return real_owner_name((company or {}).get("owner"))
 
     def bucket_of(label):
         lab = (label or "").lower()
@@ -208,56 +267,95 @@ def main():
     # ---------- candidate queue items ----------
     candidates = []
 
-    # 1) followup_draft from recent Fathom calls with action items
+    # 1) followup_draft from recent Fathom calls with customer-facing action items.
+    # Newest call per company. Skip internal meetings. Skip a call when a later
+    # interaction is already on file — do not claim "nothing since".
     if autonomy.get("draft_followups") in ("queue", "auto", "propose"):
+        follow_rows = []
         for c in companies:
+            if is_junk_name(c.get("name")) or is_internal_meeting(c.get("name"), "", None):
+                continue
+            shown = account_name(c.get("name")) or c.get("name")
+            if not shown or is_junk_name(shown):
+                continue
             for r_ in c.get("recordings") or []:
-                actions = [a for a in (r_.get("actions") or []) if a]
+                invitees = r_.get("invitees") or []
+                if is_internal_meeting(c.get("name"), r_.get("title"), invitees):
+                    continue
+                actions = []
+                for raw in (r_.get("actions") or []):
+                    text = " ".join(clean_md(str(raw)).split())
+                    if customer_facing_action(text):
+                        actions.append(text)
                 if not actions:
                     continue
                 d = day(r_.get("date"))
                 if not d or days_ago(d, today) is None or days_ago(d, today) > RECENT_CALL_DAYS:
                     continue
+                last = co_eng.get(c.get("id"), {}).get("last")
+                if last and last > d:
+                    continue
                 rid = r_.get("id") or ("recording-" + str(r_.get("nativeId") or ""))
                 item_id = "q:followup_draft:" + str(rid).replace("recording-", "")
                 refs = ok_refs(r_.get("refs")) + ok_refs(c.get("refs"))
-                invitees = r_.get("invitees") or []
-                ext = [i for i in invitees if i.get("email") and "opstream" not in str(i.get("email")).lower()]
+                ext = [i for i in invitees if i.get("email") and not str(i.get("email")).lower().endswith("@opstream.ai")]
+                names = []
+                for inv in ext[:3]:
+                    _first, full = person_name(inv.get("name") or inv.get("email"))
+                    if full:
+                        names.append(full)
                 first = first_name(ext[0].get("name") or ext[0].get("email")) if ext else ""
-                greeting = ("Hi %s," % first) if first else "Hi there,"
-                summ = " ".join(clean_md(p.get("x") or p) if isinstance(p, dict) else clean_md(str(p))
-                                for p in (r_.get("summary") or [])[:2])
-                summ = " ".join(summ.split())[:420]
+                greeting = ("Hi %s," % first) if first else "Hi,"
+                summ_bits = []
+                for p in (r_.get("summary") or []):
+                    if isinstance(p, dict) and p.get("t") == "h2":
+                        continue
+                    raw = p.get("x") if isinstance(p, dict) else p
+                    bit = " ".join(clean_md(str(raw or "")).split())
+                    if bit:
+                        summ_bits.append(bit)
+                    if len(summ_bits) >= 2:
+                        break
+                summ = non_english(" ".join(summ_bits)[:420])
                 body_lines = [greeting, "",
                               "Following our call on %s, here are the action items we captured:" % d,
                               ""]
-                body_lines += ["- " + " ".join(clean_md(str(a)).split()) for a in actions[:8]]
+                body_lines += ["- " + a for a in actions[:8]]
                 if summ:
                     body_lines += ["", summ]
-                body_lines += ["", "Happy to pick a time to go through these together.", "", "Hollie"]
+                body_lines += ["", "Happy to pick a time to go through these together."]
+                signed = signer_for(c)
+                if signed:
+                    body_lines += ["", signed]
                 draft_seed = {
-                    "subject": "Following up — %s" % (c.get("name") or "our call"),
+                    "subject": "Following up — %s" % shown,
                     "body": "\n".join(body_lines),
-                    "recipients": ", ".join((i.get("name") or i.get("email") or "")
-                                            for i in ext[:3] if (i.get("name") or i.get("email"))),
+                    "recipients": join_names(names),
                 }
                 item_hash = short_hash("followup", rid, "|".join(actions), r_.get("title"))
-                candidates.append({
-                    "id": item_id, "kind": "followup_draft",
+                follow_rows.append({
+                    "id": item_id, "kind": "followup_draft", "audience": "sales",
                     "title": "Draft follow-up: %s%s" % (
-                        r_.get("title") or c.get("name") or "call",
-                        "%s%s" % (" (%s)" % d if d else "",
-                                  ", %d action item%s" % (len(actions), "" if len(actions) == 1 else "s"))),
-                    "company": c.get("name"), "companyId": c.get("id"),
-                    "why": ("%d action item%s from the %s call \u2014 nothing since "
-                            "suggests they were closed out." % (len(actions), "" if len(actions) == 1 else "s", d)),
+                        r_.get("title") or shown,
+                        " (%s), %d action item%s" % (d, len(actions), "" if len(actions) == 1 else "s")),
+                    "company": shown, "companyId": c.get("id"),
+                    "why": ("%d customer-facing action item%s from the %s call are still open on the recording."
+                            % (len(actions), "" if len(actions) == 1 else "s", d)),
                     "confidence": "high",
-                    "confidenceNote": "Action items are Fathom's own; resolution is not tracked, so treat as owed until Hollie says otherwise.",
+                    "confidenceNote": "Action items are Fathom's own. Resolution is not tracked.",
                     "evidence": refs, "drawerKeys": drawer_keys(refs, c.get("id")),
                     "draftSeed": draft_seed,
                     "needsDecision": autonomy.get("draft_followups") == "propose",
-                    "_hash": item_hash, "_sort": d or "",
+                    "_hash": item_hash, "_sort": newest_key(d), "_company_key": shown.lower(),
                 })
+        follow_rows.sort(key=lambda it: it["_sort"])
+        seen_co = set()
+        for it in follow_rows:
+            key = it.get("_company_key") or ""
+            if key in seen_co:
+                continue
+            seen_co.add(key)
+            candidates.append(it)
 
     # 2) stale_deal: open deals with no engagement in QUIET_DAYS+
     open_deals = []
@@ -265,8 +363,11 @@ def main():
         eng = co_eng.get(c.get("id"), {})
         last = eng.get("last")
         dq = days_ago(last, today) if last else None
-        for d_ in c.get("deals") or []:
-            if d_.get("closed"):
+        for raw_deal in c.get("deals") or []:
+            if raw_deal.get("closed"):
+                continue
+            d_ = with_sheet(raw_deal)
+            if is_junk_name(c.get("name")) or is_junk_name(d_.get("name")):
                 continue
             if not is_open_pipeline({
                 "stage": d_.get("stageLabel") or d_.get("stage"),
@@ -288,28 +389,31 @@ def main():
         ancient = 1 if (dq or 0) > 365 else 0
         return (brank, ancient, dq is None, -(dq or 0))
     quiet.sort(key=_stale_rank)
-    for (c, d_, last, dq) in quiet[:CAPS["stale_deal"]]:
+    for (c, d_, last, dq) in quiet:
         did = d_.get("id") or ("deal-" + str(d_.get("nativeId") or ""))
         item_id = "q:stale_deal:" + str(did).replace("deal-", "")
         refs = ok_refs(d_.get("refs")) + ok_refs(c.get("refs"))
         if co_eng.get(c.get("id"), {}).get("ref"):
             refs = [co_eng[c.get("id")]["ref"]] + refs
         refs = ok_refs(refs)
+        shown = account_name(c.get("name"), d_.get("name")) or c.get("name")
+        if not shown or is_junk_name(shown):
+            continue
         if dq is None:
             detail = d_.get("displayLine") or d_.get("name")
             why = (("No dated engagement is on file for %s, yet the %s deal is still open. "
                    "Worth checking whether it is real or should be closed.") % (
-                       c.get("name"), detail))
+                       shown, detail))
             conf, conf_note = "low", "No engagement records found at all; the deal may simply be untracked."
         else:
             detail = d_.get("displayLine") or d_.get("name")
             why = (("No recorded engagement with %s in %d days. The %s deal has gone quiet.") % (
-                c.get("name"), dq, detail))
+                shown, dq, detail))
             conf, conf_note = "medium", "Based on HubSpot engagements; other channels are not visible."
         candidates.append({
             "id": item_id, "kind": "stale_deal",
-            "title": "Nudge %s — quiet %s" % (c.get("name"), ("%d days" % dq) if dq is not None else "with no engagement on file"),
-            "company": c.get("name"), "companyId": c.get("id"),
+            "title": "Nudge %s — quiet %s" % (shown, ("%d days" % dq) if dq is not None else "with no engagement on file"),
+            "company": shown, "companyId": c.get("id"),
             "deal": d_.get("name"), "dealId": did,
             "stage": d_.get("stageLabel"), "amount": d_.get("amount"),
             "daysQuiet": dq, "lastEngagement": last,
@@ -319,26 +423,53 @@ def main():
             "_sort": str(9999 - (dq or 9999)),
         })
 
-    # 3) unworked_lead
+    # 3) unworked_lead — sheet tracker when it has rows, otherwise HubSpot
+    # contacts the sheet does not list. Newsletter subscribers are not leads.
     if autonomy.get("draft_followups") in ("queue", "auto", "propose"):
-        leads = [l for l in (verified.get("leads") or []) if not l.get("mql")]
-        leads.sort(key=lambda l: l.get("lead") or "", reverse=True)
-        for l in leads[:CAPS["unworked_lead"]]:
-            lid = l.get("id") or ("lead-" + str(l.get("name") or ""))
-            item_id = "q:unworked_lead:" + str(lid).replace("lead-", "")
+        sheet_leads = review.get("leads") or []
+        if sheet_leads:
+            leads = [l for l in sheet_leads if not l.get("mql") and not subscriber_lead(l)]
+        else:
+            leads = []
+            tracker_n = unworked_count(verified.get("leads") or [], review)
+            if tracker_n:
+                candidates.append({
+                    "id": "q:unworked_lead:tracker", "kind": "unworked_lead", "audience": "marketing",
+                    "title": "%d unworked leads on the Lead Tracker" % tracker_n,
+                    "company": None, "companyId": None,
+                    "why": ("The Lead Tracker counts %d unworked leads. The full tracker rows are not in this collection, so they are not listed one by one. Newsletter subscribers are excluded from the contact list." % tracker_n),
+                    "confidence": "high",
+                    "confidenceNote": "Count from the Lead Tracker. Individual sheet rows were not in the extract.",
+                    "evidence": [], "drawerKeys": [],
+                    "_hash": short_hash("lead", "tracker", tracker_n),
+                    "_sort": "",
+                })
+        leads.sort(key=lambda l: l.get("lead") or l.get("leadDate") or "", reverse=True)
+        seen_lead = set()
+        for l in leads:
+            label = l.get("company") or l.get("name") or ""
+            if not label or "@" in str(label) or is_junk_name(label):
+                continue
+            key = str(label).strip().lower()
+            if key in seen_lead:
+                continue
+            seen_lead.add(key)
+            lid = l.get("id") or ("lead-" + key.replace(" ", "-")[:40])
+            item_id = "q:unworked_lead:" + re.sub(r"[^A-Za-z0-9_-]", "", str(lid).replace("lead-", ""))[:48]
             candidates.append({
-                "id": item_id, "kind": "unworked_lead",
-                "title": "Qualify lead: %s" % (l.get("name") or "Unnamed"),
-                "company": None, "companyId": None,
-                "why": ("Lead from %s on %s has no MQL date — nobody has decided whether it is "
-                        "worth a meeting yet." % (l.get("source") or "unknown source", l.get("lead") or "unknown date")),
+                "id": item_id, "kind": "unworked_lead", "audience": "marketing",
+                "title": "Work lead: %s" % label,
+                "company": label, "companyId": None,
+                "why": ("Lead from %s on %s has no MQL date."
+                        % (l.get("source") or "unknown source", l.get("lead") or l.get("leadDate") or "unknown date")),
                 "confidence": "high",
-                "confidenceNote": "Straight from the lead tracker.",
+                "confidenceNote": "From the Lead Tracker." if sheet_leads else "HubSpot contact. The sheet row for this company is not in the collection.",
                 "evidence": [], "drawerKeys": [],
-                "lead": {"name": l.get("name"), "source": l.get("source"),
-                         "leadDate": l.get("lead"), "owner": l.get("owner"), "note": l.get("note")},
+                "lead": {"name": label, "source": l.get("source"),
+                         "leadDate": l.get("lead") or l.get("leadDate"), "owner": l.get("owner"), "note": l.get("note")},
                 "_hash": short_hash("lead", lid, l.get("mql")),
-                "_sort": l.get("lead") or "",
+                "_sort": newest_key(l.get("lead") or l.get("leadDate")),
+                "_company_key": key,
             })
 
     # 4) crm_update proposals (aggregate hygiene items)
@@ -384,17 +515,24 @@ def main():
         by_deal = {}
         for m in review.get("mismatches") or []:
             by_deal.setdefault(str(m.get("dealId") or ""), []).append(m)
-        for did, ms in list(by_deal.items())[:CAPS["sheet_review"]]:
+        for did, ms in by_deal.items():
             m0 = ms[0]
+            if is_junk_name(m0.get("name")) or is_junk_name(m0.get("company")):
+                continue
             c = deal_company.get(did)
             lines = []
+            def _hs_value(m):
+                raw = str(m.get("hubspot") or "").strip()
+                if m.get("field") == "stage" and (not raw or "probability" in raw.lower() or raw.isdigit()):
+                    return "not available"
+                return raw or "not available"
             for m in ms:
                 if m.get("field") == "stage":
-                    lines.append("stage: sheet has it %s, HubSpot implies %s" % (
-                        m.get("sheet"), m.get("hubspot")))
+                    lines.append("stage: sheet has it %s, HubSpot has %s" % (
+                        str(m.get("sheet") or "").split(" (")[0], _hs_value(m)))
                 else:
                     lines.append("%s: sheet says %s, HubSpot says %s" % (
-                        m.get("field"), m.get("sheet"), m.get("hubspot")))
+                        m.get("field"), m.get("sheet"), _hs_value(m)))
             refs = ok_refs(["hubspot:deals:" + did] + (c.get("refs") if c else []))
             candidates.append({
                 "id": "q:sheet_review:" + did, "kind": "sheet_review",
@@ -413,7 +551,7 @@ def main():
                                     "|".join("%s=%s/%s" % (m.get("field"), m.get("sheet"), m.get("hubspot")) for m in ms)),
                 "_sort": "",
             })
-        for s in (review.get("sheetOnly") or [])[:2]:
+        for s in (review.get("sheetOnly") or []):
             did = str(s.get("dealId") or "")
             candidates.append({
                 "id": "q:sheet_review:only-" + did, "kind": "sheet_review",
@@ -452,12 +590,16 @@ def main():
             it["goal"] = "forecast"
         elif k == "unworked_lead":
             it["goal"] = "pipeline"
+            it["audience"] = "marketing"
         elif k == "stale_deal":
             it["goal"] = bucket_of(it.get("stage")) or "pipeline"
         elif k in ("followup_draft", "meeting_prep"):
             it["goal"] = co_bucket.get(it.get("companyId")) or "pipeline"
         else:
             it["goal"] = "pipeline"
+        if not it.get("audience"):
+            blob = (str(it.get("title") or "") + " " + str(it.get("why") or "")).lower()
+            it["audience"] = "marketing" if any(w in blob for w in ("newsletter", "webinar", "campaign", "ad spend")) else "sales"
 
     # meeting_prep is "auto": prep briefs are generated silently, not queued.
     # (If autonomy ever sets it to "queue", prep meetings become queue items too.)
@@ -469,6 +611,10 @@ def main():
                 continue
             delta = days_ago(d, today)
             if delta is None or delta > 0 or delta < -PREP_WINDOW_DAYS:
+                continue
+            if is_internal_meeting(c.get("name"), m.get("title"), m.get("invitees") or []):
+                continue
+            if is_junk_name(c.get("name")) or is_junk_name(m.get("title")):
                 continue
             prep_meetings.append((c, m, d))
     prep_meetings.sort(key=lambda t: t[2])
@@ -500,6 +646,49 @@ def main():
                 "_hash": short_hash("mtgprep", mid, m.get("start")),
                 "_sort": d,
             })
+
+    month_key = today.strftime("%Y-%m")
+    commit_preview = commit_for_close_month([
+        {
+            "stage": d_.get("stageLabel") or d_.get("stage"),
+            "stageLabel": d_.get("stageLabel") or d_.get("stage"),
+            "dealName": d_.get("name") or "",
+            "name": d_.get("name") or "",
+            "companyName": account_name(c.get("name"), d_.get("name")) or c.get("name"),
+            "close": d_.get("close"),
+            "closed": False,
+            "amount": d_.get("amount"),
+        }
+        for (c, d_, _last, _dq) in open_deals
+    ], month_key, today.isoformat())
+    if commit_preview["deals"]:
+        listed = ", ".join(
+            "%s $%s (close %s)" % (
+                d.get("companyName") or "Deal",
+                f"{float(d.get('amount') or 0):,.0f}",
+                date_only(d.get("close")) or "not available")
+            for d in commit_preview["deals"])
+        candidates.append({
+            "id": "q:crm_update:commit-month",
+            "kind": "crm_update",
+            "audience": "sales",
+            "title": "Commit closing in %s" % month_key,
+            "company": None,
+            "companyId": None,
+            "why": "%s. Deals: %s." % (
+                commit_versus_target(
+                    commit_preview["amount"],
+                    (((buckets.get("commit") or {}).get("targets") or {}).get(month_key) or 0),
+                ).get("text") or "Commit for this close month",
+                listed),
+            "confidence": "high",
+            "confidenceNote": "Sheet close date and commit stage. Past close dates are excluded.",
+            "evidence": [],
+            "drawerKeys": [],
+            "goal": "commit",
+            "_hash": short_hash("commit", month_key, listed),
+            "_sort": "0",
+        })
 
     # ---------- anti-nag: dismissals + 7-day re-surface rule ----------
     # The queue is persistent (Hollie works through it), but an item is only
@@ -551,18 +740,78 @@ def main():
     kind_rank = {"followup_draft": 0, "meeting_prep": 1, "stale_deal": 2,
                  "sheet_review": 3, "unworked_lead": 4, "crm_update": 5}
     queue.sort(key=lambda it: (kind_rank.get(it["kind"], 9), not it["isNew"], it.pop("_sort", "")))
-    # stable numbering after sort
-    for i, it in enumerate(queue, 1):
-        it["n"] = i
-    # per-kind caps (applied in rank order)
-    seen = {}
-    capped = []
+    # One customer action per company. Follow-ups sort ahead of quiet nudges.
+    # Sheet mismatches are a different decision and stay even when the company
+    # already has a nudge. Items with no company stay.
+    action_kinds = {"followup_draft", "stale_deal"}
+    deduped_q, seen_co = [], {}
     for it in queue:
-        k = it["kind"]
-        seen[k] = seen.get(k, 0) + 1
-        if seen[k] <= CAPS.get(k, 8):
-            capped.append(it)
-    queue = capped
+        it.pop("_company_key", None)
+        if it.get("kind") not in action_kinds:
+            deduped_q.append(it)
+            continue
+        key = str(it.get("company") or "").strip().lower()
+        if not key:
+            deduped_q.append(it)
+            continue
+        prev = seen_co.get(key)
+        if prev is None:
+            seen_co[key] = it
+            deduped_q.append(it)
+            continue
+        # Higher-priority kinds already sorted first (follow-up before a stale
+        # nudge). Only two quiet-deal rows for the same name compete, and the
+        # more recent engagement wins.
+        if it.get("kind") == "stale_deal" and prev.get("kind") == "stale_deal":
+            if (it.get("daysQuiet") if it.get("daysQuiet") is not None else 10**9) < (
+                    prev.get("daysQuiet") if prev.get("daysQuiet") is not None else 10**9):
+                deduped_q[deduped_q.index(prev)] = it
+                seen_co[key] = it
+    queue = deduped_q
+    pins = (load_json(PINS_FILE, {}) or {}).get("pins") or []
+    pinned_needles = set()
+    for pin in pins:
+        needles = [str(pin.get("match") or "")] + list(pin.get("also") or [])
+        needles = [n.lower() for n in needles if n]
+        try:
+            rank = int(pin.get("rank") or 1)
+        except (TypeError, ValueError):
+            rank = 1
+        idx = None
+        for i, it in enumerate(queue):
+            blob = " ".join(str(it.get(k) or "") for k in ("company", "title", "deal")).lower()
+            if any(n in blob for n in needles):
+                idx = i
+                break
+        if idx is None:
+            needle = (pin.get("match") or "").lower()
+            company = next((c for c in companies if needle and needle in str(c.get("name") or "").lower() and not is_junk_name(c.get("name"))), None)
+            if company is None:
+                continue
+            shown = account_name(company.get("name")) or company.get("name")
+            item = {
+                "id": "q:pinned:" + re.sub(r"[^A-Za-z0-9_-]", "", needle)[:40],
+                "kind": "stale_deal",
+                "audience": "sales",
+                "goal": "pipeline",
+                "title": "Priority: %s" % shown,
+                "company": shown,
+                "companyId": company.get("id"),
+                "why": "Pinned by hand. %s." % (pin.get("note") or "No note on the pin."),
+                "confidence": "high",
+                "confidenceNote": "From scripts/priority-pins.json. Edit that file, or a Lead Tracker-style sheet tab later, to change the order.",
+                "evidence": ok_refs(company.get("refs")),
+                "drawerKeys": drawer_keys(ok_refs(company.get("refs")), company.get("id")),
+                "pinned": pin.get("note") or True,
+                "isNew": True,
+            }
+            queue.insert(max(0, rank - 1), item)
+            pinned_needles.add(needle)
+            continue
+        item = queue.pop(idx)
+        item["pinned"] = pin.get("note") or True
+        queue.insert(max(0, rank - 1), item)
+        pinned_needles.add((pin.get("match") or "").lower())
     for i, it in enumerate(queue, 1):
         it["n"] = i
 
@@ -595,16 +844,25 @@ def main():
     rec_by_date = []
     for c in companies:
         for r_ in c.get("recordings") or []:
-            acts = [a for a in (r_.get("actions") or []) if a]
+            if is_internal_meeting(c.get("name"), r_.get("title"), r_.get("invitees") or []):
+                continue
+            acts = []
+            for raw in (r_.get("actions") or []):
+                text = " ".join(clean_md(str(raw)).split())
+                if customer_facing_action(text):
+                    acts.append(text)
             if not acts:
                 continue
             d = day(r_.get("date"))
             if not d or (days_ago(d, today) or 9999) > RECENT_CALL_DAYS:
                 continue
+            last = co_eng.get(c.get("id"), {}).get("last")
+            if last and last > d:
+                continue
             rec_by_date.append((d, c, r_, acts))
     rec_by_date.sort(key=lambda t: t[0], reverse=True)
     owed = []
-    for (d, c, r_, acts) in rec_by_date[:10]:
+    for (d, c, r_, acts) in rec_by_date:
         refs = ok_refs(r_.get("refs"))
         owed.append({
             "recordingId": r_.get("id"), "title": r_.get("title"), "date": d,
@@ -617,11 +875,14 @@ def main():
                        "note": None if owed else "No unresolved Fathom action items in the last %d days." % RECENT_CALL_DAYS}
 
     unworked_total = unworked_count(verified.get("leads") or [], review)
-    new_leads = [l for l in (verified.get("leads") or []) if not l.get("mql")]
-    new_leads.sort(key=lambda l: l.get("lead") or "", reverse=True)
-    lead_items = [{"leadId": l.get("id"), "name": l.get("name"), "source": l.get("source"),
-                   "leadDate": l.get("lead"), "owner": l.get("owner"), "note": l.get("note")}
-                  for l in new_leads[:8]]
+    if review.get("leads"):
+        new_leads = [l for l in review.get("leads") or [] if not l.get("mql") and not subscriber_lead(l)]
+    else:
+        new_leads = [l for l in (verified.get("leads") or []) if not l.get("mql") and not subscriber_lead(l)]
+    new_leads.sort(key=lambda l: l.get("lead") or l.get("leadDate") or "", reverse=True)
+    lead_items = [{"leadId": l.get("id"), "name": l.get("company") or l.get("name"), "source": l.get("source"),
+                   "leadDate": l.get("lead") or l.get("leadDate"), "owner": l.get("owner"), "note": l.get("note")}
+                  for l in new_leads[:8] if (l.get("company") or l.get("name")) and "@" not in str(l.get("company") or l.get("name"))]
     brief_leads = {"items": lead_items, "total": unworked_total,
                    "note": None if unworked_total else "No unworked leads found."}
 
@@ -710,23 +971,39 @@ def main():
                 agenda.append("%s — %s" % (dd["name"], detail))
         if eng.get("last"):
             dq = days_ago(eng["last"], today)
-            if dq is not None and dq < 0:
-                # Defensive: should not happen after the future-date filter above.
-                agenda.append("Last engagement %s (date is in the future — check the record)" % eng["last"])
-            else:
-                agenda.append("Last engagement %s (%s ago)" % (
-                    eng["last"], ("%d days" % dq) if dq is not None else "date unknown"))
+            agenda.append("Last engagement %s" % eng["last"])
         if not agenda:
             agenda.append("No recent context on file — use the first minutes to re-establish where things stand.")
         refs = ok_refs(m.get("refs")) + ok_refs(c.get("refs"))
         # Attendees: company contacts with titles (who is she talking to?)
-        attendees = [{"name": p.get("name"), "title": p.get("title"), "email": p.get("email")}
-                     for p in (c.get("contacts") or [])[:5] if p.get("name")]
-        # Call goal: based on the most advanced open deal stage
+        def _dom_score(email, company_name):
+            dom = str(email or "").lower().split("@")[-1].split(".")[0]
+            blob = re.sub(r"[^a-z0-9]", "", str(company_name or "").lower())
+            return 2 if dom and len(dom) > 2 and dom in blob else 0
+        attendees, seen_att = [], {}
+        for p in (c.get("contacts") or []):
+            nm = (p.get("name") or "").strip()
+            if not nm:
+                continue
+            key = re.sub(r"\s+", " ", nm).strip().lower()
+            row = {"name": nm, "title": p.get("title"), "email": p.get("email")}
+            prev_i = seen_att.get(key)
+            if prev_i is not None:
+                prev = attendees[prev_i]
+                if _dom_score(row.get("email"), c.get("name")) > _dom_score(prev.get("email"), c.get("name")):
+                    attendees[prev_i] = row
+                continue
+            if len(attendees) >= 5:
+                continue
+            seen_att[key] = len(attendees)
+            attendees.append(row)
+        # Call goal: based on the most advanced open deal stage. Do not use a
+        # deal title such as "Renewal" as the sentence subject.
         call_goal = None
         if open_d:
             top_deal = open_d[0]
             stage = (top_deal.get("stage") or "").lower()
+            subject = account_name(c.get("name"), top_deal.get("name")) or c.get("name")
             if "discovery" in stage or "rpf" in stage or "rfp" in stage:
                 call_goal = "Understand their pain points and confirm there's a real fit — don't pitch yet."
             elif "demo" in stage:
@@ -736,10 +1013,10 @@ def main():
             elif "stakeholder" in stage:
                 call_goal = "Expand to the wider buying group. Identify the economic buyer."
             else:
-                call_goal = "Move the %s deal forward — agree on concrete next steps." % top_deal.get("name")
+                call_goal = "Agree on concrete next steps with %s." % (subject or "this account")
         prep.append({
             "meetingId": m.get("id"), "title": m.get("title"), "start": m.get("start"),
-            "outcome": m.get("outcome"), "company": c.get("name"), "companyId": cid,
+            "outcome": m.get("outcome"), "company": account_name(c.get("name"), (open_d[0].get("name") if open_d else None)) or c.get("name"), "companyId": cid,
             "attendees": attendees,
             "callGoal": call_goal,
             "accountHistory": {
@@ -757,13 +1034,44 @@ def main():
             "drawerKeys": drawer_keys(refs, cid),
         })
 
+    collapsed, seen_prep = [], set()
+    for pr in prep:
+        if pr.get("lastCall"):
+            lines = [clean_md(s) for s in (pr["lastCall"].get("summary") or [])]
+            if any(re.search(r"[\u0590-\u05FF\u0600-\u06FF]", s or "") for s in lines):
+                lines = ["[Summary is not in English]"] + [s for s in lines if s]
+            pr["lastCall"]["summary"] = lines
+            purpose = clean_md(pr["lastCall"].get("purpose") or "")
+            if purpose and re.search(r"[\u0590-\u05FF\u0600-\u06FF]", purpose):
+                purpose = "[Summary is not in English] " + purpose
+            pr["lastCall"]["purpose"] = purpose or None
+        key = (str(pr.get("company") or "").lower(), str(pr.get("callGoal") or "").lower())
+        if key in seen_prep:
+            continue
+        seen_prep.add(key)
+        collapsed.append(pr)
+    prep = collapsed
+
     # ---------- goals: the queue, organized around Hollie's actual job ----------
-    # Bucket open-deal value from the sheet-authoritative stage labels.
+    # Commit is deals in a commit stage whose Sheet close date is this month
+    # and has not passed. Best case and pipeline stay stage buckets.
     bucket_value = {"commit": 0.0, "bestcase": 0.0, "pipeline": 0.0}
+    shaped_deals = []
     for c in companies:
-        for d_ in c.get("deals") or []:
-            if d_.get("closed"):
+        for raw_deal in c.get("deals") or []:
+            if raw_deal.get("closed"):
                 continue
+            d_ = with_sheet(raw_deal)
+            shaped_deals.append({
+                "stage": d_.get("stageLabel") or d_.get("stage"),
+                "stageLabel": d_.get("stageLabel") or d_.get("stage"),
+                "dealName": d_.get("name") or "",
+                "name": d_.get("name") or "",
+                "companyName": account_name(c.get("name"), d_.get("name")) or c.get("name"),
+                "close": d_.get("close"),
+                "closed": False,
+                "amount": d_.get("amount"),
+            })
             if not is_open_pipeline({
                 "stage": d_.get("stageLabel") or d_.get("stage"),
                 "dealName": d_.get("name") or "",
@@ -771,25 +1079,30 @@ def main():
                 "closed": False,
             }, today.isoformat()):
                 continue
-            b = bucket_of(d_.get("stageLabel"))
-            if b in bucket_value and d_.get("amount"):
+            b = bucket_of(d_.get("stageLabel") or d_.get("stage"))
+            if b in ("bestcase", "pipeline") and d_.get("amount"):
                 bucket_value[b] += d_["amount"]
     month = today.strftime("%Y-%m")
     month_name = today.strftime("%B")
+    commit_rows = commit_for_close_month(shaped_deals, month, today.isoformat())
+    bucket_value["commit"] = commit_rows["amount"]
     targets = {k: (b.get("targets") or {}).get(month) or 0
                for k, b in buckets.items()}
     lt = (review.get("leadTracker") or {})
-    n_mismatch = len(review.get("mismatches") or [])
-    n_no_amount = sum(1 for c in companies for d_ in (c.get("deals") or [])
-                      if not d_.get("closed") and d_.get("amount") is None)
+    n_mismatch = sum(1 for it in queue if it.get("kind") == "sheet_review")
+    n_no_amount = sum(1 for (_c, d_, _last, _dq) in open_deals if d_.get("amount") is None)
 
     def usd0(x):
         return "$%s" % f"{x:,.0f}"
 
+    commit_names = ", ".join(
+        "%s %s" % (d.get("companyName") or d.get("name") or "Deal", usd0(float(d.get("amount") or 0)))
+        for d in commit_rows["deals"]) or "no deals"
+    commit_text = commit_versus_target(bucket_value["commit"], targets.get("commit")).get("text") or (
+        "%s closing in %s" % (usd0(bucket_value["commit"]), month_name))
     goal_defs = [
         ("commit", "Land the %s commit" % month_name,
-         commit_versus_target(bucket_value["commit"], targets.get("commit")).get("text")
-         or ("%s in commit stages" % usd0(bucket_value["commit"]))),
+         commit_text + ". Deals: " + commit_names + "."),
         ("bestcase", "Turn best case into commit",
          "%s sitting in %s" % (usd0(bucket_value["bestcase"]),
                                 (buckets.get("bestcase") or {}).get("label") or "best-case stages")),
@@ -810,6 +1123,7 @@ def main():
 
     out = {
         "generatedAt": now_iso,
+        "runId": run_id,
         "snapshotId": records.get("verifiedSnapshotId") or verified.get("snapshotId"),
         "autonomy": autonomy,
         "autonomyText": {

@@ -15,7 +15,9 @@ const dataDir = path.join(root, 'out', 'data');
 const CERTIFIED_DAY = '2026-09-26';
 const verified = JSON.parse(fs.readFileSync(path.join(dataDir, 'verified.json'), 'utf8'));
 const records = JSON.parse(fs.readFileSync(path.join(dataDir, 'records.json'), 'utf8'));
-const certified = computeFacts(verified, records, CERTIFIED_DAY);
+let sheetReview = null;
+try { sheetReview = JSON.parse(fs.readFileSync(path.join(dataDir, 'sheet-review.json'), 'utf8')); } catch { sheetReview = null; }
+const certified = computeFacts(verified, records, CERTIFIED_DAY, sheetReview);
 const facts = loadWorkspace(dataDir);
 const failures = [];
 
@@ -47,11 +49,11 @@ check('largest deal', certifiedLargest.dealName === 'NXP - New Deal', JSON.strin
 check('largest amount', certifiedLargest.amount === 500000 && certifiedLargest.amountLabel === '$500,000', JSON.stringify(certifiedLargest.amount) + ' ' + certifiedLargest.amountLabel);
 check('largest in open book', certifiedLargest.inOpenBook === true, String(certifiedLargest.inOpenBook));
 check('open count', certifiedMetrics.openCount === 83, String(certifiedMetrics.openCount));
-check('open amount', certifiedMetrics.openAmount === 4736300 && certifiedMetrics.openAmountLabel === '$4,736,300', certifiedMetrics.openAmount + ' ' + certifiedMetrics.openAmountLabel);
-check('weighted', certifiedMetrics.weighted === 1212860 && certifiedMetrics.weightedLabel === '$1,212,860', certifiedMetrics.weighted + ' ' + certifiedMetrics.weightedLabel);
+check('open amount', certifiedMetrics.openAmount === 4696300 && certifiedMetrics.openAmountLabel === '$4,696,300', certifiedMetrics.openAmount + ' ' + certifiedMetrics.openAmountLabel);
+check('weighted', certifiedMetrics.weighted === 1210860 && certifiedMetrics.weightedLabel === '$1,210,860', certifiedMetrics.weighted + ' ' + certifiedMetrics.weightedLabel);
 check('funnel', certifiedMetrics.leads === 383 && certifiedMetrics.mql === 279 && certifiedMetrics.sql === 118, [certifiedMetrics.leads, certifiedMetrics.mql, certifiedMetrics.sql].join('/'));
 check('live largest still NXP', largest.company === 'NXP' && largest.amount === 500000, JSON.stringify(largest));
-check('live open book unchanged', metrics.openCount === 83 && metrics.openAmount === 4736300 && metrics.weighted === 1212860, [metrics.openCount, metrics.openAmount, metrics.weighted].join('/'));
+check('live open book sheet-authoritative', metrics.openCount === 83 && metrics.openAmount === 4696300 && metrics.weighted === 1210860, [metrics.openCount, metrics.openAmount, metrics.weighted].join('/'));
 check('collected timestamp', !!metrics.collectedAt && facts.context.includes('DATA COLLECTED:') && facts.context.includes(metrics.collectedAt) && String(metrics.collectedLabel).includes('Phoenix'), metrics.collectedLabel || 'missing');
 const revA = dataRevision(dataDir);
 const revB = dataRevision(dataDir);
@@ -74,7 +76,8 @@ const largestLine = lines.find(l => l.startsWith('LARGEST OPEN DEAL:'));
 check('context largest line', !!largestLine && largestLine.includes('NXP') && largestLine.includes('$500,000') && !/kidde/i.test(largestLine), largestLine || 'missing');
 const renewalLine = lines.find(l => l.includes('Renewal Agreement - 2027') && l.includes('$514,800'));
 check('context renewal label', !!renewalLine && renewalLine.includes('NOT IN THE OPEN BOOK (renewal)'), renewalLine || 'missing');
-check('context open total', certified.context.includes('OPEN PIPELINE: 83 deals, $4,736,300 open, $1,212,860 weighted.'), 'missing open pipeline line');
+check('context open total', certified.context.includes('OPEN PIPELINE: 83 deals, $4,696,300 open, $1,210,860 weighted.'), 'missing open pipeline line');
+check('marketing brief in context', certified.context.includes('MARKETING BRIEF'), 'missing marketing brief');
 check('context funnel', certified.context.includes('383 leads / 279 MQL / 118 SQL'), 'missing funnel line');
 check('live funnel line', facts.context.includes(metrics.leads + ' leads / ' + metrics.mql + ' MQL / ' + metrics.sql + ' SQL'), 'missing live funnel line');
 
@@ -88,7 +91,8 @@ sys.path.insert(0, "scripts")
 from gtm_metrics import snapshot_metrics
 ver = json.load(open("out/data/verified.json"))
 rec = json.load(open("out/data/records.json"))
-book = snapshot_metrics(ver, rec)
+review = json.load(open("out/data/sheet-review.json"))
+book = snapshot_metrics(ver, rec, today="2026-09-26", sheet_review=review)
 kidde = [d for d in book["deals"] if "Renewal Agreement - 2027" in (d.get("dealName") or "") and d.get("amount") == 514800]
 print(json.dumps({
   "today": book["today"],

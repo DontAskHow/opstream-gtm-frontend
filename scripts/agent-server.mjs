@@ -18,6 +18,7 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { DATA_TOOL_SCHEMAS, collectedLabel, computeFacts, dataRevision, needsReload, runAssistantTool } from './workspace-facts.mjs';
+import { persistStateFile, pollPublished } from './published-swap.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
@@ -143,7 +144,9 @@ function buildContext() {
     const verified = readJson(path.join(dataDir, 'verified.json'));
     const records = readJson(path.join(dataDir, 'records.json'));
     const trunc = (s, n) => clip(s, n).replace(/\s+/g, ' ');
-    FACTS = computeFacts(verified, records);
+    let sheetReview = null;
+    try { sheetReview = readJson(path.join(dataDir, 'sheet-review.json')); } catch { sheetReview = null; }
+    FACTS = computeFacts(verified, records, null, sheetReview);
     const lines = [FACTS.context];
     // Call summaries + action items (NOT full transcripts: too large for per-question context).
     for (const c of records.companies || []) {
@@ -230,6 +233,9 @@ AUTONOMY (hard rules — never break these):
 
 Answer using only the workspace data. Be concise and concrete: names, numbers, dates.
 The open book is already computed in the OPEN BOOK METRICS lines and in get_pipeline_metrics. It excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Repeat those figures. A larger renewal, current agreement, on-hold, disqualified, or past-close amount is not the largest open deal. If you mention one, name that reason and say it is not in the open book. Owner labels that start with "Owner #…" mean the name is not connected; do not invent a person's name. Quiet-day figures in the data are already computed; repeat them. The DATA COLLECTED line is the timestamp of the files on disk. Repeat it when you give current pipeline or lead figures.
+Timestamps that end in Z are UTC. Answer in America/Phoenix. Never show a UTC clock time.
+The MARKETING BRIEF lines (this week, 6-week average, source table) are already computed. Repeat them. Do not calculate another weekly lead count.
+When you draft an email, sign with the deal owner's name only when that name is a person in the data. If the owner is "Owner #…" or missing, leave the draft unsigned. Do not sign as Hollie unless she is the named deal owner.
 Format your answer as a compact HTML fragment using only <p>, <ul>, <ol>, <li>, <strong>, <em>, <br>. Output raw HTML only, never markdown — markdown is displayed to the user as literal asterisks and dashes. No code fences, no <h1>.
 
 You can also take actions with tools:
@@ -648,6 +654,7 @@ const server = http.createServer((req, res) => {
       arr.push({ itemId, action, at: new Date().toISOString() });
       try { fs.writeFileSync(fp, JSON.stringify(arr.slice(-500))); }
       catch (e) { res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Could not save.' })); return; }
+      persistStateFile(path.resolve('.'), 'hollie-feedback.json', fs.readFileSync(fp)).catch(() => {});
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));
       return;
     }
@@ -812,6 +819,7 @@ const server = http.createServer((req, res) => {
       arr[idx] = { ...arr[idx], status: decision, decidedAt: new Date().toISOString() };
       try { fs.writeFileSync(fp, JSON.stringify(arr.slice(-500))); }
       catch (e) { res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Could not save.' })); return; }
+      persistStateFile(path.resolve('.'), 'crm-proposals.json', fs.readFileSync(fp)).catch(() => {});
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));
       return;
     }
@@ -827,3 +835,19 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => console.log('GTM workspace + agent: http://127.0.0.1:' + server.address().port));
+
+const pollMinutes = 10;
+async function pollLoop() {
+  try {
+    const result = await pollPublished({
+      appRoot: path.resolve('.'),
+      dataDir,
+      onSwap() { FACTS = null; revision = ''; },
+    });
+    if (result && result.error) console.error('[refresh] ' + result.reason + ': ' + result.error);
+  } catch (err) {
+    console.error('[refresh] kept last good: ' + (err && err.message ? err.message : err));
+  }
+}
+setTimeout(pollLoop, 15000);
+setInterval(pollLoop, pollMinutes * 60 * 1000);

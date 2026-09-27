@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gtm_metrics import date_only, is_open_pipeline, phoenix_today, probability_fraction, stage_display
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB = os.path.expanduser('~/workspace/brain/brain.db')
-OUT = os.path.join(ROOT, 'out', 'data')
+DB = os.environ.get('BRAIN_DB') or os.path.expanduser('~/workspace/brain/brain.db')
+OUT = os.environ.get('OUT_DATA') or os.path.join(ROOT, 'out', 'data')
 # Upcoming versus past meetings follow the Phoenix calendar on the day this
 # file is generated, not a date frozen into the script.
 TODAY = phoenix_today()
@@ -138,6 +138,9 @@ def clean_domain(d):
     return d or None
 
 def main():
+    if not os.path.isfile(DB):
+        print('brain.db is missing at %s. Refusing to write synthetic data.' % DB, file=sys.stderr)
+        return 1
     os.makedirs(os.path.join(OUT, 'transcripts'), exist_ok=True)
     # Remove stale synthetic transcripts (the agent server globs this dir).
     for f in os.listdir(os.path.join(OUT, 'transcripts')):

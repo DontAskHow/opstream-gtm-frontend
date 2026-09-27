@@ -66,14 +66,17 @@ Component.prototype.renderVals=function(){
   v.accountOrderNote=s.accounts==='follow'?'Order: saved follow-up review · personal priority ratings do not change this list.':s.accounts==='leads'?'Order: newest lead date first · missing lead dates last.':'Order: one row per account. '+({amount:'Largest amount first. HubSpot probability is not used.',close:'Earliest close date first.',interaction:'Most recent past interaction first. Accounts with no interaction date are last.',name:'Account name, A to Z.'}[s.sort||'amount']||'Largest amount first.')+' Deals with a past close date are listed after current ones.';
   const localNotes=this._priorityNotes();
   const companies=(s.records&&s.records.companies)||[];
-  const findCompany=item=>companies.find(c=>c.id===item.companyId||c.name===item.company||(item.context||'').startsWith(c.name));
+  const findCompany=item=>{
+    if(item.companyId){const byId=companies.find(c=>c.id===item.companyId);if(byId)return byId;}
+    return companies.find(c=>c.name===item.company||(item.context||'').startsWith(c.name));
+  };
   const annotate=item=>{
     if(!item||!item.id)return item;
     const company=findCompany(item);
     const saved=localNotes[item.id]||{};
     const last=company?workspaceModel.lastEngagement(company):null;
     item.owner=workspaceModel.displayOwner(company&&company.owner);
-    item.lastInteraction=last?workspaceModel.formatDate(last):'—';
+    item.lastInteraction=last?workspaceModel.formatDate(last)+' · '+workspaceModel.relativeLabel(last, workspaceModel.phoenixToday()):'—';
     item.important=!!saved.important;
     item.importantLabel=saved.important?'Important':'Mark important';
     item.commentsOpen=s.priorityNoteId===item.id;

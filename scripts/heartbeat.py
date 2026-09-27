@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gtm_metrics import greeting, phoenix_today, snapshot_metrics
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(REPO, "out", "data")
+DATA = os.environ.get("OUT_DATA") or os.path.join(REPO, "out", "data")
 HEARTBEAT_JSON = os.path.join(DATA, "heartbeat.json")
 CHAT_CLI = os.path.expanduser("~/workspace/skills/openai/bin/chat.py")
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
@@ -65,6 +65,10 @@ def load_json(path):
 
 
 def call_openai(payload):
+    key = os.environ.get("OPENAI_API_KEY") or ""
+    if key and not os.path.exists(CHAT_CLI):
+        from openai_direct import chat_completion
+        return chat_completion(payload, key)
     proc = subprocess.Popen(
         ["python3", CHAT_CLI],
         stdin=subprocess.PIPE,
@@ -142,6 +146,8 @@ def health_check():
 
 
 def append_heartbeat_proposals(proposals):
+    """Mismatches stay in the operator queue only. Nothing is written to HubSpot."""
+    return 0
     """Queue mismatch resolutions as CRM proposals (human approves; nothing
     touches HubSpot). Dedupes against already-proposed items. Returns count added."""
     path = os.path.join(DATA, "crm-proposals.json")
@@ -300,6 +306,9 @@ def build_fixes(missing_amount_deals, quiet_deals):
 
 
 def main():
+    if os.environ.get("GTM_FACTS_ONLY") == "1":
+        log("facts pulse already written for this run")
+        return 0
     ver = load_json(os.path.join(DATA, "verified.json"))
     hop = load_json(os.path.join(DATA, "hollie.json"))
     sr = load_json(os.path.join(DATA, "sheet-review.json"))
