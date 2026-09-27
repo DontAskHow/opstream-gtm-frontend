@@ -7,7 +7,7 @@ Parameters:
     Default: latest
   SourceKey:
     Type: String
-    Default: code/refresh-src/v9.zip
+    Default: code/refresh-src/v10.zip
     Description: Key in opstream-gtm-data-080403790510 of the refresh source zip
   VpcId:
     Type: AWS::EC2::VPC::Id
@@ -69,6 +69,9 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
                 Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*
+              - Effect: Allow
+                Action: secretsmanager:ListSecrets
+                Resource: "*"
               # HubSpot OAuth rotation is written back to this one secret.
               - Effect: Allow
                 Action:
@@ -226,6 +229,13 @@ Resources:
               - secretsmanager:CreateSecret
               - secretsmanager:PutSecretValue
             Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/google-sheets-refresh-token-*
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+              - secretsmanager:CreateSecret
+              - secretsmanager:PutSecretValue
+            Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/users/*
 
   CodeBuildRole:
     Type: AWS::IAM::Role

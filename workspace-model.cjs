@@ -93,6 +93,9 @@ const workspaceModel = {
     const stripped=s.replace(/^(owner\s+)+/i,'').trim();
     if(!stripped)return {label:'Unassigned', title:'', key:'Unassigned', named:true};
     if(/^owner name not connected$/i.test(stripped))return {label:'Owner name not connected', title:"Owner name isn't connected", key:'Owner name not connected', named:false};
+    const book=this.ownerCatalog||{};
+    const hit=book[stripped]||book[s]||book[String(stripped).toLowerCase()];
+    if(typeof hit==='string'&&hit.trim())return {label:hit.trim(), title:'', key:stripped, named:true};
     if(/^\d+$/.test(stripped)||/^[a-f0-9-]{8,}$/i.test(stripped)){
       const digits=stripped.replace(/\D/g,'')||stripped;
       const n=Math.min(digitsWanted, digits.length);

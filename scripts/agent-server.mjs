@@ -18,16 +18,41 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { DATA_TOOL_SCHEMAS, collectedLabel, computeFacts, dataRevision, needsReload, runAssistantTool } from './workspace-facts.mjs';
-import { persistStateFile, pollPublished, getSecretString, putSecretString } from './published-swap.mjs';
+import { fileURLToPath } from 'node:url';
+import { loadRefreshConfig, persistStateFile, readStateFile, pollPublished, getSecretString, putSecretString } from './published-swap.mjs';
 import { createSheetsConnect, plainPage, REFRESH_SECRET_ID } from './sheets-connect.mjs';
+import {
+  USER_STATE_PREFIX, COMPOSE_STATE_PREFIX, READ_SCOPES, COMPOSE_SCOPE,
+  emailAllowed, userHash, userSecretId, authUrl, exchangeCode, refreshAccessToken,
+  sessionPublic, secretDocument, safeCode,
+} from './google-identity.mjs';
+import {
+  GOOGLE_TOOL_SCHEMAS, isGoogleTool, runGoogleTool, buildPersonalBrief, gtmIndex, createGmailDraft,
+} from './google-workspace.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
-// Per-user Gmail OAuth token storage: sessionId -> { accessToken, refreshToken, email, expiresAt }
-const gmailSessions = new Map();
+// Signed-in people. The refresh token stays in this process and in Secrets Manager.
+const userSessions = new Map();
+const userStates = new Map();
+let gtmIndexCache = null;
 
-// OAuth state for CSRF: state -> { sessionId, createdAt }
-const oauthStates = new Map();
+const hooks = {
+  fetchImpl: (...args) => fetch(...args),
+  putSecretString,
+  getSecretString,
+  callChatApi: null,
+};
+
+export function setHooks(next) {
+  Object.assign(hooks, next || {});
+}
+
+export function resetAuth() {
+  userSessions.clear();
+  userStates.clear();
+  gtmIndexCache = null;
+}
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET || '';
@@ -93,63 +118,94 @@ const getSessionId = (req, res) => {
   return sid;
 };
 
-// Refresh a user's Gmail access token if expired
-const refreshGmailToken = async (session) => {
-  if (!session.refreshToken) throw new Error('No refresh token');
-  if (session.expiresAt > Date.now() + 60000) return session.accessToken; // Still valid
-  
-  const params = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
-    client_secret: GOOGLE_CLIENT_SECRET,
-    refresh_token: session.refreshToken,
-    grant_type: 'refresh_token',
-  });
-  const r = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
-  });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error_description || 'Token refresh failed');
-  session.accessToken = j.access_token;
-  session.expiresAt = Date.now() + (j.expires_in * 1000);
-  return session.accessToken;
-};
+function readCookies(req) {
+  return Object.fromEntries((req.headers.cookie || '').split(';').map(c => {
+    const [k, ...v] = c.trim().split('=');
+    return [k, v.join('=')];
+  }).filter(pair => pair[0]));
+}
 
-// Send email via Gmail API using user's OAuth token
-const sendGmailApi = async (accessToken, to, subject, body) => {
-  // Build RFC 2822 message
-  const msg = [
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    'Content-Type: text/plain; charset=utf-8',
-    '',
-    body,
-  ].join('\r\n');
-  const raw = Buffer.from(msg).toString('base64url');
-  
-  const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ raw }),
-  });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Gmail API send failed');
-  return j;
-};
+function userCookie(value, maxAge) {
+  const secure = OAUTH_PUBLIC_BASE_URL.startsWith('https://') ? '; Secure' : '';
+  return 'gtm_user=' + (value || '') + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + maxAge + secure;
+}
 
-// Get user's email via Gmail API
-const getGmailProfile = async (accessToken) => {
-  const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
-    headers: { 'Authorization': `Bearer ${accessToken}` },
+function currentUser(req) {
+  const sid = readCookies(req).gtm_user || '';
+  if (!/^[a-f0-9]{32}$/.test(sid)) return null;
+  const session = userSessions.get(sid);
+  return session ? { ...session, sid } : null;
+}
+
+function allowList() {
+  const cfg = loadRefreshConfig(path.resolve('.'));
+  return cfg && Array.isArray(cfg.googleAllow) ? cfg.googleAllow : [];
+}
+
+async function ensureAccess(session) {
+  if (!session || !session.refreshToken) return '';
+  if (session.expired) return '';
+  if (session.accessToken && session.expiresAt > Date.now() + 60000) return session.accessToken;
+  try {
+    const client = await loadGoogleOAuthClient();
+    const refreshed = await refreshAccessToken({
+      refreshToken: session.refreshToken,
+      client,
+      fetchImpl: hooks.fetchImpl,
+    });
+    session.accessToken = refreshed.accessToken;
+    session.expiresAt = Date.now() + refreshed.expiresIn * 1000;
+    session.expired = false;
+    const stored = userSessions.get(session.sid);
+    if (stored) {
+      stored.accessToken = session.accessToken;
+      stored.expiresAt = session.expiresAt;
+      stored.expired = false;
+    }
+    return session.accessToken;
+  } catch (err) {
+    if (safeCode(err) === 'invalid_grant') {
+      session.expired = true;
+      const stored = userSessions.get(session.sid);
+      if (stored) stored.expired = true;
+    }
+    console.error('[google-sign-in] refresh failed: ' + safeCode(err));
+    return '';
+  }
+}
+
+function loadGtmIndex() {
+  if (gtmIndexCache) return gtmIndexCache;
+  try {
+    const records = readJson(path.join(dataDir, 'records.json'));
+    let sheet = null;
+    try { sheet = readJson(path.join(dataDir, 'sheet-review.json')); } catch { sheet = null; }
+    gtmIndexCache = gtmIndex(records, sheet);
+  } catch {
+    gtmIndexCache = gtmIndex({}, {});
+  }
+  return gtmIndexCache;
+}
+
+function rememberBrief(session) {
+  const token = session.accessToken;
+  if (!token || session.expired) return;
+  buildPersonalBrief({
+    fetchImpl: hooks.fetchImpl,
+    token,
+    email: session.email,
+    index: loadGtmIndex(),
+  }).then(brief => {
+    session.brief = brief;
+    const stored = userSessions.get(session.sid);
+    if (stored) stored.brief = brief;
+    const body = JSON.stringify(brief);
+    if (body.includes(session.refreshToken || '___none___')) return;
+    persistStateFile(path.resolve('.'), 'users/' + userHash(session.email) + '/brief.json', body).catch(() => {});
+  }).catch(err => {
+    console.error('[user-brief] ' + safeCode(err));
   });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || 'Profile fetch failed');
-  return j.emailAddress;
-};
+}
 
 const root = path.resolve('out');
 const dataDir = path.join(root, 'data');
@@ -274,7 +330,7 @@ You can also take actions with tools:
 - read_briefing: read the latest proactive morning brief the assistant wrote for Hollie. Use when she asks what's new, what changed, or what to focus on today.
 - navigate: jump the UI to a view (today, performance, accounts, meetings, drafts, data) or to a specific account/meeting by name.
 
-Always include a brief text reply summarizing what you found or did, alongside any tool calls. Never claim to have sent an email — sending is disabled; drafts are only created.`;
+Always include a brief text reply summarizing what you found or did, alongside any tool calls. Never claim to have sent an email — sending is disabled; drafts are only created. There is no send tool.`;
 
 const TOOLS = [
   ...DATA_TOOL_SCHEMAS,
@@ -475,14 +531,26 @@ function briefingToolContent() {
   };
 }
 
-async function askOpenAI(message, history) {
+function googlePrompt(user) {
+  if (user && user.email && !user.expired) {
+    return '\n\nThe user is signed in as ' + user.email + '. You can read their Gmail, Calendar, and Drive with search_email, read_thread, list_calendar, search_drive, and read_doc. When they ask about their email, calendar, documents, or upcoming shows, call those tools and cite the subject or title you used. You may draft. You cannot send mail.';
+  }
+  if (user && user.expired) {
+    return '\n\nGoogle access expired, reconnect. Tell them to use the reconnect link. Do not invent mailbox contents.';
+  }
+  return '\n\nThis visitor is not signed in. If they ask you to read their email, calendar, or docs, tell them to use Sign in with Google in the header. Do not invent mailbox contents.';
+}
+
+async function askOpenAI(message, history, user) {
   ensureContext();
+  const tools = user && user.email && !user.expired ? [...TOOLS, ...GOOGLE_TOOL_SCHEMAS] : TOOLS;
+  const chat = hooks.callChatApi || callChatApi;
   const messages = [
-    { role: 'system', content: SYSTEM + '\n\n' + CTX },
+    { role: 'system', content: SYSTEM + googlePrompt(user) + '\n\n' + CTX },
     ...history.filter(m => m && m.role && m.content).slice(-8),
     { role: 'user', content: message }
   ];
-  const data = await callChatApi({ model: MODEL, messages, tools: TOOLS, tool_choice: 'auto', reasoning_effort: 'none', max_completion_tokens: 1200 });
+  const data = await chat({ model: MODEL, messages, tools, tool_choice: 'auto', reasoning_effort: 'none', max_completion_tokens: 1200 });
   const choice = data.choices?.[0]?.message;
   const actions = [];
   const notes = [];
@@ -525,6 +593,14 @@ async function askOpenAI(message, history) {
       actions.push({ type: 'mark_queue_item', itemId, action, ok });
       if (!ok) notes.push('Could not update that queue item — check the item id.');
       toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: ok ? 'Queue item updated in the workspace.' : 'Could not update that queue item.' });
+    } else if (isGoogleTool(name)) {
+      const token = await ensureAccess(user);
+      const content = token
+        ? await runGoogleTool(name, args, { fetchImpl: hooks.fetchImpl, token })
+        : (user && user.expired ? 'Google access expired, reconnect' : 'Sign in with Google to read this.');
+      if (content === 'Google access expired, reconnect' && user) user.expired = true;
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: String(content || '').slice(0, 4000) });
+      needsFollowUp = true;
     } else {
       toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: runAssistantTool(name, args, FACTS) });
       needsFollowUp = true;
@@ -533,7 +609,7 @@ async function askOpenAI(message, history) {
   if (needsFollowUp && toolCalls.length) {
     messages.push({ role: 'assistant', content: choice?.content || null, tool_calls: toolCalls });
     messages.push(...toolMessages);
-    const follow = await callChatApi({ model: MODEL, messages, max_completion_tokens: 800 });
+    const follow = await chat({ model: MODEL, messages, max_completion_tokens: 800 });
     let answer = htmlify((follow.choices?.[0]?.message?.content || '').trim());
     if (!answer && FACTS?.metrics?.largest) {
       const g = FACTS.metrics.largest;
@@ -611,7 +687,7 @@ function serveStatic(req, res) {
   fs.createReadStream(file).pipe(res);
 }
 
-const server = http.createServer((req, res) => {
+function onRequest(req, res) {
   (async () => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/api/data-stamp' && req.method === 'GET') {
@@ -649,7 +725,7 @@ const server = http.createServer((req, res) => {
       const message = String(body.message || '').trim();
       if (!message) { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Empty question.' })); return; }
       try {
-        const out = await askOpenAI(message.slice(0, 2000), Array.isArray(body.history) ? body.history : []);
+        const out = await askOpenAI(message.slice(0, 2000), Array.isArray(body.history) ? body.history : [], currentUser(req));
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
       } catch (e) {
         res.writeHead(e.status || 500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: e.message || 'Assistant failed.' }));
@@ -695,36 +771,36 @@ const server = http.createServer((req, res) => {
       }
       return;
     }
-    if (url.pathname === '/api/gmail/oauth/start' && req.method === 'GET') {
-      // Starts per-user Gmail OAuth flow. Returns { authUrl } for the frontend
-      // to open. User signs in as themselves (not the server owner).
-      if (!GOOGLE_CLIENT_ID) {
-        res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Gmail OAuth not configured. Set GOOGLE_OAUTH_CLIENT_ID.' }));
+    if ((url.pathname === '/api/google/sign-in' || url.pathname === '/api/gmail/oauth/start') && req.method === 'GET') {
+      let client;
+      try { client = await loadGoogleOAuthClient(); }
+      catch {
+        const page = plainPage('Google was not connected', 'The Google OAuth client could not be loaded.');
+        if (url.pathname === '/api/gmail/oauth/start') {
+          res.writeHead(500, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ error: 'OAuth client missing' }));
+        } else {
+          res.writeHead(500, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(page);
+        }
         return;
       }
-      const sid = getSessionId(req, res);
-      const state = crypto.randomBytes(16).toString('hex');
-      oauthStates.set(state, { sessionId: sid, createdAt: Date.now() });
-      // Clean old states
-      for (const [k, v] of oauthStates) if (Date.now() - v.createdAt > 600000) oauthStates.delete(k);
-      
-      const redirectUri = getOAuthRedirectUri(req);
-      const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID,
-        redirect_uri: redirectUri,
-        response_type: 'code',
-        scope: 'https://www.googleapis.com/auth/gmail.send',
-        access_type: 'offline',
-        prompt: 'consent',
+      const compose = url.searchParams.get('compose') === '1';
+      const state = (compose ? COMPOSE_STATE_PREFIX : USER_STATE_PREFIX) + crypto.randomBytes(16).toString('hex');
+      userStates.set(state, { createdAt: Date.now(), compose });
+      for (const [k, v] of userStates) if (Date.now() - v.createdAt > 600000) userStates.delete(k);
+      const location = authUrl({
+        clientId: client.clientId,
+        redirectUri: getOAuthRedirectUri(req),
         state,
-      }).toString();
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ authUrl }));
+        scopes: compose ? [...READ_SCOPES, COMPOSE_SCOPE] : READ_SCOPES,
+      });
+      if (url.pathname === '/api/gmail/oauth/start') {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ authUrl: location }));
+      } else {
+        res.writeHead(302, { Location: location, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }).end();
+      }
       return;
     }
     if (url.pathname === '/api/gmail/oauth/callback' && req.method === 'GET') {
-      // Google redirects here after user signs in. Exchanges code for tokens.
-      // A state this server issued as sheets:… stores a Sheets refresh token
-      // and does not start a Gmail session.
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state') || '';
       const error = url.searchParams.get('error');
@@ -739,112 +815,153 @@ const server = http.createServer((req, res) => {
         }).end(result.html);
         return;
       }
-
-      if (error) {
-        res.writeHead(302, { Location: '/?view=drafts&gmail=error' }).end();
+      const issued = userStates.get(state);
+      userStates.delete(state);
+      if (error || !code || !issued || (!state.startsWith(USER_STATE_PREFIX) && !state.startsWith(COMPOSE_STATE_PREFIX))) {
+        res.writeHead(400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+          .end(plainPage('Google was not connected', 'This authorization link is no longer valid. Use Sign in with Google again.'));
         return;
       }
-      const stateData = oauthStates.get(state);
-      if (!code || !stateData) {
-        res.writeHead(302, { Location: '/?view=drafts&gmail=error' }).end();
-        return;
-      }
-      oauthStates.delete(state);
-      
+      let exchanged;
       try {
-        const redirectUri = getOAuthRedirectUri(req);
-        const params = new URLSearchParams({
-          code,
-          client_id: GOOGLE_CLIENT_ID,
-          client_secret: GOOGLE_CLIENT_SECRET,
-          redirect_uri: redirectUri,
-          grant_type: 'authorization_code',
+        const client = await loadGoogleOAuthClient();
+        exchanged = await exchangeCode({
+          code, redirectUri: getOAuthRedirectUri(req), client, fetchImpl: hooks.fetchImpl,
         });
-        const r = await fetch('https://oauth2.googleapis.com/token', {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: params.toString(),
-        });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.error_description || 'Token exchange failed');
-        
-        const email = await getGmailProfile(j.access_token);
-        gmailSessions.set(stateData.sessionId, {
-          accessToken: j.access_token,
-          refreshToken: j.refresh_token,
-          email,
-          expiresAt: Date.now() + (j.expires_in * 1000),
-        });
-        // Set session cookie and redirect back to drafts
-        res.writeHead(302, {
-          Location: '/?view=drafts&gmail=connected',
-          'Set-Cookie': `gtm_sid=${stateData.sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`,
-        }).end();
-      } catch (e) {
-        res.writeHead(302, { Location: '/?view=drafts&gmail=error' }).end();
+      } catch (err) {
+        console.error('[google-sign-in] save failed: ' + safeCode(err));
+        res.writeHead(500, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+          .end(plainPage('Google was not connected', 'The Google account could not be confirmed.'));
+        return;
       }
+      if (!exchanged.scopes.length) {
+        exchanged.scopes = issued.compose ? [...READ_SCOPES, COMPOSE_SCOPE] : [...READ_SCOPES];
+      }
+      if (!emailAllowed(exchanged.email, allowList())) {
+        res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+          .end(plainPage('Google was not connected', 'This Google account is not on the Opstream allow list.'));
+        return;
+      }
+      const sid = crypto.randomBytes(16).toString('hex');
+      const session = {
+        sid,
+        email: exchanged.email,
+        name: exchanged.name,
+        picture: exchanged.picture,
+        scopes: exchanged.scopes,
+        refreshToken: exchanged.refreshToken,
+        accessToken: exchanged.accessToken,
+        expiresAt: Date.now() + exchanged.expiresIn * 1000,
+        expired: false,
+        brief: null,
+      };
+      try {
+        await hooks.putSecretString(userSecretId(exchanged.email), JSON.stringify(secretDocument(session)));
+      } catch (err) {
+        console.error('[google-sign-in] save failed: ' + safeCode(err));
+        res.writeHead(500, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+          .end(plainPage('Google was not connected', 'The refresh token could not be saved. It was not written to disk.'));
+        return;
+      }
+      userSessions.set(sid, session);
+      rememberBrief(session);
+      res.writeHead(302, {
+        Location: '/',
+        'cache-control': 'no-store',
+        'Set-Cookie': userCookie(sid, 2592000),
+      }).end();
       return;
     }
-    if (url.pathname === '/api/gmail/oauth/disconnect' && req.method === 'POST') {
-      const sid = getSessionId(req, res);
-      gmailSessions.delete(sid);
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));
+    if ((url.pathname === '/auth/logout' || url.pathname === '/api/auth/sign-out') && (req.method === 'GET' || req.method === 'POST')) {
+      const existing = currentUser(req);
+      if (existing) userSessions.delete(existing.sid);
+      res.writeHead(302, {
+        Location: '/',
+        'cache-control': 'no-store',
+        'Set-Cookie': userCookie('', 0),
+      }).end();
+      return;
+    }
+    if (url.pathname === '/api/google/disconnect' && (req.method === 'POST' || req.method === 'GET')) {
+      const existing = currentUser(req);
+      if (existing) {
+        userSessions.delete(existing.sid);
+        const doc = JSON.stringify({
+          email: existing.email,
+          disconnected: true,
+          scopes: [],
+          connected_at: new Date().toISOString(),
+        });
+        try { await hooks.putSecretString(userSecretId(existing.email), doc); }
+        catch (err) { console.error('[google-sign-in] save failed: ' + safeCode(err)); }
+      }
+      res.writeHead(302, {
+        Location: '/',
+        'cache-control': 'no-store',
+        'Set-Cookie': userCookie('', 0),
+      }).end();
+      return;
+    }
+    if (url.pathname === '/api/session' && req.method === 'GET') {
+      const existing = currentUser(req);
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        .end(JSON.stringify(sessionPublic(existing)));
+      return;
+    }
+    if (url.pathname === '/api/me/brief' && req.method === 'GET') {
+      const existing = currentUser(req);
+      if (!existing) {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ signedIn: false }));
+        return;
+      }
+      if (existing.expired) {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+          .end(JSON.stringify({ expired: true, email: existing.email, meetings: [], followUps: [], notOnSheet: [], drafts: [] }));
+        return;
+      }
+      if (existing.brief) {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(existing.brief));
+        return;
+      }
+      const stored = await readStateFile(path.resolve('.'), 'users/' + userHash(existing.email) + '/brief.json');
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        .end(stored || JSON.stringify({ pending: true, meetings: [], followUps: [], notOnSheet: [], drafts: [] }));
       return;
     }
     if (url.pathname === '/api/gmail/status' && req.method === 'GET') {
-      // Returns { connected, email } — the USER's own Gmail via OAuth.
-      // No fallback: if the user hasn't connected, sending is unavailable.
-      const sid = getSessionId(req, res);
-      const userSession = gmailSessions.get(sid);
-      if (userSession) {
-        try {
-          const token = await refreshGmailToken(userSession);
-          const email = userSession.email || await getGmailProfile(token);
-          userSession.email = email;
-          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
-            connected: true, email,
-            oauthConfigured: !!GOOGLE_CLIENT_ID,
-          }));
-          return;
-        } catch (e) {
-          gmailSessions.delete(sid); // Token invalid, clear it
-        }
-      }
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
-        connected: false, email: null,
-        oauthConfigured: !!GOOGLE_CLIENT_ID,
+      const existing = currentUser(req);
+      const pub = sessionPublic(existing);
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({
+        connected: !!(pub.signedIn && !pub.expired),
+        email: pub.email || null,
+        oauthConfigured: true,
+        expired: !!pub.expired,
       }));
       return;
     }
-    if (url.pathname === '/api/gmail/send' && req.method === 'POST') {
-      // Sends an email via the USER's own Gmail (OAuth). No fallback —
-      // if the user hasn't connected, sending is unavailable.
-      // The frontend MUST show the exact to/subject/body and get explicit
-      // user confirmation before calling this. Body capped at 20k chars.
+    if (url.pathname === '/api/gmail/draft' && req.method === 'POST') {
       let raw = '';
-      for await (const chunk of req) { raw += chunk; if (raw.length > 65536) break; }
+      for await (const chunk of req) { raw += chunk; if (raw.length > 20000) break; }
       let body = {};
       try { body = JSON.parse(raw || '{}'); } catch { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Invalid JSON.' })); return; }
-      const to = String(body.to || '').trim();
-      const subject = String(body.subject || '').trim();
-      const text = String(body.body || '').trim();
-      const confirmed = body.confirmed === true;
-      if (!to || !subject || !text) { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'To, subject, and body are required.' })); return; }
-      if (!confirmed) { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Confirmation required.' })); return; }
-      if (text.length > 20000) { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Body too long.' })); return; }
-      
-      const sid = getSessionId(req, res);
-      const userSession = gmailSessions.get(sid);
-      if (!userSession) {
-        res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Gmail not connected. Connect your Gmail to send.' }));
+      const existing = currentUser(req);
+      if (!existing || existing.expired || !(existing.scopes || []).includes(COMPOSE_SCOPE)) {
+        res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Reconnect Google to create a draft. Nothing was sent.' }));
+        return;
+      }
+      const token = await ensureAccess(existing);
+      if (!token) {
+        res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Google access expired, reconnect' }));
         return;
       }
       try {
-        const token = await refreshGmailToken(userSession);
-        await sendGmailApi(token, to, subject, text);
-        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, from: userSession.email }));
-      } catch (e) {
-        res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: e.message }));
+        const draft = await createGmailDraft(hooks.fetchImpl, token, {
+          to: String(body.to || ''), subject: String(body.subject || ''), body: String(body.body || ''),
+        });
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, id: draft.id }));
+      } catch (err) {
+        console.error('[google-sign-in] save failed: ' + safeCode(err));
+        res.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'The Gmail draft was not created. Nothing was sent.' }));
       }
       return;
     }
@@ -882,9 +999,11 @@ const server = http.createServer((req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405).end(); return; }
     serveStatic(req, res);
   })().catch(() => { try { res.writeHead(500).end(); } catch {} });
-});
+}
 
-server.listen(PORT, '127.0.0.1', () => console.log('GTM workspace + agent: http://127.0.0.1:' + server.address().port));
+export function createServer() {
+  return http.createServer(onRequest);
+}
 
 const pollMinutes = 10;
 async function pollLoop() {
@@ -899,5 +1018,11 @@ async function pollLoop() {
     console.error('[refresh] kept last good: ' + (err && err.message ? err.message : err));
   }
 }
-setTimeout(pollLoop, 15000);
-setInterval(pollLoop, pollMinutes * 60 * 1000);
+
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  const server = createServer();
+  server.listen(PORT, '127.0.0.1', () => console.log('GTM workspace + agent: http://127.0.0.1:' + server.address().port));
+  setTimeout(pollLoop, 15000);
+  setInterval(pollLoop, pollMinutes * 60 * 1000);
+}

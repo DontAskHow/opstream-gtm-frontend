@@ -11,4 +11,52 @@ Component.prototype._workspaceApi=async function(path,body){
  throw Error('Sending is disabled \u2014 drafts stay in this browser.');
 };
 const demoRender=Component.prototype.renderVals;
-Component.prototype.renderVals=function(){const v=demoRender.call(this);v.googleConnectionLabel='Email sending is disabled in this public workspace. Drafts stay in your browser and nothing is sent.';v.googleConnectLabel='Sending unavailable';v.googleConnectionDisabled=true;v.slackConnectionLabel='Slack is intentionally not part of this workspace — mention notifications are never sent. Comments are saved in your browser.';v.slackConnectLabel='Not available';v.slackConnectionDisabled=true;v.sendDisabled=true;return v;};
+Component.prototype.renderVals=function(){
+ const v=demoRender.call(this);
+ const s=this.state.googleSession||{};
+ const brief=this.state.personalBrief||null;
+ v.signedIn=!!s.signedIn;
+ v.signedInLabel=s.name||s.email||'';
+ v.signedInEmail=s.email||'';
+ v.signedInInitials=s.initials||'';
+ v.scopeSummary=s.scopeSummary||'';
+ v.googleExpired=!!s.expired;
+ v.profileOpen=!!this.state.profileOpen;
+ v.toggleProfile=()=>this.setState({profileOpen:!this.state.profileOpen});
+ v.personalBriefPending=!!s.signedIn&&!s.expired&&!brief;
+ v.personalMeetings=(brief&&brief.meetings)||[];
+ v.personalFollowUps=(brief&&brief.followUps)||[];
+ v.personalNotOnSheet=(brief&&brief.notOnSheet)||[];
+ v.personalDrafts=(brief&&brief.drafts)||[];
+ if(!s.signedIn){
+  v.googleConnectionLabel='Email sending is disabled in this public workspace. Drafts stay in your browser and nothing is sent.';
+  v.googleConnectLabel='Sending unavailable';
+  v.googleConnectionDisabled=true;
+ }else if(s.expired){
+  v.googleConnectionLabel='Google access expired, reconnect';
+  v.googleConnectLabel='Reconnect';
+  v.googleConnectionDisabled=false;
+  v.connectGoogle=()=>{window.location.href='/api/google/sign-in';};
+ }else{
+  v.googleConnectionLabel='Connected as '+(s.email||s.name)+'. Read-only. Nothing is sent.';
+  v.googleConnectLabel='Reconnect';
+  v.googleConnectionDisabled=false;
+  v.connectGoogle=()=>{window.location.href='/api/google/sign-in';};
+ }
+ v.slackConnectionLabel='Slack is intentionally not part of this workspace — mention notifications are never sent. Comments are saved in your browser.';
+ v.slackConnectLabel='Not available';
+ v.slackConnectionDisabled=true;
+ v.sendDisabled=true;
+ v.canCreateGmailDraft=!!(s.signedIn&&s.compose&&!s.expired);
+ v.createGmailDraft=async()=>{
+  const d=this._currentWorkspaceDraft?this._currentWorkspaceDraft():null;
+  if(!d)return;
+  try{
+   const r=await fetch('/api/gmail/draft',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({to:d.recipients||'',subject:d.subject||d.title||'',body:d.text||''})});
+   const j=await r.json();
+   if(!r.ok)throw new Error(j.error||'Draft was not created');
+   this.setState({draftFeedback:'Gmail draft created. Nothing was sent.',draftFeedbackClass:'form-success'});
+  }catch(e){this.setState({draftFeedback:e.message||'Draft was not created',draftFeedbackClass:'form-error'});}
+ };
+ return v;
+};

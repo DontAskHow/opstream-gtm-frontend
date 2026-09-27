@@ -457,7 +457,7 @@ def company_name(value):
     return re.sub(r"[,;]+$", "", str(value or "").strip()).strip()
 
 
-def owner_info(value, tail=4):
+def owner_info(value, tail=4, catalog=None):
     digits_wanted = max(4, int(tail or 4))
     s = str(value or "").strip()
     if not s or re.fullmatch(r"unassigned", s, flags=re.I):
@@ -473,6 +473,10 @@ def owner_info(value, tail=4):
         return {"label": "Unassigned", "title": "", "key": "Unassigned", "named": True}
     if re.fullmatch(r"owner name not connected", stripped, flags=re.I):
         return {"label": "Owner name not connected", "title": "Owner name isn't connected", "key": "Owner name not connected", "named": False}
+    book = catalog or {}
+    hit = book.get(stripped) or book.get(s) or book.get(stripped.lower())
+    if isinstance(hit, str) and hit.strip():
+        return {"label": hit.strip(), "title": "", "key": stripped, "named": True}
     if re.fullmatch(r"\d+", stripped) or re.fullmatch(r"[a-f0-9-]{8,}", stripped, flags=re.I):
         digits = re.sub(r"\D", "", stripped) or stripped
         n = min(digits_wanted, len(digits))

@@ -61,10 +61,10 @@ def load_owner_names(cur):
 
     def remember(oid, first, last, email):
         label = ' '.join(x for x in [first, last] if x).strip() or (email or '').strip()
-        if oid and label and '@' not in label.split(' ')[0]:
+        if oid and label:
             names[str(oid)] = label
-        elif oid and label:
-            names[str(oid)] = label
+        if email and label:
+            names[str(email).strip().lower()] = label
 
     if 'hubspot_owners' in tables:
         cols = {r[1] for r in q(cur, 'PRAGMA table_info(hubspot_owners)')}
@@ -537,7 +537,9 @@ def main():
                           'outcome': op.get('hs_meeting_outcome')})
             mtg_objs.append({'id': 'meeting-' + oid, 'title': op.get('hs_meeting_title'),
                              'start': op.get('hs_meeting_start_time'),
-                             'outcome': op.get('hs_meeting_outcome'), 'refs': [mref]})
+                             'outcome': op.get('hs_meeting_outcome'),
+                             'owner': owner_label(op.get('hubspot_owner_id')),
+                             'refs': [mref]})
         mtg_objs.sort(key=lambda m: m['start'] or '', reverse=True)
 
         # emails (cap 20, newest first)
@@ -977,6 +979,7 @@ def main():
         'verifiedSnapshotId': SNAPSHOT,
         'generatedAt': NOW_ISO,
         'companies': companies,
+        'owners': dict(OWNER_NAMES),
         'unmatchedRecordings': unmatched,
         'coverage': {'foldedRelated': 0, 'contacts': n_contacts, 'notes': n_notes,
                     'fathomTotal': len(fathom), 'transcripts': n_transcripts},

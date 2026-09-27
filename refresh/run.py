@@ -57,6 +57,9 @@ class Store:
     def secret_value(self, name):
         raise FileNotFoundError(name)
 
+    def list_secret_names(self, prefix):
+        return []
+
 
 class FsStore(Store):
     def __init__(self, root):
@@ -109,6 +112,19 @@ class FsStore(Store):
         if not path.is_file():
             raise FileNotFoundError(name)
         return path.read_text(encoding="utf-8")
+
+    def list_secret_names(self, prefix):
+        base = self.root / "secrets"
+        if not base.exists():
+            return []
+        names = []
+        for path in base.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(base).as_posix()
+            if rel.startswith(prefix):
+                names.append(rel)
+        return names
 
 
 class S3Store(Store):
@@ -166,6 +182,24 @@ class S3Store(Store):
     def secret_value(self, name):
         resp = self.sm.get_secret_value(SecretId=self.prefix + name)
         return resp.get("SecretString") or ""
+
+    def list_secret_names(self, prefix):
+        full = self.prefix + prefix
+        names = []
+        token = None
+        while True:
+            kwargs = {"Filters": [{"Key": "name", "Values": [full]}]}
+            if token:
+                kwargs["NextToken"] = token
+            page = self.sm.list_secrets(**kwargs)
+            for item in page.get("SecretList") or []:
+                secret_name = str(item.get("Name") or "")
+                if secret_name.startswith(self.prefix) and secret_name[len(self.prefix):].startswith(prefix):
+                    names.append(secret_name[len(self.prefix):])
+            token = page.get("NextToken")
+            if not token:
+                break
+        return names
 
 
 # Canonical scripts live in refresh/brain-sync. Sheets and GA4 share the
@@ -389,6 +423,13 @@ def main():
     proposals = out / "crm-proposals.json"
     if proposals.is_file():
         store.put_file(state_prefix + "crm-proposals.json", proposals)
+    try:
+        from user_briefs import refresh_user_briefs
+        oauth_id = store.secret_value("google-oauth-client-id") if store.secret_exists("google-oauth-client-id") else ""
+        oauth_secret = store.secret_value("google-oauth-client-secret") if store.secret_exists("google-oauth-client-secret") else ""
+        refresh_user_briefs(store, state_prefix, out, log, oauth_id, oauth_secret)
+    except Exception as exc:
+        log("user briefs failed (" + type(exc).__name__ + ")")
     snap = assert_real(out)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + snap
     prefix = published.strip("/") + "/" + run_id + "/"

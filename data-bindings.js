@@ -11,6 +11,7 @@ Component.prototype._loadVerified = async function () {
   try {
     const [verified,records,evidence,draftSeeds,sheetLabels]=await Promise.all(['verified','records','evidence','draft-seeds','evidence-sheet-labels'].map(read));
     if(verified.snapshotId!==records.verifiedSnapshotId)throw new Error('Collection versions differ');
+    if(records.owners)workspaceModel.ownerCatalog=records.owners;
     let hollie=null;try{hollie=await read('hollie');}catch{}
     let agentBrief=null;try{agentBrief=await read('agent-brief');}catch{}
     let heartbeat=null;try{heartbeat=await read('heartbeat');}catch{}

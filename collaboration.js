@@ -98,16 +98,7 @@ Component.prototype._saveWorkspaceDraft = async function(draft=this._currentWork
   })();return this._draftSavePromise;
 };
 Component.prototype._sendWorkspaceDraft = async function() {
-  if(this.state.draftSending||this.state.draftSaving)return;
-  let draft=this._currentWorkspaceDraft();if(!draft)return;
-  // Use the real Gmail API via /api/gmail/send. Requires explicit confirmation
-  // which the UI handles via sendConfirm state.
-  const to=(draft.recipients||'').trim();
-  const subject=(draft.subject||draft.title||'').trim();
-  const body=(draft.text||'').trim();
-  if(!to||!body){this.setState({draftFeedback:'Add a recipient and message before sending.',draftFeedbackClass:'form-error'});return;}
-  if(!this.state.gmailEmail){this.setState({draftFeedback:'Connect Gmail before sending.',draftFeedbackClass:'form-error'});return;}
-  this.setState({sendConfirm:{to,subject,body,draftId:draft.id}});
+  this.setState({draftFeedback:'Sending is disabled. Drafts stay in this workspace until you send them yourself.',draftFeedbackClass:'form-error'});
 };
 Component.prototype._connectWorkspaceProvider = async function(provider) {
   this.setState({connectionError:null,connectionBusy:provider});
@@ -257,15 +248,7 @@ Component.prototype.renderVals = function() {
     v.sendDisabled=!!s.draftSending||!(google.connected||s.gmailEmail)||!(draft.recipients||'').trim()||!(draft.text||'').trim();
     v.sendConfirm=s.sendConfirm||null;
     v.cancelSend=()=>this.setState({sendConfirm:null});
-    v.confirmSend=async()=>{
-      const c=this.state.sendConfirm;if(!c||this.state.draftSending)return;
-      this.setState({draftSending:true,sendConfirm:null,draftFeedback:null});
-      try{
-        const r=await fetch('/api/gmail/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({to:c.to,subject:c.subject,body:c.body,confirmed:true})});
-        const j=await r.json();if(!r.ok)throw new Error(j.error||'Send failed');
-        this.setState({draftSending:false,draftFeedback:'Sent via Gmail to '+c.to+'.',draftFeedbackClass:'form-success',hasSendReceipt:true,sendReceiptLabel:'Sent '+new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})+' to '+c.to+'.'});
-      }catch(e){this.setState({draftSending:false,draftFeedback:'Could not send: '+(e.message||'error'),draftFeedbackClass:'form-error'});}
-    };
+    v.confirmSend=()=>this.setState({sendConfirm:null,draftFeedback:'Sending is disabled. Nothing was sent.',draftFeedbackClass:'form-error'});
     v.sendDraft=()=>this._sendWorkspaceDraft();v.hasSendReceipt=!!receipt;v.sendReceiptLabel=receipt?({sent:'Gmail accepted version '+receipt.version+' · '+shortDate(receipt.updatedAt),unknown:'The send outcome is uncertain. Check Sent Mail before sending another version.',sending:'Waiting for Gmail’s response.',failed:receipt.error}[receipt.status]):'';
     v.evDraftRefs=()=>this._verifiedOpenRefs(draft.supportRefs,'Records behind this draft');
     v.exportDraft=()=>{if(draft.purpose==='campaign')this.csv('lemlist-campaign-draft.csv',['sender','subject','body'],[[draft.campaignSender,draft.subject,draft.text]]);else this.csv('opstream-draft.csv',['Field','Value'],[['Subject',draft.subject],['Purpose',draft.purpose],['To',draft.recipients],['Cc',draft.cc],['Bcc',draft.bcc],['Message',draft.text],['Internal notes',draft.internalNotes],['Review context',draft.rationale],['Version',draft.version]]);};

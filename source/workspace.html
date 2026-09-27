@@ -152,8 +152,18 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
       </sc-for>
     </nav>
     <button onClick="{{ goData }}" style="margin-left:auto;font:inherit;font-size:13px;background:none;border:0;padding:6px 0;color:var(--color-neutral-700);cursor:pointer;text-align:left">Collected {{ collectedShort }} · <span style="text-decoration:underline;text-underline-offset:3px">About this data</span></button>
+    <sc-if value="{{ !signedIn }}"><a href="/api/google/sign-in" style="font:inherit;font-size:13px;font-weight:600;color:var(--color-accent);text-decoration:none;padding:6px 0">Sign in with Google</a></sc-if>
+    <sc-if value="{{ signedIn }}"><button onClick="{{ toggleProfile }}" aria-haspopup="menu" style="display:inline-flex;align-items:center;gap:8px;font:inherit;font-size:13px;background:none;border:0;padding:6px 0;cursor:pointer;color:inherit"><span aria-hidden="true" style="display:inline-flex;width:28px;height:28px;border-radius:50%;background:#0f766e;color:#fff;align-items:center;justify-content:center;font-size:11px;font-weight:700">{{ signedInInitials }}</span>Signed in as {{ signedInLabel }}</button></sc-if>
     <sc-if value="{{ dataStale }}"><div role="status" style="padding:8px 16px;background:var(--color-accent-100);color:var(--color-accent-900);font-size:13px">{{ dataAgeLabel }}</div></sc-if>
   <button class="workspace-account-button" onClick="{{ showConnections }}">Connections</button></header>
+  <sc-if value="{{ profileOpen }}"><div role="menu" aria-label="Account" style="margin-left:auto;margin-right:24px;max-width:360px;padding:12px 16px;border:1px solid var(--color-divider);background:var(--color-bg);font-size:14px">
+    <p style="margin:0 0 6px"><strong>Signed in as {{ signedInLabel }}</strong></p>
+    <p style="margin:0 0 6px">{{ signedInEmail }}</p>
+    <p style="margin:0 0 8px;color:var(--color-neutral-700)">{{ scopeSummary }}</p>
+    <sc-if value="{{ googleExpired }}"><p style="margin:0 0 8px"><a href="/api/google/sign-in">Google access expired, reconnect</a></p></sc-if>
+    <form action="/api/google/disconnect" method="post" style="display:inline"><button class="text-control" type="submit">Disconnect</button></form>
+    <a href="/auth/logout" style="margin-left:12px">Sign out</a>
+  </div></sc-if>
 
   <sc-if value="{{ bannerShown }}" hint-placeholder-val="{{ false }}">
     <div data-screen-label="Status banner" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 24px;background:{{ banner.bg }};color:{{ banner.fg }};border-bottom:2px solid var(--color-divider);font-size:14px">
@@ -198,6 +208,15 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           <h6 style="margin:0 0 8px;color:var(--color-accent)">Proactive briefing</h6>
           <h1 style="font-size:36px;margin:0 0 8px">What needs you today</h1>
           <p style="margin:0;font-size:15px;color:var(--color-neutral-700);max-width:64ch;text-wrap:pretty">{{ briefingIntro }}</p>
+          <sc-if value="{{ signedIn }}"><section aria-label="Your brief" style="margin-top:20px;display:flex;flex-direction:column;gap:12px">
+            <h2 style="font-size:22px;margin:0">Your brief</h2>
+            <sc-if value="{{ googleExpired }}"><p style="margin:0">Google access expired, reconnect. <a href="/api/google/sign-in">Reconnect</a></p></sc-if>
+            <sc-if value="{{ personalBriefPending }}"><p style="margin:0">Building your brief from Gmail, Calendar, and the workspace.</p></sc-if>
+            <sc-for list="{{ personalMeetings }}" as="item" hint-placeholder-count="1"><p style="margin:0"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
+            <sc-for list="{{ personalFollowUps }}" as="item" hint-placeholder-count="1"><p style="margin:0"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
+            <sc-for list="{{ personalNotOnSheet }}" as="item" hint-placeholder-count="0"><p style="margin:0"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
+            <sc-for list="{{ personalDrafts }}" as="item" hint-placeholder-count="0"><p style="margin:0"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
+          </section></sc-if>
           <div class="seg" style="margin-top:16px">
             <button onClick="{{ showMarketingBrief }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;background:{{ marketingBriefBg }};color:{{ marketingBriefFg }};cursor:pointer">Marketing</button>
             <button onClick="{{ showSalesBrief }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ salesBriefBg }};color:{{ salesBriefFg }};cursor:pointer">Sales &amp; CS</button>
@@ -911,7 +930,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div class="composer-context"><div class="field"><label for="draft-internal">Internal notes</label><textarea id="draft-internal" class="input" value="{{ draft.internalNotes }}" onInput="{{ editInternalNotes }}"></textarea></div><div class="field"><label for="draft-rationale">Review context</label><textarea id="draft-rationale" class="input" value="{{ draft.rationale }}" onInput="{{ editRationale }}"></textarea></div>
               <div class="content-modes"><label>Default content mode<select class="input" value="{{ contentMode }}" onChange="{{ setContentMode }}"><option value="cs">CS</option><option value="marketing">Marketing</option></select></label><label>This draft’s content mode<select class="input" value="{{ draftContentMode }}" onChange="{{ setDraftContentMode }}"><option value="default">Use default</option><option value="cs">CS</option><option value="marketing">Marketing</option></select></label></div><p class="content-mode-note">{{ contentModeNote }} Changing mode preserves your text.</p></div>
             </details>
-            <div class="composer-actions"><sc-if value="{{ isEmailDraft }}"><button class="btn btn-primary" onClick="{{ sendDraft }}" disabled="{{ sendDisabled }}">{{ sendLabel }}</button><button class="btn btn-secondary" onClick="{{ generateEmail }}" disabled="{{ generateDisabled }}">{{ generateLabel }}</button><button class="btn btn-secondary" onClick="{{ copyEmail }}">Copy for Gmail</button></sc-if><button class="btn btn-secondary" onClick="{{ saveDraft }}" disabled="{{ saveDisabled }}">{{ saveLabel }}</button><sc-if value="{{ isCampaignDraft }}"><button class="btn btn-secondary" onClick="{{ copyCampaign }}">Copy for LemList</button></sc-if><button class="btn btn-secondary" onClick="{{ exportDraft }}">Export</button><label class="draft-status-label">Status<select class="input" value="{{ draft.status }}" onChange="{{ editStatus }}"><option>Draft</option><option>Ready for review</option><option>Archived</option></select></label></div>
+            <div class="composer-actions"><sc-if value="{{ isEmailDraft }}"><button class="btn btn-primary" onClick="{{ sendDraft }}" disabled="{{ sendDisabled }}">{{ sendLabel }}</button><sc-if value="{{ canCreateGmailDraft }}"><button class="btn btn-secondary" onClick="{{ createGmailDraft }}">Create Gmail draft</button></sc-if><button class="btn btn-secondary" onClick="{{ generateEmail }}" disabled="{{ generateDisabled }}">{{ generateLabel }}</button><button class="btn btn-secondary" onClick="{{ copyEmail }}">Copy for Gmail</button></sc-if><button class="btn btn-secondary" onClick="{{ saveDraft }}" disabled="{{ saveDisabled }}">{{ saveLabel }}</button><sc-if value="{{ isCampaignDraft }}"><button class="btn btn-secondary" onClick="{{ copyCampaign }}">Copy for LemList</button></sc-if><button class="btn btn-secondary" onClick="{{ exportDraft }}">Export</button><label class="draft-status-label">Status<select class="input" value="{{ draft.status }}" onChange="{{ editStatus }}"><option>Draft</option><option>Ready for review</option><option>Archived</option></select></label></div>
             <sc-if value="{{ sendConfirm }}"><div class="send-confirm" role="dialog" aria-label="Confirm send"><h6>Send this email?</h6><p><strong>From:</strong> {{ senderLabel }}<br><strong>To:</strong> {{ sendConfirm.to }}<br><strong>Subject:</strong> {{ sendConfirm.subject }}</p><div class="send-confirm-body">{{ sendConfirm.body }}</div><div class="composer-actions"><button class="btn btn-primary" onClick="{{ confirmSend }}">Confirm send</button><button class="btn btn-secondary" onClick="{{ cancelSend }}">Cancel</button></div></div></sc-if>
             <sc-if value="{{ draftFeedback }}"><p class="{{ draftFeedbackClass }}" role="status">{{ draftFeedback }}</p></sc-if>
             <sc-if value="{{ draftSaveConflict }}"><div class="workspace-notice"><span>Your edits are kept. The saved draft changed in another session.</span><button class="text-control" onClick="{{ reloadWorkspaceDraft }}">Load saved version</button><button class="text-control" onClick="{{ saveDraftCopy }}">Save my edits as a copy</button></div></sc-if>
@@ -998,7 +1017,7 @@ class Component extends DCLogic {
   memo(key, dep, fn) { this._memo = this._memo || {}; const m = this._memo[key]; if (m && m.dep === dep) return m.val; const val = fn(); this._memo[key] = { dep, val }; return val; }
   loadTranscript(id) { if (!id || (this.state.transcripts && this.state.transcripts[id] !== undefined)) return; if (!this._trPromise) this._trPromise = fetch('data/transcripts.json').then(r => r.json()); this._trPromise.then(all => this.setState(s => ({ transcripts: { ...(s.transcripts || {}), [id]: all[id] || null } }))); }
   syncPeriodInputs() { if (typeof document === 'undefined') return; const today = workspaceModel.phoenixToday(); const start = document.getElementById('period-start'); const end = document.getElementById('period-end'); if (start && document.activeElement !== start) start.value = this.state.start || '2026-08-01'; if (end && document.activeElement !== end) end.value = this.state.end || today; }
-  componentDidMount() { fetch('data/records.json').then(r => r.json()).then(records => this.setState({ records })).catch(e => this.setState({ recordsError: String(e) })); fetch('data/hollie.json').then(r => r.json()).then(hollie => this.setState({ hollie })).catch(() => this.setState({ hollie: null })); fetch('data/agent-brief.json').then(r => r.json()).then(agentBrief => this.setState({ agentBrief })).catch(() => this.setState({ agentBrief: null })); fetch('/api/gmail/status').then(r => r.json()).then(g => { if (g.connected) this.setState({ gmailEmail: g.email }); }).catch(() => {}); this.syncPeriodInputs(); }
+  componentDidMount() { fetch('data/records.json').then(r => r.json()).then(records => { if (records && records.owners) workspaceModel.ownerCatalog = records.owners; this.setState({ records }); }).catch(e => this.setState({ recordsError: String(e) })); fetch('data/hollie.json').then(r => r.json()).then(hollie => this.setState({ hollie })).catch(() => this.setState({ hollie: null })); fetch('data/agent-brief.json').then(r => r.json()).then(agentBrief => this.setState({ agentBrief })).catch(() => this.setState({ agentBrief: null })); fetch('/api/session').then(r => r.json()).then(googleSession => { this.setState({ googleSession }); if (googleSession && googleSession.signedIn) fetch('/api/me/brief').then(r => r.json()).then(personalBrief => this.setState({ personalBrief })).catch(() => {}); }).catch(() => {}); this.syncPeriodInputs(); }
   componentDidUpdate() { this.syncPeriodInputs(); }
   hollieFeedback(itemId, action) { try { fetch('/api/hollie/feedback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ itemId, action }) }).catch(() => {}); } catch {} this.setState(s => ({ hollieDone: { ...(s.hollieDone || {}), [itemId]: action } })); }
   decideProposal(idx, decision) { try { fetch('/api/proposals/decide', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idx, decision }) }).catch(() => {}); } catch {} this.setState(s => ({ proposals: (s.proposals || []).map((p, i) => i === idx ? { ...p, status: decision } : p) })); }
@@ -1471,19 +1490,7 @@ class Component extends DCLogic {
       },
       sendConfirm: st.sendConfirm || null,
       cancelSend: () => this.setState({ sendConfirm: null }),
-      confirmSend: async () => {
-        const c = this.state.sendConfirm;
-        if (!c || this.state.sending) return;
-        this.setState({ sending: true, sendConfirm: null, draftFeedback: null });
-        try {
-          const r = await fetch('/api/gmail/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: c.to, subject: c.subject, body: c.body, confirmed: true }) });
-          const j = await r.json();
-          if (!r.ok) throw new Error(j.error || 'Send failed');
-          this.setState({ sending: false, draftFeedback: 'Sent via Gmail to ' + c.to + '.', draftFeedbackClass: 'form-success', hasSendReceipt: true, sendReceiptLabel: 'Sent ' + new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ' to ' + c.to + '.' });
-        } catch (e) {
-          this.setState({ sending: false, draftFeedback: 'Could not send: ' + (e.message || 'error'), draftFeedbackClass: 'form-error' });
-        }
-      },
+      confirmSend: () => this.setState({ sendConfirm: null, draftFeedback: 'Sending is disabled. Nothing was sent.', draftFeedbackClass: 'form-error' }),
       copyEmail: () => {
         const t = (draft.subject ? draft.subject + '\n\n' : '') + (draft.text || '');
         if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => this.setState({ draftFeedback: 'Copied. Paste into Gmail to send.', draftFeedbackClass: 'form-success' }));
@@ -1533,13 +1540,13 @@ class Component extends DCLogic {
         const monthLabel = k => new Date(k + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
         let items;
         if (st.meetings === 'upcoming') {
-          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => (workspaceModel.dateOnly(m.start) || '') >= todayStr && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => { const ownerLabel = workspaceModel.displayOwner(c.owner); return { when: fmtDT(m.start), sort: m.start, title: m.title, who: workspaceModel.companyName(c.name) + (ownerLabel === 'Unassigned' ? '' : ' · ' + ownerLabel), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: ownerLabel }; }));
+          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => (workspaceModel.dateOnly(m.start) || '') >= todayStr && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => { const ownerLabel = workspaceModel.displayOwner(m.owner || c.owner); return { when: fmtDT(m.start), sort: m.start, title: m.title, who: workspaceModel.companyName(c.name) + (ownerLabel === 'Unassigned' ? '' : ' · ' + ownerLabel), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: ownerLabel }; }));
           const notes = [];
           items = [...ups, ...notes].sort((a, b) => a.sort.localeCompare(b.sort));
           const g = {}; for (const it of items) { const k = it.sort.slice(0, 10) <= plus(todayStr, 7) ? 'This week' : it.sort.slice(0, 10) <= plus(todayStr, 14) ? 'Next week' : 'Later'; (g[k] = g[k] || []).push(it); }
           return ['This week', 'Next week', 'Later'].filter(k => g[k]).map(k => ({ label: k, items: g[k] }));
         }
-        const seen = new Set(); items = allRecs.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; }).filter(r => r.date && (workspaceModel.dateOnly(r.date) || '') <= todayStr).map(r => ({ when: fmtDT(r.date), sort: r.date, title: r.title, who: r.companyName + (r.recordedBy ? ' · ' + r.recordedBy : ''), kind: 'Recorded', go: goMtg(r.id), owner: ownerOf(r) })).sort((a, b) => b.sort.localeCompare(a.sort));
+        const seen = new Set(); items = allRecs.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; }).filter(r => r.date && (workspaceModel.dateOnly(r.date) || '') <= todayStr).map(r => { const shownBy = workspaceModel.displayOwner(r.recordedBy); return { when: fmtDT(r.date), sort: r.date, title: r.title, who: r.companyName + (shownBy && shownBy !== 'Unassigned' ? ' · ' + shownBy : ''), kind: 'Recorded', go: goMtg(r.id), owner: shownBy || ownerOf(r) }; }).sort((a, b) => b.sort.localeCompare(a.sort));
         const g = {}; for (const it of items) { const k = monthKey(it.sort); (g[k] = g[k] || []).push(it); }
         return Object.keys(g).sort().reverse().map(k => ({ label: monthLabel(k), items: g[k] }));
       }).map(g => ({ ...g, items: g.items.filter(m => (mOwner === 'Everyone' || m.owner === mOwner || m.who.includes(mOwner)) && (!mq || (m.title + ' ' + m.who + ' ' + m.kind).toLowerCase().includes(mq))) })).filter(g => g.items.length),

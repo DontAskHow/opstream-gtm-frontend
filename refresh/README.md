@@ -69,13 +69,13 @@ CloudShell cannot build this image reliably, and there is no local Docker. The s
 
 ### 2. CloudShell: upload the source zip
 
-In CloudShell, Actions → Upload file, and choose `refresh-src-v9.zip` from `opstream-gtm-v9-refresh-infra.zip`. Then:
+In CloudShell, Actions → Upload file, and choose `refresh-src-v10.zip`. Then:
 
 ```bash
-aws s3 cp refresh-src-v9.zip s3://opstream-gtm-data-080403790510/code/refresh-src/v9.zip --region us-east-2
+aws s3 cp refresh-src-v10.zip s3://opstream-gtm-data-080403790510/code/refresh-src/v10.zip --region us-east-2
 ```
 
-The object key must match the `SourceKey` parameter (`code/refresh-src/v9.zip` unless you change it). The zip root must contain `refresh/Dockerfile`, not a parent folder.
+The object key must match the `SourceKey` parameter (`code/refresh-src/v10.zip` unless you change it). The zip root must contain `refresh/Dockerfile`, not a parent folder.
 
 ### 3. CloudShell: deploy the stack
 
@@ -89,7 +89,7 @@ aws cloudformation deploy \
   --stack-name opstream-gtm-refresh \
   --template-file gtm-refresh.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides ImageTag=latest SourceKey=code/refresh-src/v9.zip VpcId=$VPC PublicSubnetIds=$SUBNETS
+  --parameter-overrides ImageTag=latest SourceKey=code/refresh-src/v10.zip VpcId=$VPC PublicSubnetIds=$SUBNETS
 ```
 
 `PublicSubnetIds` is a comma-separated list. `aws cloudformation deploy` accepts that for `List<AWS::EC2::Subnet::Id>`.
@@ -110,7 +110,7 @@ while true; do
 done
 ```
 
-Logs: CloudWatch → Log groups → `/aws/codebuild/opstream-gtm-refresh`. The project reads `s3://opstream-gtm-data-080403790510/code/refresh-src/v9.zip`, runs `docker build -f refresh/Dockerfile`, and pushes `latest` to the ECR repository the stack created. CodeBuild is not placed in the VPC, so it can reach Docker Hub and ECR.
+Logs: CloudWatch → Log groups → `/aws/codebuild/opstream-gtm-refresh`. The project reads `s3://opstream-gtm-data-080403790510/code/refresh-src/v10.zip`, runs `docker build -f refresh/Dockerfile`, and pushes `latest` to the ECR repository the stack created. CodeBuild is not placed in the VPC, so it can reach Docker Hub and ECR.
 
 ### 5. Attach the dashboard policy
 
@@ -126,7 +126,18 @@ echo "policy $POLICY"
 aws iam attach-role-policy --role-name "$ROLE" --policy-arn "$POLICY"
 ```
 
-That role can then read `published/*`, read and write `state/*`, read `opstream-gtm/google-oauth-client-id` and `opstream-gtm/google-oauth-client-secret`, and create or update `opstream-gtm/google-sheets-refresh-token`. The Fargate task role has `secretsmanager:GetSecretValue` and `DescribeSecret` on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*`. `PutSecretValue` is only on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/hubspot-oauth-*`, so a rotated HubSpot refresh token is written back to that secret. Do not add environment properties on the Beanstalk environment. The bucket name is already in `refresh-config.json` inside the application zip.
+That role can then read `published/*`, read and write `state/*` (including each person's brief at `state/users/<hash>/`), read `opstream-gtm/google-oauth-client-id` and `opstream-gtm/google-oauth-client-secret`, create or update `opstream-gtm/google-sheets-refresh-token`, and get, describe, create, or put `opstream-gtm/users/*`. The Fargate task role has `secretsmanager:GetSecretValue` and `DescribeSecret` on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*`, plus `secretsmanager:ListSecrets` so the 6-hour job can find those user secrets. `PutSecretValue` on the task role is only on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/hubspot-oauth-*`, so a rotated HubSpot refresh token is written back to that secret. Do not add environment properties on the Beanstalk environment. The allow list and the bucket name are in `refresh-config.json` inside the application zip.
+
+If the managed policy is already attached, this one CloudShell command updates it in place (previous VPC and subnet parameters stay):
+
+```bash
+aws cloudformation deploy \
+  --region us-east-2 \
+  --stack-name opstream-gtm-refresh \
+  --template-file gtm-refresh.yaml \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides SourceKey=code/refresh-src/v10.zip
+```
 
 ### 6. Run the task once
 

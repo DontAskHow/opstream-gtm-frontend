@@ -192,6 +192,14 @@ export async function pollPublished({ appRoot, dataDir, onSwap }) {
   }
 }
 
+export async function readStateFile(appRoot, name) {
+  const cfg = loadRefreshConfig(appRoot);
+  if (!cfg || !cfg.dataBucket) return null;
+  const key = (cfg.statePrefix || 'state').replace(/\/$/, '') + '/' + name;
+  try { return (await getObject(cfg, key)).toString('utf8'); }
+  catch { return null; }
+}
+
 export async function persistStateFile(appRoot, name, body) {
   const cfg = loadRefreshConfig(appRoot);
   if (!cfg || !cfg.dataBucket) return;
