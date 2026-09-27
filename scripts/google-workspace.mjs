@@ -1,5 +1,5 @@
-// Read-only Google Workspace calls and the personal brief.
-// Nothing here sends mail or writes to HubSpot or Sheets.
+// Google Workspace reads, personal briefs, and one confirmed Gmail send.
+// sendGmailMessage is not an assistant tool. Nothing here writes HubSpot or Sheets.
 const PHOENIX = 'America/Phoenix';
 const TEXT_CAP = 4000;
 const DOC_CAP = 8000;
@@ -69,11 +69,18 @@ export async function readThread(fetchImpl, token, threadId) {
   const thread = await googleGet(
     fetchImpl,
     token,
-    'https://gmail.googleapis.com/gmail/v1/users/me/threads/' + encodeURIComponent(id) + '?format=metadata',
+    'https://gmail.googleapis.com/gmail/v1/users/me/threads/' + encodeURIComponent(id)
+      + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Message-Id&metadataHeaders=References',
   );
-  const lines = [];
+  const lines = ['threadId=' + clip(thread.id || id, 128)];
   for (const message of (thread.messages || []).slice(0, 8)) {
-    lines.push('From: ' + clip(header(message, 'From'), 120) + ' | Subject: ' + clip(header(message, 'Subject'), 180) + ' | ' + clip(message.snippet, 300));
+    lines.push(
+      'messageId=' + clip(header(message, 'Message-Id'), 180)
+      + ' | references=' + clip(header(message, 'References'), 300)
+      + ' | From: ' + clip(header(message, 'From'), 120)
+      + ' | Subject: ' + clip(header(message, 'Subject'), 180)
+      + ' | ' + clip(message.snippet, 300),
+    );
   }
   return (lines.join('\n') || 'Empty thread.').slice(0, TEXT_CAP);
 }
@@ -152,6 +159,39 @@ export async function createGmailDraft(fetchImpl, token, { to, subject, body }) 
     throw err;
   }
   return { id: String(parsed.id || '') };
+}
+
+function mailHeader(value) {
+  return String(value || '').replace(/[\r\n]/g, ' ').trim();
+}
+
+// Called only after the signed-in user confirms one draft. Not registered as a tool.
+export async function sendGmailMessage(fetchImpl, token, { to, cc, subject, body, threadId, inReplyTo, references }) {
+  const headers = ['To: ' + mailHeader(to)];
+  const ccValue = mailHeader(cc);
+  if (ccValue) headers.push('Cc: ' + ccValue);
+  headers.push('Subject: ' + mailHeader(subject));
+  const replyTo = mailHeader(inReplyTo);
+  const refs = mailHeader(references);
+  if (replyTo) headers.push('In-Reply-To: ' + replyTo);
+  if (refs) headers.push('References: ' + refs);
+  headers.push('Content-Type: text/plain; charset=utf-8');
+  const msg = headers.join('\r\n') + '\r\n\r\n' + String(body || '');
+  const payload = { raw: Buffer.from(msg).toString('base64url') };
+  const tid = mailHeader(threadId);
+  if (tid) payload.threadId = tid;
+  const response = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const parsed = await readJson(response);
+  if (!response.ok || !parsed.id) {
+    const err = new Error('GoogleApi');
+    err.code = 'GoogleApi';
+    throw err;
+  }
+  return { id: String(parsed.id) };
 }
 
 export const GOOGLE_TOOL_SCHEMAS = [

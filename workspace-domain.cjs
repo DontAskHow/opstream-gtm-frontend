@@ -9,6 +9,7 @@ const workspaceDomain = (() => {
       subject: d.subject ?? cleanTitle(d.title || ''), text: d.text || '', rationale: d.rationale || '',
       recipients: Array.isArray(d.recipients) ? d.recipients.map(r => r.email || r.name).filter(Boolean).join(', ') : d.recipients || '',
       cc: d.cc || '', bcc: d.bcc || '', internalNotes: d.internalNotes || '', campaignSender: d.campaignSender || '',
+      threadId: typeof d.threadId === 'string' ? d.threadId : '', inReplyTo: typeof d.inReplyTo === 'string' ? d.inReplyTo : '', references: typeof d.references === 'string' ? d.references : '',
       company: d.company || 'No company linked', accountIds: d.accountIds || [],
       supportRefs: d.supportRefs || (Array.isArray(d.refs) ? d.refs : []), status: ['Draft', 'Ready for review', 'Archived'].includes(d.status) ? d.status : 'Draft',
       version: Number.isSafeInteger(d.version) ? d.version : 0, updatedAt: d.updatedAt || null,

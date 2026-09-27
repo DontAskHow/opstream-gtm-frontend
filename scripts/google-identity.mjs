@@ -15,6 +15,10 @@ export const READ_SCOPES = [
 ];
 
 export const COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
+export const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+
+// One consent on the first Sign in with Google. Compose and send are not a second prompt.
+export const SIGN_IN_SCOPES = [...READ_SCOPES, COMPOSE_SCOPE, SEND_SCOPE];
 
 const SCOPE_LABELS = {
   openid: 'Sign-in',
@@ -24,6 +28,7 @@ const SCOPE_LABELS = {
   'https://www.googleapis.com/auth/calendar.readonly': 'Read Calendar',
   'https://www.googleapis.com/auth/drive.readonly': 'Read Drive',
   'https://www.googleapis.com/auth/gmail.compose': 'Create Gmail drafts',
+  'https://www.googleapis.com/auth/gmail.send': 'Send from Gmail',
 };
 
 export function safeCode(err) {
@@ -73,7 +78,7 @@ export function authUrl({ clientId, redirectUri, state, scopes }) {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: (scopes || READ_SCOPES).join(' '),
+    scope: (scopes || SIGN_IN_SCOPES).join(' '),
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
@@ -163,6 +168,7 @@ export function sessionPublic(session) {
     expired: !!session.expired,
     initials: initials(session.name, session.email),
     compose: scopes.includes(COMPOSE_SCOPE),
+    canSend: scopes.includes(SEND_SCOPE) && !session.expired,
   };
 }
 

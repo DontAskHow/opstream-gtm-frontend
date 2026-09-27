@@ -22,12 +22,12 @@ import { fileURLToPath } from 'node:url';
 import { loadRefreshConfig, persistStateFile, readStateFile, pollPublished, getSecretString, putSecretString } from './published-swap.mjs';
 import { createSheetsConnect, plainPage, REFRESH_SECRET_ID } from './sheets-connect.mjs';
 import {
-  USER_STATE_PREFIX, COMPOSE_STATE_PREFIX, READ_SCOPES, COMPOSE_SCOPE,
+  USER_STATE_PREFIX, COMPOSE_STATE_PREFIX, COMPOSE_SCOPE, SEND_SCOPE, SIGN_IN_SCOPES,
   emailAllowed, userHash, userSecretId, authUrl, exchangeCode, refreshAccessToken,
   sessionPublic, secretDocument, safeCode,
 } from './google-identity.mjs';
 import {
-  GOOGLE_TOOL_SCHEMAS, isGoogleTool, runGoogleTool, buildPersonalBrief, gtmIndex, createGmailDraft,
+  GOOGLE_TOOL_SCHEMAS, isGoogleTool, runGoogleTool, buildPersonalBrief, gtmIndex, createGmailDraft, sendGmailMessage,
 } from './google-workspace.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
@@ -187,6 +187,25 @@ function loadGtmIndex() {
   return gtmIndexCache;
 }
 
+function saveState(name, body) {
+  const fn = hooks.persistStateFile || persistStateFile;
+  return Promise.resolve(fn(path.resolve('.'), name, body)).catch(() => {});
+}
+
+function auditRow(row) {
+  const item = {
+    at: String(row && row.at || ''),
+    from: String(row && row.from || ''),
+    to: String(row && row.to || ''),
+    subject: String(row && row.subject || ''),
+    gmailMessageId: String(row && (row.gmailMessageId || row.id) || ''),
+    draftId: String(row && row.draftId || ''),
+  };
+  const cc = String(row && row.cc || '').trim();
+  if (cc) item.cc = cc;
+  return item;
+}
+
 function rememberBrief(session) {
   const token = session.accessToken;
   if (!token || session.expired) return;
@@ -201,7 +220,7 @@ function rememberBrief(session) {
     if (stored) stored.brief = brief;
     const body = JSON.stringify(brief);
     if (body.includes(session.refreshToken || '___none___')) return;
-    persistStateFile(path.resolve('.'), 'users/' + userHash(session.email) + '/brief.json', body).catch(() => {});
+    saveState('users/' + userHash(session.email) + '/brief.json', body);
   }).catch(err => {
     console.error('[user-brief] ' + safeCode(err));
   });
@@ -310,8 +329,8 @@ const SYSTEM = `You are the GTM Workspace assistant for Opstream — the marketi
 All workspace data below is REAL: live records from the company brain (HubSpot, Fathom calls, Sheets, email). Never invent records, names, owners, dates, amounts, or meetings. If something is not in the data, say so plainly. Missing values are null, not zero.
 
 AUTONOMY (hard rules — never break these):
-- You may DRAFT follow-up emails and queue them in the workspace, PREPARE meeting briefs, and PROPOSE CRM updates for Hollie to review.
-- You NEVER send anything, never message anyone externally, and never write to HubSpot or any source system. Drafts and proposals stay inside the workspace until a human acts.
+- You may prepare a ready-to-send email in the workspace (to, cc, subject, body, and when it replies in a thread, threadId plus In-Reply-To and References), PREPARE meeting briefs, and PROPOSE CRM updates for Hollie to review.
+- You NEVER send email yourself, never schedule or bulk-send, and never write to HubSpot or any source system. The signed-in user sends one draft by clicking Send on that draft.
 - Say "drafted" or "proposed" — never "sent".
 
 Answer using only the workspace data. Be concise and concrete: names, numbers, dates.
@@ -324,13 +343,13 @@ Format your answer as a compact HTML fragment using only <p>, <ul>, <ol>, <li>, 
 You can also take actions with tools:
 - get_pipeline_metrics: read the computed open-book totals, the largest open deal, and quarter leads, MQL, and SQL.
 - lookup_deals: look up a company or deal. Results label renewals and other deals that are not in the open book.
-- create_draft: write a follow-up email draft into the workspace (the app opens it in Drafts). Use it when the user asks to draft/write/email/follow up. The "company" argument must be an account name from the data. Write a real, specific email using the account's context (owner, contacts, deal stage, last interaction). Keep it under 180 words.
+- create_draft: prepare one ready-to-send email in the workspace (the app opens it in Drafts). Use it when the user asks to draft/write/email/follow up. The "company" argument must be an account name from the data. Write a real, specific email using the account's context (owner, contacts, deal stage, last interaction). Put recipients in "recipients", copies in "cc", and when replying put the Gmail threadId, In-Reply-To, and References from read_thread. Keep it under 180 words. This does not send.
 - propose_crm_update: propose a CRM field change for Hollie's review. It is stored as a proposal inside the workspace — nothing is written to HubSpot. Use when data looks stale or wrong (e.g. a deal sitting in a stage too long, a missing close date). Always include the current value (or "unknown") and your rationale.
 - mark_queue_item: mark one of Hollie's operator queue items done or dismissed by its item id (ids look like q:<kind>:<id> and appear in the HOLLIE QUEUE context lines). Use when she says something is handled.
 - read_briefing: read the latest proactive morning brief the assistant wrote for Hollie. Use when she asks what's new, what changed, or what to focus on today.
 - navigate: jump the UI to a view (today, performance, accounts, meetings, drafts, data) or to a specific account/meeting by name.
 
-Always include a brief text reply summarizing what you found or did, alongside any tool calls. Never claim to have sent an email — sending is disabled; drafts are only created. There is no send tool.`;
+Always include a brief text reply summarizing what you found or did, alongside any tool calls. Never claim to have sent an email. There is no send tool. Tell the user to open that draft and click Send.`;
 
 const TOOLS = [
   ...DATA_TOOL_SCHEMAS,
@@ -338,7 +357,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'create_draft',
-      description: 'Create a follow-up email draft in the workspace for an account.',
+      description: 'Prepare one ready-to-send email in the workspace. Does not send. The user clicks Send on that draft.',
       parameters: {
         type: 'object',
         properties: {
@@ -346,7 +365,11 @@ const TOOLS = [
           title: { type: 'string', description: 'Draft title' },
           subject: { type: 'string', description: 'Email subject line' },
           text: { type: 'string', description: 'Full email body as plain text' },
-          recipients: { type: 'string', description: 'Recipient email(s), comma-separated' }
+          recipients: { type: 'string', description: 'To addresses, comma-separated' },
+          cc: { type: 'string', description: 'Cc addresses, comma-separated' },
+          threadId: { type: 'string', description: 'Gmail thread id when this is a reply' },
+          inReplyTo: { type: 'string', description: 'In-Reply-To message id from the thread' },
+          references: { type: 'string', description: 'References header from the thread' }
         },
         required: ['company', 'text']
       }
@@ -533,7 +556,7 @@ function briefingToolContent() {
 
 function googlePrompt(user) {
   if (user && user.email && !user.expired) {
-    return '\n\nThe user is signed in as ' + user.email + '. You can read their Gmail, Calendar, and Drive with search_email, read_thread, list_calendar, search_drive, and read_doc. When they ask about their email, calendar, documents, or upcoming shows, call those tools and cite the subject or title you used. You may draft. You cannot send mail.';
+    return '\n\nThe user is signed in as ' + user.email + '. You can read their Gmail, Calendar, and Drive with search_email, read_thread, list_calendar, search_drive, and read_doc. When they ask about their email, calendar, documents, or upcoming shows, call those tools and cite the subject or title you used. You may prepare a ready-to-send draft with create_draft, including cc and, for a reply, threadId, inReplyTo, and references from read_thread. You cannot send. The user sends only by clicking Send on that specific draft.';
   }
   if (user && user.expired) {
     return '\n\nGoogle access expired, reconnect. Tell them to use the reconnect link. Do not invent mailbox contents.';
@@ -571,7 +594,7 @@ async function askOpenAI(message, history, user) {
       needsFollowUp = true;
     } else if (name === 'create_draft') {
       actions.push({ type: 'create_draft', ...args });
-      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Draft queued in the workspace. It was not sent.' });
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Draft queued in the workspace. It was not sent. The user sends it by clicking Send on that draft.' });
     } else if (name === 'navigate') {
       actions.push({ type: 'navigate', ...args });
       toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Navigation queued in the workspace.' });
@@ -593,6 +616,8 @@ async function askOpenAI(message, history, user) {
       actions.push({ type: 'mark_queue_item', itemId, action, ok });
       if (!ok) notes.push('Could not update that queue item — check the item id.');
       toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: ok ? 'Queue item updated in the workspace.' : 'Could not update that queue item.' });
+    } else if (/send/i.test(name)) {
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'There is no send tool. The user sends by clicking Send on that specific draft.' });
     } else if (isGoogleTool(name)) {
       const token = await ensureAccess(user);
       const content = token
@@ -757,7 +782,7 @@ function onRequest(req, res) {
       arr.push({ itemId, action, at: new Date().toISOString() });
       try { fs.writeFileSync(fp, JSON.stringify(arr.slice(-500))); }
       catch (e) { res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Could not save.' })); return; }
-      persistStateFile(path.resolve('.'), 'hollie-feedback.json', fs.readFileSync(fp)).catch(() => {});
+      saveState('hollie-feedback.json', fs.readFileSync(fp));
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));
       return;
     }
@@ -791,7 +816,7 @@ function onRequest(req, res) {
         clientId: client.clientId,
         redirectUri: getOAuthRedirectUri(req),
         state,
-        scopes: compose ? [...READ_SCOPES, COMPOSE_SCOPE] : READ_SCOPES,
+        scopes: SIGN_IN_SCOPES,
       });
       if (url.pathname === '/api/gmail/oauth/start') {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ authUrl: location }));
@@ -834,9 +859,7 @@ function onRequest(req, res) {
           .end(plainPage('Google was not connected', 'The Google account could not be confirmed.'));
         return;
       }
-      if (!exchanged.scopes.length) {
-        exchanged.scopes = issued.compose ? [...READ_SCOPES, COMPOSE_SCOPE] : [...READ_SCOPES];
-      }
+      if (!exchanged.scopes.length) exchanged.scopes = [...SIGN_IN_SCOPES];
       if (!emailAllowed(exchanged.email, allowList())) {
         res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
           .end(plainPage('Google was not connected', 'This Google account is not on the Opstream allow list.'));
@@ -936,7 +959,25 @@ function onRequest(req, res) {
         email: pub.email || null,
         oauthConfigured: true,
         expired: !!pub.expired,
+        canSend: !!pub.canSend,
       }));
+      return;
+    }
+    if (url.pathname === '/api/me/sends' && req.method === 'GET') {
+      const existing = currentUser(req);
+      if (!existing) {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ signedIn: false, sends: [] }));
+        return;
+      }
+      const storedSession = userSessions.get(existing.sid) || existing;
+      if (!Array.isArray(storedSession.sends)) {
+        const stored = await readStateFile(path.resolve('.'), 'users/' + userHash(existing.email) + '/sends.json');
+        let parsed = [];
+        try { parsed = stored ? JSON.parse(stored) : []; } catch { parsed = []; }
+        storedSession.sends = (Array.isArray(parsed) ? parsed : []).slice(-200).map(auditRow);
+      }
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        .end(JSON.stringify({ sends: storedSession.sends.map(auditRow) }));
       return;
     }
     if (url.pathname === '/api/gmail/draft' && req.method === 'POST') {
@@ -965,6 +1006,69 @@ function onRequest(req, res) {
       }
       return;
     }
+    if (url.pathname === '/api/gmail/send' && req.method === 'POST') {
+      let raw = '';
+      for await (const chunk of req) { raw += chunk; if (raw.length > 120000) break; }
+      let body = {};
+      try { body = JSON.parse(raw || '{}'); } catch { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Invalid JSON.' })); return; }
+      const existing = currentUser(req);
+      if (!existing) {
+        res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Sign in to send from your Gmail.' }));
+        return;
+      }
+      if (existing.expired || !(existing.scopes || []).includes(SEND_SCOPE)) {
+        res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Google access expired, reconnect' }));
+        return;
+      }
+      const bulk = Array.isArray(body.messages) || Array.isArray(body.drafts) || Array.isArray(body.to) || Array.isArray(body.draftId);
+      const draftId = typeof body.draftId === 'string' ? body.draftId.trim() : '';
+      if (bulk || body.sendAt || body.schedule || body.scheduled || body.confirmed !== true || !draftId || draftId.length > 200) {
+        res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Send one specific draft after you confirm it.' }));
+        return;
+      }
+      const to = String(body.to || '').replace(/[\r\n]/g, ' ').trim();
+      const cc = String(body.cc || '').replace(/[\r\n]/g, ' ').trim();
+      const subject = String(body.subject || '').replace(/[\r\n]/g, ' ').trim();
+      const text = String(body.body || '');
+      if (!to || to.length > 2000 || !subject || subject.length > 500 || !text.trim() || text.length > 100000) {
+        res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'This draft needs a recipient, subject, and body.' }));
+        return;
+      }
+      const token = await ensureAccess(existing);
+      if (!token) {
+        res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Google access expired, reconnect' }));
+        return;
+      }
+      try {
+        const sent = await sendGmailMessage(hooks.fetchImpl, token, {
+          to,
+          cc,
+          subject,
+          body: text,
+          threadId: typeof body.threadId === 'string' ? body.threadId : '',
+          inReplyTo: typeof body.inReplyTo === 'string' ? body.inReplyTo : '',
+          references: typeof body.references === 'string' ? body.references : '',
+        });
+        const record = auditRow({
+          at: new Date().toISOString(),
+          from: existing.email,
+          to,
+          cc,
+          subject,
+          gmailMessageId: sent.id,
+          draftId,
+        });
+        const storedSession = userSessions.get(existing.sid) || existing;
+        const prior = Array.isArray(storedSession.sends) ? storedSession.sends : [];
+        storedSession.sends = [...prior, record].slice(-200);
+        saveState('users/' + userHash(existing.email) + '/sends.json', JSON.stringify(storedSession.sends));
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, id: record.gmailMessageId, send: record }));
+      } catch (err) {
+        console.error('[gmail-send] failed: ' + safeCode(err));
+        res.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Gmail did not send this draft.' }));
+      }
+      return;
+    }
     if (url.pathname === '/api/proposals/decide' && req.method === 'POST') {
       // Hollie approves/declines an assistant-proposed CRM change. Workspace-local
       // only: records the decision on the proposal, never writes to HubSpot.
@@ -986,7 +1090,7 @@ function onRequest(req, res) {
       arr[idx] = { ...arr[idx], status: decision, decidedAt: new Date().toISOString() };
       try { fs.writeFileSync(fp, JSON.stringify(arr.slice(-500))); }
       catch (e) { res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Could not save.' })); return; }
-      persistStateFile(path.resolve('.'), 'crm-proposals.json', fs.readFileSync(fp)).catch(() => {});
+      saveState('crm-proposals.json', fs.readFileSync(fp));
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));
       return;
     }

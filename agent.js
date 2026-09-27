@@ -224,6 +224,10 @@
         subject: a.subject || '',
         text: a.text || '',
         recipients: a.recipients || contactEmail || '',
+        cc: a.cc || '',
+        threadId: a.threadId || '',
+        inReplyTo: a.inReplyTo || '',
+        references: a.references || '',
         company: (account && account.name) || a.company || 'No company linked',
         accountIds: account ? ['company:' + account.id] : [],
         rationale: 'Drafted by the GTM assistant.'

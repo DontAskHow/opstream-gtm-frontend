@@ -38,7 +38,7 @@ Component.prototype.renderVals=function(){
   v.googleConnectionDisabled=false;
   v.connectGoogle=()=>{window.location.href='/api/google/sign-in';};
  }else{
-  v.googleConnectionLabel='Connected as '+(s.email||s.name)+'. Read-only. Nothing is sent.';
+  v.googleConnectionLabel='Connected as '+(s.email||s.name);
   v.googleConnectLabel='Reconnect';
   v.googleConnectionDisabled=false;
   v.connectGoogle=()=>{window.location.href='/api/google/sign-in';};
@@ -46,7 +46,44 @@ Component.prototype.renderVals=function(){
  v.slackConnectionLabel='Slack is intentionally not part of this workspace — mention notifications are never sent. Comments are saved in your browser.';
  v.slackConnectLabel='Not available';
  v.slackConnectionDisabled=true;
- v.sendDisabled=true;
+ v.sendAudit=Array.isArray(this.state.sendAudit)?this.state.sendAudit:[];
+ v.hasSendAudit=v.sendAudit.length>0;
+ const canSend=!!(s.signedIn&&!s.expired&&s.canSend);
+ if(canSend){
+  v.gmailEmail=s.email||'';
+  v.senderLabel=s.email||'';
+  const current=this._currentWorkspaceDraft?this._currentWorkspaceDraft():null;
+  const emailDraft=current&&current.purpose!=='campaign'&&current.purpose!=='internal-note';
+  const ready=!!(emailDraft&&String(current.recipients||'').trim()&&String(current.subject||current.title||'').trim()&&String(current.text||'').trim()&&current.id);
+  v.sendDisabled=!ready||!!this.state.draftSending;
+  v.sendLabel=this.state.draftSending?'Sending…':'Send via Gmail';
+  v.sendDraft=()=>{
+   const draft=this._currentWorkspaceDraft?this._currentWorkspaceDraft():null;
+   if(!draft||this.state.draftSending)return;
+   const to=String(draft.recipients||'').trim();
+   const cc=String(draft.cc||'').trim();
+   const subject=String(draft.subject||draft.title||'').trim();
+   const body=String(draft.text||'').trim();
+   if(!to||!subject||!body||!draft.id)return;
+   this.setState({sendConfirm:{draftId:draft.id,to,cc,subject,body,threadId:draft.threadId||'',inReplyTo:draft.inReplyTo||'',references:draft.references||''}});
+  };
+  v.confirmSend=async()=>{
+   const pending=this.state.sendConfirm;
+   if(!pending||pending.confirmed===false||!pending.draftId||this.state.draftSending)return;
+   this.setState({draftSending:true});
+   try{
+    const r=await fetch('/api/gmail/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirmed:true,draftId:pending.draftId,to:pending.to,cc:pending.cc||'',subject:pending.subject,body:pending.body,threadId:pending.threadId||'',inReplyTo:pending.inReplyTo||'',references:pending.references||''})});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error||'Gmail did not send this draft.');
+    const row=j.send||{at:new Date().toISOString(),from:s.email,to:pending.to,subject:pending.subject,gmailMessageId:j.id,draftId:pending.draftId};
+    this.setState({draftSending:false,sendConfirm:null,draftFeedback:'Sent from '+s.email+'.',draftFeedbackClass:'form-success',sendAudit:[row,...(this.state.sendAudit||[])].slice(0,200)});
+   }catch(e){this.setState({draftSending:false,draftFeedback:e.message||'Gmail did not send this draft.',draftFeedbackClass:'form-error'});}
+  };
+ }else{
+  v.sendDisabled=true;
+  v.sendDraft=()=>this.setState({draftFeedback:'Sign in with Google to send from your account.',draftFeedbackClass:'form-error'});
+  v.confirmSend=()=>this.setState({sendConfirm:null,draftFeedback:'Sign in with Google to send from your account.',draftFeedbackClass:'form-error'});
+ }
  v.canCreateGmailDraft=!!(s.signedIn&&s.compose&&!s.expired);
  v.createGmailDraft=async()=>{
   const d=this._currentWorkspaceDraft?this._currentWorkspaceDraft():null;
