@@ -1145,7 +1145,7 @@ class Component extends DCLogic {
     const stagesAgg = stageOrder.map(stage => { const rows = dealsRaw.filter(d => d[2] === stage); return [stage, rows.length, rows.reduce((n, d) => n + d[3], 0)]; }).concat([]);
     const maxStage = Math.max(...stagesAgg.map(x => x[2]));
     // ---- Proactive briefing: what needs a human, per role ----
-    const opps = st.verified?.opportunities || [];
+    const opps = workspaceModel.annotateOpportunities(st.verified?.opportunities || [], REC);
     const oppByName = Object.fromEntries(opps.map(o => [o.name, o]));
     const todayPhx = workspaceModel.phoenixToday();
     const pipeNow = workspaceModel.pipelineTotals(opps, todayPhx);
@@ -1185,7 +1185,7 @@ class Component extends DCLogic {
     const nudgeDraft = (q) => () => { const existing = (st.newDrafts || []).findIndex(x => x.seedId === q.id); if (existing >= 0) { this.setState({ screen: 'drafts', draft: baseDrafts.length - (st.newDrafts || []).length + existing }); window.scrollTo(0, 0); return; } const cc = q.company ? findCo(q.company) : null; const contactName = cc && cc.contacts[0] ? cc.contacts[0].name.split(' ')[0] : 'there'; const nudgeText = 'Hi ' + contactName + ',\n\nWanted to check in on ' + (q.deal && q.deal !== q.company ? q.deal + ' at ' + q.company : q.company || 'our conversation') + '. ' + (q.daysQuiet ? "It's been " + q.daysQuiet + ' days since we last connected' : 'We haven\'t connected in a while') + ', and I wanted to see where things stand on your end.\n\n' + (q.stage ? 'Last we spoke, this was in ' + q.stage + '. ' : '') + 'Is this still a priority, or has something changed?\n\nHappy to jump on a quick call if helpful.\n\nBest,\nHollie'; const list = [...(st.newDrafts || []), { kind: 'Follow-up', seedId: q.id, title: 'Nudge ' + (q.company || 'account'), company: q.company || 'No company linked', text: nudgeText, rationale: (q.why || '') + ' Drafts are never sent automatically. Edit the generated nudge above to match your voice.', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: cc ? cc.contacts.slice(0, 2).map(x => x.name).join(', ') : '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts', draftFeedback: 'Draft created with a starting nudge — edit it to match your voice, then use Copy for Gmail to paste it into Gmail.', draftFeedbackClass: 'form-success' }); window.scrollTo(0, 0); };
     const kindLabel = { followup_draft: 'Follow-up draft', stale_deal: 'Stale deal', unworked_lead: 'Unworked lead', crm_update: 'CRM update', meeting_prep: 'Meeting prep', sheet_review: 'Sheet check' };
     const mdText = s => String(s == null ? '' : s).replace(/\[([^\]]+)\]\([^)\s]+\)/g, '$1');
-    const isTestItem = text => /system verification test/i.test(String(text || ''));
+    const isTestItem = text => /mozilla firefox|system verification test/i.test(String(text || ''));
     const cleanCopy = text => String(text == null ? '' : text).replace(/\bnewSinceLastBrief\b/gi, 'new');
     const hollieQueue = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id] && !isTestItem(q.title) && !isTestItem(q.why)).map((q, i) => {
       const confirmKey = st.confirmQueue;

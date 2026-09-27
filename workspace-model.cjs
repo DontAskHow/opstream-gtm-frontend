@@ -86,6 +86,35 @@ const workspaceModel = {
     if(/^\d+$/.test(s)||/^[a-f0-9-]{8,}$/i.test(s))return 'Owner name not connected';
     return s;
   },
+  // HubSpot is the system the lead was stored in, not a marketing channel.
+  sourceLabel(source) {
+    const s=String(source??'').trim();
+    if(!s||/^(hubspot|crm|integration|unknown|unknown source)$/i.test(s))return 'Unknown source';
+    return s;
+  },
+  // A verification fixture is not a customer deal.
+  isTestRecord(deal) {
+    const blob=[deal?.name,deal?.dealName,deal?.company,deal?.title,deal?.rationale].filter(Boolean).join(' ');
+    return /mozilla firefox|system verification test/i.test(blob);
+  },
+  // Older snapshots stored the company name on the opportunity and left the CRM deal name only on the record.
+  // The same generator divided an already-fractional stage probability by 100, so every value sits at or below 0.02.
+  annotateOpportunities(opportunities,records) {
+    const byId=new Map();
+    for(const company of records?.companies||[])for(const deal of company.deals||[])if(deal&&deal.id)byId.set(deal.id,deal);
+    const positive=(opportunities||[]).map(o=>Number(o.probability)).filter(n=>Number.isFinite(n)&&n>0);
+    const undoExtraDivision=positive.length>0&&Math.max(...positive)<=0.02;
+    return (opportunities||[]).map(o=>{
+      const deal=byId.get(o.id);
+      let next=o;
+      if(deal&&!o.dealName)next={...next,dealName:deal.name||''};
+      if(undoExtraDivision&&o.probability!=null&&o.probability!==''){
+        const n=Number(o.probability);
+        if(Number.isFinite(n))next={...next,probability:n*100};
+      }
+      return next;
+    });
+  },
   // 'open' counts in the headline. 'past' failed only because the close date is past.
   // 'excluded' is a renewal, current agreement, disqualified, on hold, or closed deal.
   listStatus(deal,today) {
@@ -135,6 +164,7 @@ const workspaceModel = {
   // not Disqualified, not On Hold, not closed. A missing stage stays in and is labeled.
   isOpenPipeline(deal,today) {
     if(!deal||deal.closed===true)return false;
+    if(this.isTestRecord(deal))return false;
     const stage=String(deal.stage||deal.stageLabel||'');
     const dealName=String(deal.dealName||'');
     const blob=(stage+' '+dealName).toLowerCase();
@@ -227,11 +257,24 @@ const workspaceModel = {
   },
   activityFromRecords(records) {
     const meetings=[],recordings=[];
+    const seenMeetings=new Set(),seenRecordings=new Set();
+    const addMeeting=(m,companyId)=>{
+      const id=m.id||(companyId+'|'+String(m.start||'')+'|'+(m.title||''));
+      if(seenMeetings.has(id))return;
+      seenMeetings.add(id);
+      meetings.push({start:m.start,booked:m.booked||m.created||m.start,outcome:m.outcome||'',companyId});
+    };
+    const addRecording=(r,companyId)=>{
+      const id=r.id||(companyId+'|'+String(r.date||''));
+      if(seenRecordings.has(id))return;
+      seenRecordings.add(id);
+      recordings.push({date:r.date,companyId});
+    };
     for(const c of records?.companies||[]){
-      for(const m of c.meetings||[])meetings.push({start:m.start,booked:m.booked||m.created||m.start,outcome:m.outcome||'',companyId:c.id});
-      for(const r of c.recordings||[])recordings.push({date:r.date,companyId:c.id});
+      for(const m of c.meetings||[])addMeeting(m,c.id);
+      for(const r of c.recordings||[])addRecording(r,c.id);
     }
-    for(const r of records?.unmatchedRecordings||[])recordings.push({date:r.date,companyId:null});
+    for(const r of records?.unmatchedRecordings||[])addRecording(r,null);
     return {meetings,recordings};
   },
   // Leads by lead date. MQL = a meeting booked. SQL = a meeting held
@@ -261,7 +304,7 @@ const workspaceModel = {
     if(!company)return 'Unattributed';
     const id=String(company.id||'');
     const matches=(leads||[]).filter(l=>(l.companyId&&String(l.companyId).replace(/^company:/,'')===id)||(l.name&&l.name===company.name));
-    const sources=[...new Set(matches.map(l=>l.source).filter(Boolean))];
+    const sources=[...new Set(matches.map(l=>this.sourceLabel(l.source)).filter(Boolean))];
     return sources.length===1?sources[0]:'Unattributed';
   },
   weekStart(today) {
@@ -349,7 +392,7 @@ const workspaceModel = {
     const inR=v=>this.inRange(v,start,end);
     const by=new Map();
     const row=src=>{const key=src||'Unattributed';if(!by.has(key))by.set(key,{channel:key,leads:0,mql:0,sql:0});return by.get(key);};
-    for(const l of leads||[])if(inR(l.lead))row(l.source||'Unknown source').leads++;
+    for(const l of leads||[])if(inR(l.lead))row(this.sourceLabel(l.source)).leads++;
     const companies=records?.companies||[];
     const find=id=>companies.find(c=>c.id===id);
     const {meetings,recordings}=this.activityFromRecords(records);

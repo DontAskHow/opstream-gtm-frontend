@@ -113,8 +113,16 @@ def probability_fraction(value):
     return min(n, 100) / 100 if n > 1 else n
 
 
+def is_test_record(deal):
+    blob = " ".join(str((deal or {}).get(k) or "") for k in ("name", "dealName", "company", "title", "rationale"))
+    low = blob.lower()
+    return "mozilla firefox" in low or "system verification test" in low
+
+
 def is_open_pipeline(deal, today):
     if not deal or deal.get("closed") is True:
+        return False
+    if is_test_record(deal):
         return False
     stage = str(deal.get("stage") or deal.get("stageLabel") or "")
     deal_name = str(deal.get("dealName") or "")
