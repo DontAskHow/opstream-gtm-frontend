@@ -48,14 +48,16 @@ check('largest company', certifiedLargest.company === 'NXP', JSON.stringify(cert
 check('largest deal', certifiedLargest.dealName === 'NXP - New Deal', JSON.stringify(certifiedLargest.dealName));
 check('largest amount', certifiedLargest.amount === 500000 && certifiedLargest.amountLabel === '$500,000', JSON.stringify(certifiedLargest.amount) + ' ' + certifiedLargest.amountLabel);
 check('largest in open book', certifiedLargest.inOpenBook === true, String(certifiedLargest.inOpenBook));
-check('open count', certifiedMetrics.openCount === 28, String(certifiedMetrics.openCount));
-check('open amount', certifiedMetrics.openAmount === 3670000 && certifiedMetrics.openAmountLabel === '$3,670,000', certifiedMetrics.openAmount + ' ' + certifiedMetrics.openAmountLabel);
-check('weighted', certifiedMetrics.weighted === 811500 && certifiedMetrics.weightedLabel === '$811,500', certifiedMetrics.weighted + ' ' + certifiedMetrics.weightedLabel);
+check('open count', certifiedMetrics.openCount === 32, String(certifiedMetrics.openCount));
+check('open amount', certifiedMetrics.openAmount === 3960000 && certifiedMetrics.openAmountLabel === '$3,960,000', certifiedMetrics.openAmount + ' ' + certifiedMetrics.openAmountLabel);
+check('weighted', certifiedMetrics.weighted === 904750 && certifiedMetrics.weightedLabel === '$904,750', certifiedMetrics.weighted + ' ' + certifiedMetrics.weightedLabel);
+check('on hold', certifiedMetrics.onHoldCount === 15 && certifiedMetrics.onHoldAmount === 1300000 && certifiedMetrics.onHoldAmountLabel === '$1,300,000', [certifiedMetrics.onHoldCount, certifiedMetrics.onHoldAmount].join('/'));
+check('hubspot only', certifiedMetrics.hubspotOnlyCount === 1 && certifiedMetrics.hubspotOnlyAmount === 0, [certifiedMetrics.hubspotOnlyCount, certifiedMetrics.hubspotOnlyAmount].join('/'));
 check('renewals', certifiedMetrics.renewalCount === 74 && certifiedMetrics.renewalAmount === 3433665 && certifiedMetrics.renewalAmountLabel === '$3,433,665' && certifiedMetrics.renewalDuplicates === 3, [certifiedMetrics.renewalCount, certifiedMetrics.renewalAmount, certifiedMetrics.renewalDuplicates].join('/'));
 check('funnel', certifiedMetrics.leads === 383 && certifiedMetrics.mql === 280 && certifiedMetrics.sql === 118, [certifiedMetrics.leads, certifiedMetrics.mql, certifiedMetrics.sql].join('/'));
 check('nxp owner', certifiedLargest.owner === 'Tim', JSON.stringify(certifiedLargest.owner));
 check('live largest still NXP', largest.company === 'NXP' && largest.amount === 500000 && largest.owner === 'Tim', JSON.stringify(largest));
-check('live open book sheet-authoritative', metrics.openCount === 28 && metrics.openAmount === 3670000 && metrics.weighted === 811500, [metrics.openCount, metrics.openAmount, metrics.weighted].join('/'));
+check('live open book sheet-authoritative', metrics.openCount === 32 && metrics.openAmount === 3960000 && metrics.weighted === 904750, [metrics.openCount, metrics.openAmount, metrics.weighted].join('/'));
 check('collected timestamp', !!metrics.collectedAt && facts.context.includes('DATA COLLECTED:') && facts.context.includes(metrics.collectedAt) && String(metrics.collectedLabel).includes('Phoenix'), metrics.collectedLabel || 'missing');
 const revA = dataRevision(dataDir);
 const revB = dataRevision(dataDir);
@@ -78,12 +80,21 @@ const largestLine = lines.find(l => l.startsWith('LARGEST OPEN DEAL:'));
 check('context largest line', !!largestLine && largestLine.includes('NXP') && largestLine.includes('$500,000') && !/kidde/i.test(largestLine), largestLine || 'missing');
 const renewalLine = lines.find(l => l.includes('Renewal Agreement - 2027') && l.includes('$514,800'));
 check('context renewal label', !!renewalLine && renewalLine.includes('NOT IN THE OPEN BOOK (renewal)'), renewalLine || 'missing');
-check('context open total', certified.context.includes('OPEN PIPELINE: 28 deals, $3,670,000 open, $811,500 weighted.'), 'missing open pipeline line');
+check('context open total', certified.context.includes('OPEN PIPELINE: 32 deals, $3,960,000 open, $904,750 weighted.'), 'missing open pipeline line');
+check('context on hold', certified.context.includes('ON HOLD: 15 deals, $1,300,000.'), 'missing on hold line');
+check('context hubspot only', certified.context.includes('IN HUBSPOT, NOT ON THE SHEET: 1 deal, $0.'), 'missing hubspot-only line');
 check('context renewals', certified.context.includes('RENEWALS: 74 current deals, $3,433,665.'), 'missing renewals line');
 check('legacy renewal not open', certified.context.includes('NOT IN THE OPEN BOOK (renewal): No company linked — Renewal, $50,000'), 'missing $50,000 renewal');
 check('associated renewal company', certified.context.includes('NOT IN THE OPEN BOOK (renewal): Intuitive — Renewal, $350,000'), 'missing associated company');
 check('marketing brief in context', certified.context.includes('MARKETING BRIEF'), 'missing marketing brief');
 check('context funnel', certified.context.includes('383 leads / 280 MQL / 118 SQL'), 'missing funnel line');
+const mozilla = certified.deals.find(d => /Mozilla Firefox/.test(d.dealName || '') && d.amount === 105000);
+check('mozilla in the book', !!mozilla && mozilla.inOpenBook && mozilla.stage === 'Wider stakeholders' && mozilla.owner === 'Tim' && mozilla.closePassed === false, mozilla ? [mozilla.stage, mozilla.owner, mozilla.inOpenBook].join('/') : 'missing');
+const passed = ['CrossCountry', 'Taboola', 'ImPact Biotech', 'UVeye'].map(name => certified.deals.find(d => (d.dealName || '').includes(name) && d.inOpenBook));
+check('past close sheet rows stay open', passed.every(d => d && d.closePassed) && passed.map(d => d.amount).join(',') === '50000,50000,35000,50000', passed.map(d => d ? d.dealName + ':' + d.closePassed : 'missing').join('; '));
+check('past close flagged in context', ['CrossCountry', 'Taboola', 'ImPact Biotech', 'UVeye'].every(name => certified.context.includes(name) && certified.context.includes('close date passed')), 'missing close date passed');
+const calendly = certified.deals.find(d => /Calendly/.test(d.dealName || ''));
+check('calendly not in the total', !!calendly && calendly.inOpenBook === false && calendly.reason === 'In HubSpot, not on the Sheet', calendly ? calendly.reason : 'missing');
 check('live funnel line', facts.context.includes(metrics.leads + ' leads / ' + metrics.mql + ' MQL / ' + metrics.sql + ' SQL'), 'missing live funnel line');
 
 const openLines = lines.filter(l => l.startsWith('OPEN DEAL:') || l.startsWith('LARGEST OPEN DEAL:'));
@@ -110,6 +121,9 @@ print(json.dumps({
   "sql": book["sql"],
   "renewalCount": book["renewalCount"],
   "renewalAmount": book["renewalAmount"],
+  "onHoldCount": book["onHoldCount"],
+  "onHoldAmount": book["onHoldAmount"],
+  "hubspotOnlyCount": book["hubspotOnlyCount"],
   "largest": book["largest"],
   "kidde": [{"dealName": d["dealName"], "amount": d["amount"], "inOpenBook": d["inOpenBook"], "reason": d["reason"], "owner": d["ownerLabel"]} for d in kidde],
 }))
@@ -119,6 +133,8 @@ check('python count', pyBook.openCount === metrics.openCount, String(pyBook.open
 check('python amount', pyBook.openAmount === metrics.openAmount, String(pyBook.openAmount));
 check('python weighted', pyBook.weighted === metrics.weighted, String(pyBook.weighted));
 check('python renewals', pyBook.renewalCount === metrics.renewalCount && pyBook.renewalAmount === metrics.renewalAmount, [pyBook.renewalCount, pyBook.renewalAmount].join('/'));
+check('python on hold', pyBook.onHoldCount === 15 && pyBook.onHoldAmount === 1300000, [pyBook.onHoldCount, pyBook.onHoldAmount].join('/'));
+check('python hubspot only', pyBook.hubspotOnlyCount === metrics.hubspotOnlyCount, String(pyBook.hubspotOnlyCount));
 check('python funnel', pyBook.leads === metrics.leads && pyBook.mql === metrics.mql && pyBook.sql === metrics.sql, [pyBook.leads, pyBook.mql, pyBook.sql].join('/') + ' vs ' + [metrics.leads, metrics.mql, metrics.sql].join('/'));
 check('certified day', certified.today === CERTIFIED_DAY, certified.today);
 check('python largest', pyBook.largest && pyBook.largest.company === 'NXP' && pyBook.largest.amount === 500000 && pyBook.largest.owner === largest.owner, JSON.stringify(pyBook.largest));

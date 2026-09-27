@@ -167,8 +167,8 @@ const workspaceModel = {
       return next;
     });
   },
-  // 'open' counts in the headline. 'past' failed only because the close date is past.
-  // 'excluded' is a renewal, current agreement, disqualified, on hold, or closed deal.
+  // 'open' is a sheet-active row, including one whose close date has passed.
+  // 'excluded' is everything else: On Hold, Disqualified, closed, renewal, or not on the sheet.
   listStatus(deal,today) {
     today=today||this.phoenixToday();
     if(this.isOpenPipeline(deal,today))return 'open';
@@ -231,7 +231,36 @@ const workspaceModel = {
     const blob=this.stageBlob(deal);
     return /current agreement/.test(blob)||/\brenewal\b/.test(blob);
   },
+  // Active stages on the master sheet are the new-business open book.
+  SHEET_ACTIVE_STAGES: {
+    'discovery/rfp received': true,
+    'sql': true,
+    'demo meeting': true,
+    'decision': true,
+    'wider stakeholders': true,
+    'legal & compliance': true,
+  },
+  sheetClassName(stage) {
+    const s=String(stage||'').toLowerCase().replace(/\s*\(deal\)\s*/g,'').trim();
+    if(!s)return '';
+    if(this.SHEET_ACTIVE_STAGES[s])return 'active';
+    if(s==='on hold')return 'on hold';
+    if(s.includes('disqual'))return 'disqualified';
+    if(s.includes('closed'))return 'closed';
+    return 'other';
+  },
+  sheetClass(deal) {
+    const explicit=String(deal&&deal.sheetClass||'');
+    if(explicit)return explicit;
+    if(deal&&deal.onSheet)return this.sheetClassName(deal.stage||deal.stageLabel);
+    return '';
+  },
+  closeDatePassed(deal, today) {
+    const close=this.dateOnly(deal&&deal.close);
+    return !!(close&&today&&close<today);
+  },
   isRenewalRecord(deal) {
+    if(this.sheetClass(deal)==='active')return false;
     return this.isRenewalPipeline(deal)||this.titleIsRenewal(deal);
   },
   companyKey(deal) {
@@ -297,10 +326,8 @@ const workspaceModel = {
     if(this.isRenewalPipeline(deal)&&(!raw||raw==='No stage'||/^\d+$/.test(raw)||shown==='No stage'))return 'Stage name not synced';
     return shown;
   },
-  // Open pipeline is new business: future (or unset) close, not a renewal
-  // pipeline, not a renewal/current-agreement title, not Disqualified, not On
-  // Hold, not closed. A missing stage stays in and is labeled.
-  isOpenPipeline(deal,today) {
+  // HubSpot-shaped open check. The sheet, not this function, defines the book.
+  legacyOpenPipeline(deal,today) {
     if(!deal||deal.closed===true)return false;
     if(this.isTestRecord(deal))return false;
     const blob=this.stageBlob(deal);
@@ -310,12 +337,44 @@ const workspaceModel = {
     if(this.isRenewalPipeline(deal))return false;
     if(/current agreement/.test(blob))return false;
     if(/\brenewal\b/.test(blob))return false;
-    const close=this.dateOnly(deal.close);
-    if(close&&today&&close<today)return false;
+    if(this.closeDatePassed(deal,today))return false;
     return true;
+  },
+  // The open book is the master sheet's active new-business rows. A past close
+  // date stays in the book. A renewal pipeline does not override the sheet.
+  // A deal that is not on the sheet is not in the total.
+  isOpenPipeline(deal,today) {
+    return this.sheetClass(deal)==='active';
+  },
+  isHubspotOnlyOpen(deal,today) {
+    if(this.sheetClass(deal))return false;
+    if(this.isRenewalRecord(deal))return false;
+    return this.legacyOpenPipeline(deal,today);
+  },
+  moneySum(deals) {
+    let total=0;
+    for(const deal of deals||[]){
+      const amt=Number(deal.amount);
+      if(Number.isFinite(amt))total+=amt;
+    }
+    return total;
+  },
+  onHoldBook(deals) {
+    const rows=(deals||[]).filter(d=>this.sheetClass(d)==='on hold');
+    return {count:rows.length,amount:this.moneySum(rows),deals:rows};
+  },
+  hubspotOnlyBook(deals,today) {
+    today=today||this.phoenixToday();
+    const rows=(deals||[]).filter(d=>this.isHubspotOnlyOpen(d,today));
+    return {count:rows.length,amount:this.moneySum(rows),deals:rows};
   },
   exclusionReason(deal,today) {
     if(this.isOpenPipeline(deal,today))return null;
+    const kind=this.sheetClass(deal);
+    if(kind==='on hold')return 'On Hold';
+    if(kind==='disqualified')return 'Disqualified';
+    if(kind==='closed')return 'closed';
+    if(this.isHubspotOnlyOpen(deal,today))return 'In HubSpot, not on the Sheet';
     if(deal&&deal.closed===true)return 'closed';
     if(this.isTestRecord(deal))return 'verification fixture';
     const blob=this.stageBlob(deal||{});
@@ -324,8 +383,7 @@ const workspaceModel = {
     if(/\bon hold\b/.test(blob))return 'On Hold';
     if(this.isRenewalPipeline(deal)||/\brenewal\b/.test(blob))return 'renewal';
     if(/current agreement/.test(blob))return 'current agreement';
-    const close=this.dateOnly(deal&&deal.close);
-    if(close&&today&&close<today)return 'past close date';
+    if(this.closeDatePassed(deal,today))return 'past close date';
     return 'excluded';
   },
   stageDisplay(stage) {
@@ -656,7 +714,8 @@ const workspaceModel = {
       if(deal.amount!=null)s.amount=Number(deal.amount);
       if(deal.close)s.close=this.dateOnly(deal.close)||deal.close;
       if(deal.stage)s.stage=String(deal.stage).split(' (')[0].trim();
-      if(deal.owner)s.owner=String(deal.owner);
+      if(deal.owner)s.owner=String(deal.owner).trim();
+      if(deal.company)s.company=String(deal.company).trim();
     }
     return out;
   },
@@ -666,18 +725,55 @@ const workspaceModel = {
     const ov=overrides.get?overrides.get(id):overrides[id];
     if(!ov)return deal;
     const next={...deal}; const diffs=[];
+    next.onSheet=true;
     if(ov.amount!=null&&next.amount!==ov.amount){next.hubspotAmount=next.amount; next.amount=ov.amount; diffs.push('amount');}
     const sheetClose=ov.close?this.dateOnly(ov.close)||ov.close:null;
     if(sheetClose&&this.dateOnly(next.close)!==sheetClose){next.hubspotClose=next.close; next.close=sheetClose; diffs.push('close');}
     if(ov.stage){
       const current=String(next.stageLabel||next.stage||'');
       if(!current.toLowerCase().includes(String(ov.stage).toLowerCase())){
-        next.hubspotStage=current||ov.hubspotStage; next.stage=ov.stage; next.stageLabel=ov.stage; diffs.push('stage');
+        next.hubspotStage=current||ov.hubspotStage; diffs.push('stage');
       }
+      next.stage=ov.stage; next.stageLabel=ov.stage;
     }
-    if(ov.owner&&/^owner\s+\d+/i.test(String(next.owner||''))){next.owner=ov.owner; diffs.push('owner');}
+    if(ov.owner&&next.owner!==ov.owner){next.hubspotOwner=next.owner; next.owner=ov.owner; diffs.push('owner');}
+    if(ov.company&&next.name!==ov.company)next.name=ov.company;
+    next.sheetClass=this.sheetClassName(ov.stage||next.stage);
     if(diffs.length)next.hubspotDiffers=diffs;
     return next;
+  },
+  // Sheet rows win. A sheet deal with no HubSpot match is still included.
+  dealsWithSheet(opportunities, review) {
+    const overrides=this.sheetOverrides(review);
+    const seen=new Set();
+    const out=[];
+    for(const opp of opportunities||[]){
+      const nxt=this.applySheetDeal(opp, overrides);
+      out.push(nxt);
+      seen.add(String(nxt&&nxt.id||'').replace(/^deal-/,''));
+    }
+    for(const deal of (review&&review.deals)||[]){
+      const did=String(deal.id||'').replace(/^deal-/,'');
+      if(!did||seen.has(did))continue;
+      const stage=String(deal.stage||'').split(' (')[0].trim();
+      out.push({
+        id:'deal-'+did,
+        companyId:'company:unknown',
+        name:deal.company||deal.name||'',
+        dealName:deal.name||'',
+        owner:deal.owner||'Unassigned',
+        stage, stageLabel:stage,
+        amount:deal.amount,
+        probability:null,
+        close:this.dateOnly(deal.close),
+        pipeline:'',
+        closed:false,
+        onSheet:true,
+        sheetOnly:true,
+        sheetClass:this.sheetClassName(stage),
+      });
+    }
+    return out;
   },
   isJunkName(value) {
     const low=String(value||'').toLowerCase();

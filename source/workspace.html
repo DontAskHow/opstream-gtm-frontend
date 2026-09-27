@@ -549,7 +549,29 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;padding-top:14px">
                 <sc-for list="{{ scorecard }}" as="k" hint-placeholder-count="4"><div><span class="money" style="display:block;font-family:var(--font-heading);font-weight:800;font-size:22px;line-height:1.1">{{ k.value }}</span><span style="font-size:12px;color:var(--color-neutral-700)">{{ k.label }}</span></div></sc-for>
               </div>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Company scorecard. All pipeline values are owner estimates, not buyer commitments. Open pipeline is new business.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Company scorecard. All pipeline values are owner estimates, not buyer commitments. Open pipeline is every active row on the master sheet. A past close date stays in this book and is marked close date passed. It is left out of the monthly commit.</p>
+              <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-divider)">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><h6 style="margin:0">On Hold</h6><span class="money" style="font-size:14px;font-weight:700">{{ onHoldValue }}</span></div>
+                <p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">{{ onHoldNote }}</p>
+                <sc-for list="{{ onHold }}" as="r" hint-placeholder-count="4">
+                  <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:8px 0;border-bottom:1px solid var(--color-divider);font-size:13px">
+                    <span style="font-weight:600">{{ r.company }}</span><span class="money">{{ r.amount }}</span>
+                    <span style="grid-column:1/-1;color:var(--color-neutral-700)">{{ r.dealName }} · {{ r.stage }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <sc-if value="{{ showHubspotOnly }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-divider)">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><h6 style="margin:0">In HubSpot, not on the Sheet</h6><span class="money" style="font-size:14px;font-weight:700">{{ hubspotOnlyValue }}</span></div>
+                <p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">{{ hubspotOnlyNote }}</p>
+                <sc-for list="{{ hubspotOnly }}" as="r" hint-placeholder-count="2">
+                  <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:8px 0;border-bottom:1px solid var(--color-divider);font-size:13px">
+                    <span style="font-weight:600">{{ r.company }}</span><span class="money">{{ r.amount }}</span>
+                    <span style="grid-column:1/-1;color:var(--color-neutral-700)">{{ r.dealName }} · {{ r.stage }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              </sc-if>
               <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-divider)">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><h6 style="margin:0">Renewals</h6><span class="money" style="font-size:14px;font-weight:700">{{ renewalsValue }}</span></div>
                 <p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">{{ renewalsNote }}</p>
@@ -1327,7 +1349,7 @@ class Component extends DCLogic {
     const topQuietDays = topCompany ? workspaceModel.daysQuiet(topCompany, workspaceModel.phoenixToday()) : null;
     const share = topDeal ? workspaceModel.closeDateShare(pipeNow.deals, topDeal.close) : null;
     const briefingDecisions = topDeal ? [
-      { title: 'Push ' + workspaceModel.companyName(topDeal.name) + ' or let it slip', why: workspaceModel.companyName(topDeal.name) + ' is the largest open deal (' + usd(topDeal.amount || 0) + '). The close date is ' + fmtD(topDeal.close) + '. ' + (topQuietDays != null ? 'Last interaction was ' + topQuietDays + ' days ago.' : 'No past engagement date is on file.'), confidence: 'Computed from open deals after excluding past close dates, renewals, current agreements, Disqualified and On Hold. Amounts use the sheet when it disagrees with HubSpot.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal.name) },
+      { title: 'Push ' + workspaceModel.companyName(topDeal.name) + ' or let it slip', why: workspaceModel.companyName(topDeal.name) + ' is the largest open deal (' + usd(topDeal.amount || 0) + '). The close date is ' + fmtD(topDeal.close) + '. ' + (topQuietDays != null ? 'Last interaction was ' + topQuietDays + ' days ago.' : 'No past engagement date is on file.'), confidence: 'Computed from the master sheet\'s active rows. A past close date stays in the book and is marked close date passed. Renewals, On Hold, and Disqualified are not included. Amounts use the sheet when it disagrees with HubSpot.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal.name) },
     ].concat(share && share.count >= 2 ? [{ title: share.count + ' of ' + share.total + ' open deals share a ' + fmtD(share.day) + ' close date', why: 'These deals are grouped by the Phoenix calendar date of the close, not the raw timestamp.', confidence: 'Computed from the same open-pipeline set as the headline.', evidenceLabel: 'Review by close date', evidenceGo: this.go('accounts', { accounts: 'deals', sort: 'close' }) }] : []) : [];
     return {
       ...(() => {

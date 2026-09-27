@@ -45,12 +45,13 @@ Component.prototype._verifiedAccount = function (idOrName) {
 };
 Component.prototype._verifiedOpportunityRows = function () {
   const today=workspaceModel.asOf(this.state.records&&this.state.records.generatedAt);
-  const overrides=workspaceModel.sheetOverrides(this.state.sheetReview);
-  const opportunities=workspaceModel.annotateOpportunities(this.state.verified?.opportunities,this.state.records).map(o=>workspaceModel.applySheetDeal(o,overrides));
-  return opportunities.filter(o=>workspaceModel.isOpenPipeline(o,today)&&!workspaceModel.isJunkName(o.name)&&!workspaceModel.isJunkName(o.dealName)).map(o=>{
+  const opportunities=workspaceModel.dealsWithSheet(workspaceModel.annotateOpportunities(this.state.verified?.opportunities,this.state.records),this.state.sheetReview);
+  return opportunities.filter(o=>workspaceModel.isOpenPipeline(o,today)).map(o=>{
     const company=workspaceModel.companyForOpportunity(o,this.state.records);
     const name=workspaceModel.pipelineCompanyName(company&&company.name,o.dealName,o.name);
-    return [name,o.owner||'—',workspaceModel.stageDisplay(o.stage),o.amount,o.probability==null?null:Math.round(workspaceModel.probabilityFraction(o.probability)*100),workspaceModel.dateOnly(o.close),o.days,o.note||''];
+    const passed=workspaceModel.closeDatePassed(o,today)?'close date passed':'';
+    const note=[passed,String(o.note||'').trim()].filter(Boolean).join(' · ');
+    return [name,o.owner||'—',workspaceModel.stageDisplay(o.stage),o.amount,o.probability==null?null:Math.round(workspaceModel.probabilityFraction(o.probability)*100),workspaceModel.dateOnly(o.close),o.days,note];
   }).filter(Boolean);
 };
 Component.prototype._verifiedLeadRows = function () {
@@ -151,8 +152,7 @@ Component.prototype.renderVals = function () {
   v.quickNumbers[0].delta=period;v.quickNumbers[1].delta=period;v.quickNumbers[2].delta=period;
   v.quickNumbers[1].label='Marketing qualified';v.quickNumbers[2].label='Sales qualified';
   v.quickNumbers[3].value=f.number(completedMeetings);v.quickNumbers[3].delta=period+' · '+f.number(recordedMeetings)+' recordings separately';
-  const overrides=workspaceModel.sheetOverrides(s.sheetReview);
-  const opportunities=workspaceModel.annotateOpportunities(d.opportunities,s.records).map(o=>workspaceModel.applySheetDeal(o,overrides));
+  const opportunities=workspaceModel.dealsWithSheet(workspaceModel.annotateOpportunities(d.opportunities,s.records),s.sheetReview);
   const pipe=workspaceModel.pipelineTotals(opportunities,asOf);
   const moneyShort=n=>n==null?'—':'$'+f.number(n);
   v.quickNumbers[4].value=pipe.weighted==null?'—':moneyShort(pipe.weighted);
@@ -179,6 +179,22 @@ Component.prototype.renderVals = function () {
   v.renewals=[...renewals.deals.map(o=>renewalRow(o,false)),...renewals.duplicates.map(o=>renewalRow(o,true))];
   v.renewalsValue=f.number(renewals.count)+' · '+moneyShort(renewals.amount);
   v.renewalsNote='Customer renewals, not new business. '+f.number(renewals.duplicates.length)+' legacy Renewal placeholders are not added because that company already has a current Renewal Agreement. '+f.number(renewals.pastClose)+' more are past their close date and are not in this total. A missing stage name has not been synced from the pipeline catalog yet.';
+  const held=workspaceModel.onHoldBook(opportunities);
+  const unlisted=workspaceModel.hubspotOnlyBook(opportunities,asOf);
+  const sideRow=o=>({
+    company:renewalCompany(o),
+    dealName:o.dealName||o.name||'Untitled deal',
+    stage:workspaceModel.stageDisplay(o.stage),
+    amount:o.amount==null?'—':moneyShort(o.amount),
+    note:workspaceModel.closeDatePassed(o,asOf)?'close date passed':''
+  });
+  v.onHold=held.deals.map(sideRow);
+  v.onHoldValue=f.number(held.count)+' · '+moneyShort(held.amount);
+  v.onHoldNote='On Hold stays out of the open pipeline.';
+  v.hubspotOnly=unlisted.deals.map(sideRow);
+  v.hubspotOnlyValue=f.number(unlisted.count)+' · '+moneyShort(unlisted.amount);
+  v.hubspotOnlyNote='In HubSpot, not on the Sheet. Shown for review. Not included in the open pipeline total.';
+  v.showHubspotOnly=unlisted.count>0;
   const moneyCell=n=>n==null?'—':'$'+f.number(n);
   v.spendMonths=(d.report.spend.months||[]).map(m=>({month:new Date(m.month+'-15T12:00:00Z').toLocaleDateString('en-US',{month:'long',timeZone:'UTC'}),budget:moneyCell(m.planned),actual:moneyCell(m.actual),diff:m.actual==null||m.partial?'Not comparable':(m.actual>=m.planned?'+':'−')+moneyCell(Math.abs(m.actual-m.planned)),tag:m.actual==null?'Not entered':m.partial?'Partly entered':'',tagDisplay:m.actual==null||m.partial?'inline-flex':'none'}));
   const spendMax=Math.max(1,...d.report.spend.channels.map(c=>c.amount));v.spendChannels=d.report.spend.channels.map(c=>({name:c.name,amount:moneyCell(c.amount),w:Math.round(c.amount/spendMax*100)+'%'}));
@@ -232,7 +248,7 @@ Component.prototype.renderVals = function () {
   const prelim=opportunities.map(o=>{
     const company=workspaceModel.companyForOpportunity(o,s.records);
     return {o,company,rawOwner:o.owner||company?.owner||''};
-  }).filter(x=>workspaceModel.listStatus(x.o,asOf)!=='excluded'&&!workspaceModel.isJunkName(x.o.name)&&!workspaceModel.isJunkName(x.o.dealName)&&!workspaceModel.isJunkName(x.company&&x.company.name));
+  }).filter(x=>workspaceModel.listStatus(x.o,asOf)!=='excluded');
   const resolved=workspaceModel.resolveOwners([...prelim.map(x=>x.rawOwner),...d.leads.map(r=>r.owner)]);
   const infoFor=raw=>resolved.get(String(raw??''))||workspaceModel.ownerInfo(raw);
   const accountRows=prelim.map(({o,company,rawOwner})=>{
@@ -260,7 +276,8 @@ Component.prototype.renderVals = function () {
   v.deals=selected.map(o=>{
     const companyName=workspaceModel.pipelineCompanyName(o.companyRecord&&o.companyRecord.name,o.dealName||o.name,o.name);
     const flag=o.hubspotDiffers&&o.hubspotDiffers.length?'HubSpot differs':'';
-    const note=[flag,String(o.note||'').trim()].filter(Boolean).join(' · ');
+    const passed=workspaceModel.closeDatePassed(o,asOf)?'close date passed':'';
+    const note=[flag,passed,String(o.note||'').trim()].filter(Boolean).join(' · ');
     return {company:companyName,owner:o.owner,ownerTitle:o.ownerTitle||'',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement)+(o.quietDays!=null?' · '+workspaceModel.relativeLabel(o.lastEngagement,workspaceModel.phoenixToday()):''):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}};
   }).filter(Boolean);
   v.dealsCount=selected.length+' accounts · '+pipe.count+' open deals';

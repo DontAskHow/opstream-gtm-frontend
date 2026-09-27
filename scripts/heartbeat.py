@@ -401,7 +401,7 @@ def main():
         "RULES:\n"
         "- Ground EVERY claim in the data below. Never invent companies, people, dates, or amounts.\n"
         "- Quiet-day figures are already computed (daysQuiet). Repeat those numbers; do not calculate another.\n"
-        "- openBook is the page's open pipeline. It excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Repeat openBook counts, amounts, and largestOpenDeal. A renewal is not an open deal and is not the largest open deal.\n"
+        "- openBook is the page's open pipeline: the master sheet's active new-business rows. A past close date stays in that book and is marked close date passed; it is left out of the monthly commit. Renewals, current agreements, Disqualified, and On Hold are not in it. A HubSpot deal that is not on the sheet is not in the total. Repeat openBook counts, amounts, and largestOpenDeal. A renewal is not an open deal and is not the largest open deal.\n"
         "- collectedAt is when these files were generated. Repeat it. Do not present the figures as newer than that collection.\n"
         "- Owner labels are already resolved. A label like Owner #… means the name is not connected. Do not invent a person's name.\n"
         "- It is " + greeting() + " in America/Phoenix. Match that time of day if you greet anyone.\n"

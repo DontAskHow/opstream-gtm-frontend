@@ -56,7 +56,7 @@ export const DATA_TOOL_SCHEMAS = [
     type: 'function',
     function: {
       name: 'lookup_deals',
-      description: 'Look up deals by company, deal name, or owner. Each result says whether it is in the open book. Renewals, current agreements, Disqualified, On Hold, and past close dates come back with inOpenBook false and a reason. Say that reason when you mention one. A renewal is not an open deal.',
+      description: 'Look up deals by company, deal name, or owner. Each result says whether it is in the open book. Renewals, current agreements, Disqualified, On Hold, and deals that are in HubSpot but not on the Sheet come back with inOpenBook false and a reason. A past close date on a sheet row stays in the open book and is marked close date passed. Say that reason when you mention a deal that is not open. A renewal is not an open deal.',
       parameters: {
         type: 'object',
         properties: {
@@ -141,10 +141,11 @@ function companyForIndexed(opportunity, index) {
 
 export function computeFacts(verified, records, today, sheetReview) {
   today = today || model.asOf(records?.generatedAt);
-  const overrides = model.sheetOverrides(sheetReview);
-  const annotated = model.annotateOpportunities(verified?.opportunities || [], records).map(o => model.applySheetDeal(o, overrides));
+  const annotated = model.dealsWithSheet(model.annotateOpportunities(verified?.opportunities || [], records), sheetReview);
   const pipe = model.pipelineTotals(annotated, today);
   const renewals = model.renewalBook(annotated, today);
+  const held = model.onHoldBook(annotated);
+  const unlisted = model.hubspotOnlyBook(annotated, today);
   const bounds = model.periodBounds('quarter', null, null, today);
   const funnel = model.funnel(verified?.leads || [], records, bounds.start, bounds.end);
   const index = companyIndex(records);
@@ -187,6 +188,7 @@ export function computeFacts(verified, records, today, sheetReview) {
       daysQuiet: quiet,
       inOpenBook: !reason,
       reason: reason || 'open',
+      closePassed: model.closeDatePassed(o, today),
       tag: statusTag(reason),
     };
   });
@@ -196,12 +198,18 @@ export function computeFacts(verified, records, today, sheetReview) {
   const metrics = {
     asOf: today,
     timezone: model.PHOENIX,
-    definition: 'Open pipeline is new business. It excludes the renewal pipelines, past close dates, renewal and current-agreement titles, Disqualified, and On Hold. Renewals are totaled on their own line.',
+    definition: 'Open pipeline is the master sheet\'s active new-business rows. A past close date stays in the book and is marked close date passed. It is left out of the monthly commit. On Hold is a separate line. HubSpot deals that are not on the sheet are not in the total. Renewals are totaled on their own line.',
     renewalCount: renewals.count,
     renewalAmount: roundAmount(renewals.amount) ?? 0,
     renewalAmountLabel: money(renewals.amount) || '$0',
     renewalDuplicates: renewals.duplicates.length,
     renewalPastClose: renewals.pastClose,
+    onHoldCount: held.count,
+    onHoldAmount: roundAmount(held.amount) ?? 0,
+    onHoldAmountLabel: money(held.amount) || '$0',
+    hubspotOnlyCount: unlisted.count,
+    hubspotOnlyAmount: roundAmount(unlisted.amount) ?? 0,
+    hubspotOnlyAmountLabel: money(unlisted.amount) || '$0',
     quarter: { start: bounds.start, end: bounds.end, label: bounds.label },
     openCount: pipe.count,
     openAmount: roundAmount(pipe.openAmount) ?? 0,
@@ -230,7 +238,7 @@ export function computeFacts(verified, records, today, sheetReview) {
   const lines = [];
   lines.push('DATA COLLECTED: ' + (metrics.collectedLabel || 'unknown') + ' (source timestamp ' + (metrics.collectedAt || 'unknown') + '). This is when the files on disk were generated. Repeat this timestamp when you give current figures. Do not describe the figures as newer than this collection.');
   lines.push('WORKSPACE DATA (real records from the company brain: HubSpot, Fathom, Sheets). Never invent records; say when something is not in the data.');
-  lines.push('OPEN BOOK METRICS (America/Phoenix date ' + today + '). ' + metrics.definition + ' These figures are already computed. Repeat them. Do not calculate another open-pipeline total. A renewal, current agreement, On Hold, Disqualified, or past-close deal is not an open deal, even when its amount is larger.');
+  lines.push('OPEN BOOK METRICS (America/Phoenix date ' + today + '). ' + metrics.definition + ' These figures are already computed. Repeat them. Do not calculate another open-pipeline total. A renewal, current agreement, On Hold, or Disqualified deal is not an open deal, even when its amount is larger. A past close date on a sheet row stays in the open book.');
   if (metrics.largest) {
     const g = metrics.largest;
     lines.push('LARGEST OPEN DEAL: ' + g.company + ' — ' + (g.dealName || g.company) + ', ' + g.amountLabel + ', stage ' + g.stage + ', owner ' + g.owner + ', close ' + (g.close || 'not entered') + ', quiet days ' + (g.daysQuiet == null ? 'n/a' : g.daysQuiet) + '.');
@@ -238,6 +246,8 @@ export function computeFacts(verified, records, today, sheetReview) {
     lines.push('LARGEST OPEN DEAL: none.');
   }
   lines.push('OPEN PIPELINE: ' + metrics.openCount + ' deals, ' + metrics.openAmountLabel + ' open, ' + (metrics.weightedLabel || 'weighted n/a') + ' weighted.');
+  lines.push('ON HOLD: ' + metrics.onHoldCount + ' deals, ' + metrics.onHoldAmountLabel + '. On Hold is not in the open pipeline.');
+  lines.push('IN HUBSPOT, NOT ON THE SHEET: ' + metrics.hubspotOnlyCount + ' ' + (metrics.hubspotOnlyCount === 1 ? 'deal' : 'deals') + ', ' + metrics.hubspotOnlyAmountLabel + '. These are not in the open pipeline total.');
   lines.push('RENEWALS: ' + metrics.renewalCount + ' current deals, ' + metrics.renewalAmountLabel + '. These are customer renewals, not new business. They are not in the open pipeline, the commit, or the largest open deal. ' + metrics.renewalDuplicates + ' legacy Renewal placeholders are not added because that company already has a current Renewal Agreement. ' + metrics.renewalPastClose + ' more are past their close date and are not in this total.');
   lines.push('QUARTER ' + bounds.start + ' – ' + bounds.end + ': ' + funnel.leads + ' leads / ' + funnel.mql + ' MQL / ' + funnel.sql + ' SQL.');
   const marketing = model.marketingView(verified?.leads || [], records, verified?.report?.spend, today);
@@ -249,7 +259,7 @@ export function computeFacts(verified, records, today, sheetReview) {
     lines.push('- SOURCE ' + source.channel + ': this week ' + source.week + ', 6-week average ' + source.six + ', quarter ' + source.quarter + ', cost per lead ' + source.cpl + '.');
   }
   const byAmount = (a, b) => (b.amount || 0) - (a.amount || 0) || String(a.company).localeCompare(String(b.company));
-  const describe = d => d.tag + ': ' + d.company + ' — ' + (d.dealName || d.company) + ', ' + d.amountLabel + ', stage ' + d.stage + ', owner ' + d.owner + ', close ' + (d.close || 'not entered') + ', quiet days ' + (d.daysQuiet == null ? 'n/a' : d.daysQuiet) + '.';
+  const describe = d => d.tag + ': ' + d.company + ' — ' + (d.dealName || d.company) + ', ' + d.amountLabel + ', stage ' + d.stage + ', owner ' + d.owner + ', close ' + (d.close || 'not entered') + (d.closePassed ? ', close date passed' : '') + ', quiet days ' + (d.daysQuiet == null ? 'n/a' : d.daysQuiet) + '.';
   for (const d of deals.filter(d => d.inOpenBook).sort(byAmount)) lines.push(describe(d));
   for (const d of deals.filter(d => !d.inOpenBook).sort(byAmount)) lines.push(describe(d));
 
@@ -293,6 +303,12 @@ function metricsPayload(facts) {
     renewalAmountLabel: m.renewalAmountLabel,
     renewalDuplicates: m.renewalDuplicates,
     renewalPastClose: m.renewalPastClose,
+    onHoldCount: m.onHoldCount,
+    onHoldAmount: m.onHoldAmount,
+    onHoldAmountLabel: m.onHoldAmountLabel,
+    hubspotOnlyCount: m.hubspotOnlyCount,
+    hubspotOnlyAmount: m.hubspotOnlyAmount,
+    hubspotOnlyAmountLabel: m.hubspotOnlyAmountLabel,
     quarter: m.quarter,
     leads: m.leads,
     mql: m.mql,

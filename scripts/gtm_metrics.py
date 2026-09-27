@@ -170,8 +170,50 @@ def _title_is_renewal(deal):
     return re.search(r"\brenewal\b", blob) is not None
 
 
+SHEET_ACTIVE_STAGES = frozenset({
+    "discovery/rfp received",
+    "sql",
+    "demo meeting",
+    "decision",
+    "wider stakeholders",
+    "legal & compliance",
+})
+
+
+def sheet_class_name(stage):
+    """How the master sheet classifies a row. Active stages are the open book."""
+    s = re.sub(r"\s*\(deal\)\s*", "", str(stage or "").lower()).strip()
+    if not s:
+        return ""
+    if s in SHEET_ACTIVE_STAGES:
+        return "active"
+    if s == "on hold":
+        return "on hold"
+    if "disqual" in s:
+        return "disqualified"
+    if "closed" in s:
+        return "closed"
+    return "other"
+
+
+def sheet_class(deal):
+    explicit = str((deal or {}).get("sheetClass") or "")
+    if explicit:
+        return explicit
+    if (deal or {}).get("onSheet"):
+        return sheet_class_name((deal or {}).get("stage"))
+    return ""
+
+
 def is_renewal_record(deal):
+    if sheet_class(deal) == "active":
+        return False
     return is_renewal_pipeline(deal) or _title_is_renewal(deal)
+
+
+def close_date_passed(deal, today):
+    close = date_only((deal or {}).get("close"))
+    return bool(close and today and close < today)
 
 
 def _company_key(deal):
@@ -255,8 +297,8 @@ def renewal_book(deals, today):
     }
 
 
-def is_open_pipeline(deal, today):
-    """Same exclusions as workspace-model.cjs isOpenPipeline."""
+def legacy_open_pipeline(deal, today):
+    """HubSpot-shaped open check. The sheet, not this function, defines the book."""
     if not deal or deal.get("closed") is True:
         return False
     if is_test_record(deal):
@@ -274,16 +316,64 @@ def is_open_pipeline(deal, today):
         return False
     if re.search(r"\brenewal\b", blob):
         return False
-    close = date_only(deal.get("close"))
-    if close and today and close < today:
+    if close_date_passed(deal, today):
         return False
     return True
+
+
+def is_open_pipeline(deal, today):
+    """The open book is the master sheet's active new-business rows.
+
+    A past close date stays in the book. A renewal pipeline does not override
+    the sheet. A deal that is not on the sheet is not in the total.
+    """
+    return sheet_class(deal) == "active"
+
+
+def is_hubspot_only_open(deal, today):
+    """A non-renewal HubSpot deal that looks open and is not on the sheet."""
+    if sheet_class(deal):
+        return False
+    if is_renewal_record(deal):
+        return False
+    return legacy_open_pipeline(deal, today)
+
+
+def _money_sum(deals):
+    total = 0.0
+    for deal in deals or []:
+        try:
+            amt = float(deal.get("amount"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(amt):
+            total += amt
+    return total
+
+
+def on_hold_book(deals):
+    rows = [d for d in (deals or []) if sheet_class(d) == "on hold"]
+    return {"count": len(rows), "amount": _money_sum(rows), "deals": rows}
+
+
+def hubspot_only_book(deals, today):
+    rows = [d for d in (deals or []) if is_hubspot_only_open(d, today)]
+    return {"count": len(rows), "amount": _money_sum(rows), "deals": rows}
 
 
 def exclusion_reason(deal, today):
     """Why a deal is outside the open book. None when it is in the book."""
     if is_open_pipeline(deal, today):
         return None
+    kind = sheet_class(deal)
+    if kind == "on hold":
+        return "On Hold"
+    if kind == "disqualified":
+        return "Disqualified"
+    if kind == "closed":
+        return "closed"
+    if is_hubspot_only_open(deal, today):
+        return "In HubSpot, not on the Sheet"
     if (deal or {}).get("closed") is True:
         return "closed"
     if is_test_record(deal):
@@ -299,8 +389,7 @@ def exclusion_reason(deal, today):
         return "renewal"
     if "current agreement" in blob:
         return "current agreement"
-    close = date_only(deal.get("close"))
-    if close and today and close < today:
+    if close_date_passed(deal, today):
         return "past close date"
     return "excluded"
 
@@ -612,11 +701,14 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
     verified = verified or {}
     records = records or {}
     today = today or date_only((records or {}).get("generatedAt")) or phoenix_today()
-    annotated = annotate_opportunities(verified.get("opportunities") or [], records)
-    overrides = sheet_overrides(sheet_review)
-    annotated = [apply_sheet_deal(o, overrides) for o in annotated]
+    annotated = deals_with_sheet(
+        annotate_opportunities(verified.get("opportunities") or [], records),
+        sheet_review,
+    )
     pipe = pipeline_totals(annotated, today)
     renewals = renewal_book(annotated, today)
+    held = on_hold_book(annotated)
+    unlisted = hubspot_only_book(annotated, today)
     start, end = quarter_bounds(today)
     counts = funnel(verified.get("leads") or [], records, start, end)
     prelim_owners = []
@@ -650,8 +742,11 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
             "companyName": account_name((company or {}).get("name"), opp.get("dealName") or opp.get("name")) or company_name((company or {}).get("name") or opp.get("name")),
             "dealName": opp.get("dealName") or "",
             "pipeline": opp.get("pipeline") or "",
+            "sheetClass": opp.get("sheetClass") or "",
+            "onSheet": opp.get("onSheet") is True,
             "amount": opp.get("amount"),
             "stage": stage_display(opp.get("stage")),
+            "closePassed": close_date_passed(opp, today),
             "close": date_only(opp.get("close")),
             "ownerLabel": info_for(raw_owner)["label"],
             "daysQuiet": quiet,
@@ -682,7 +777,7 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
         "today": today,
         "quarterStart": start,
         "quarterEnd": end,
-        "definition": "Open pipeline excludes past close dates, renewals, current agreements, Disqualified, and On Hold.",
+        "definition": "Open pipeline is the master sheet's active new-business rows. A past close date stays in the book and is flagged. On Hold is a separate line. HubSpot deals that are not on the sheet are not in the total.",
         "openCount": pipe["count"],
         "openAmount": round_half_up(pipe["openAmount"]),
         "weighted": weighted,
@@ -690,6 +785,9 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
         "renewalAmount": round_half_up(renewals["amount"]),
         "renewalDuplicates": len(renewals["duplicates"]),
         "renewalPastClose": renewals["pastClose"],
+        "onHoldCount": held["count"],
+        "onHoldAmount": round_half_up(held["amount"]),
+        "hubspotOnlyCount": unlisted["count"],
         "largest": largest_out,
         "leads": counts["leads"],
         "mql": counts["mql"],
@@ -730,6 +828,8 @@ def sheet_overrides(review):
             slot["stage"] = str(deal["stage"]).split(" (")[0].strip()
         if deal.get("owner"):
             slot["owner"] = str(deal["owner"]).strip()
+        if deal.get("company"):
+            slot["company"] = str(deal["company"]).strip()
     for row in (review or {}).get("mismatches") or []:
         did = str(row.get("dealId") or "").replace("deal-", "")
         if not did:
@@ -760,6 +860,7 @@ def apply_sheet_deal(deal, overrides):
         return deal
     nxt = dict(deal)
     diffs = []
+    nxt["onSheet"] = True
     if ov.get("amount") is not None and nxt.get("amount") != ov["amount"]:
         nxt["hubspotAmount"] = nxt.get("amount")
         nxt["amount"] = ov["amount"]
@@ -773,16 +874,53 @@ def apply_sheet_deal(deal, overrides):
         current = str(nxt.get("stageLabel") or nxt.get("stage") or "")
         if ov["stage"].lower() not in current.lower():
             nxt["hubspotStage"] = current or ov.get("hubspotStage")
-            nxt["stage"] = ov["stage"]
-            nxt["stageLabel"] = ov["stage"]
             diffs.append("stage")
-    owner = str(nxt.get("owner") or "")
-    if ov.get("owner") and re.match(r"owner\s+\d+", owner, flags=re.I):
+        nxt["stage"] = ov["stage"]
+        nxt["stageLabel"] = ov["stage"]
+    if ov.get("owner") and nxt.get("owner") != ov["owner"]:
+        nxt["hubspotOwner"] = nxt.get("owner")
         nxt["owner"] = ov["owner"]
         diffs.append("owner")
+    if ov.get("company") and nxt.get("name") != ov["company"]:
+        nxt["name"] = ov["company"]
+    nxt["sheetClass"] = sheet_class_name(ov.get("stage") or nxt.get("stage"))
     if diffs:
         nxt["hubspotDiffers"] = diffs
     return nxt
+
+
+def deals_with_sheet(opportunities, review):
+    """Sheet rows win. A sheet deal with no HubSpot match is still included."""
+    overrides = sheet_overrides(review)
+    seen = set()
+    out = []
+    for opp in opportunities or []:
+        nxt = apply_sheet_deal(opp, overrides)
+        out.append(nxt)
+        seen.add(str(nxt.get("id") or "").replace("deal-", ""))
+    for deal in (review or {}).get("deals") or []:
+        did = str(deal.get("id") or "").replace("deal-", "")
+        if not did or did in seen:
+            continue
+        stage = str(deal.get("stage") or "").split(" (")[0].strip()
+        out.append({
+            "id": "deal-" + did,
+            "companyId": "company:unknown",
+            "name": deal.get("company") or deal.get("name") or "",
+            "dealName": deal.get("name") or "",
+            "owner": deal.get("owner") or "Unassigned",
+            "stage": stage,
+            "stageLabel": stage,
+            "amount": deal.get("amount"),
+            "probability": None,
+            "close": date_only(deal.get("close")),
+            "pipeline": "",
+            "closed": False,
+            "onSheet": True,
+            "sheetOnly": True,
+            "sheetClass": sheet_class_name(stage),
+        })
+    return out
 
 
 def is_commit_stage(label):
@@ -804,11 +942,13 @@ def commit_for_close_month(deals, month, today):
             "closed": deal.get("closed") is True,
             "name": deal.get("companyName") or deal.get("name") or "",
             "pipeline": deal.get("pipeline") or "",
+            "sheetClass": deal.get("sheetClass") or "",
+            "onSheet": deal.get("onSheet") is True,
         }
         if not is_open_pipeline(shaped, today):
             continue
         close = date_only(deal.get("close"))
-        if not close or close[:7] != month:
+        if not close or close[:7] != month or close < today:
             continue
         rows.append(deal)
     amount = sum(float(d.get("amount") or 0) for d in rows)

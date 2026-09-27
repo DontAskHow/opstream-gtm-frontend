@@ -28,8 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gtm_metrics import (QUIET_DAYS as SHARED_QUIET_DAYS, account_name,
                          apply_sheet_deal, commit_for_close_month, commit_versus_target,
                          customer_facing_action, date_only, days_quiet, is_internal_meeting,
-                         is_junk_name, is_open_pipeline, last_engagement, person_name,
-                         sheet_overrides, unworked_count)
+                         deals_with_sheet, is_junk_name, is_open_pipeline, last_engagement,
+                         person_name, sheet_overrides, unworked_count)
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("OUT_DATA") or (ROOT / "out" / "data"))
@@ -367,14 +367,9 @@ def main():
             if raw_deal.get("closed"):
                 continue
             d_ = with_sheet(raw_deal)
-            if is_junk_name(c.get("name")) or is_junk_name(d_.get("name")):
+            if d_.get("sheetClass") != "active" and (is_junk_name(c.get("name")) or is_junk_name(d_.get("name"))):
                 continue
-            if not is_open_pipeline({
-                "stage": d_.get("stageLabel") or d_.get("stage"),
-                "dealName": d_.get("name") or "",
-                "close": d_.get("close"),
-                "closed": False,
-            }, today.isoformat()):
+            if not is_open_pipeline(d_, today.isoformat()):
                 continue
             open_deals.append((c, d_, last, dq))
     quiet = [(c, d_, last, dq) for (c, d_, last, dq) in open_deals
@@ -1058,11 +1053,13 @@ def main():
     # and has not passed. Best case and pipeline stay stage buckets.
     bucket_value = {"commit": 0.0, "bestcase": 0.0, "pipeline": 0.0}
     shaped_deals = []
+    seen_sheet = set()
     for c in companies:
         for raw_deal in c.get("deals") or []:
             if raw_deal.get("closed"):
                 continue
             d_ = with_sheet(raw_deal)
+            seen_sheet.add(str(d_.get("id") or "").replace("deal-", ""))
             shaped_deals.append({
                 "stage": d_.get("stageLabel") or d_.get("stage"),
                 "stageLabel": d_.get("stageLabel") or d_.get("stage"),
@@ -1072,17 +1069,38 @@ def main():
                 "close": d_.get("close"),
                 "closed": False,
                 "amount": d_.get("amount"),
+                "pipeline": d_.get("pipeline") or "",
+                "sheetClass": d_.get("sheetClass") or "",
+                "onSheet": d_.get("onSheet") is True,
             })
-            if not is_open_pipeline({
-                "stage": d_.get("stageLabel") or d_.get("stage"),
-                "dealName": d_.get("name") or "",
-                "close": d_.get("close"),
-                "closed": False,
-            }, today.isoformat()):
+            if not is_open_pipeline(d_, today.isoformat()):
                 continue
             b = bucket_of(d_.get("stageLabel") or d_.get("stage"))
             if b in ("bestcase", "pipeline") and d_.get("amount"):
                 bucket_value[b] += d_["amount"]
+    # A sheet row with no HubSpot company still counts. The sheet is the book.
+    for stub in deals_with_sheet([], review):
+        did = str(stub.get("id") or "").replace("deal-", "")
+        if not did or did in seen_sheet:
+            continue
+        shaped_deals.append({
+            "stage": stub.get("stageLabel") or stub.get("stage"),
+            "stageLabel": stub.get("stageLabel") or stub.get("stage"),
+            "dealName": stub.get("dealName") or stub.get("name") or "",
+            "name": stub.get("name") or "",
+            "companyName": stub.get("name") or "",
+            "close": stub.get("close"),
+            "closed": False,
+            "amount": stub.get("amount"),
+            "pipeline": stub.get("pipeline") or "",
+            "sheetClass": stub.get("sheetClass") or "",
+            "onSheet": True,
+        })
+        if not is_open_pipeline(stub, today.isoformat()):
+            continue
+        b = bucket_of(stub.get("stageLabel") or stub.get("stage"))
+        if b in ("bestcase", "pipeline") and stub.get("amount"):
+            bucket_value[b] += stub["amount"]
     month = today.strftime("%Y-%m")
     month_name = today.strftime("%B")
     commit_rows = commit_for_close_month(shaped_deals, month, today.isoformat())

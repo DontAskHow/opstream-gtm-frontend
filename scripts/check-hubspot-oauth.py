@@ -311,7 +311,8 @@ def test_json_is_not_a_bearer():
 
 def test_placeholder_name_stays_in_the_open_book():
     sys.path.insert(0, str(ROOT / "scripts"))
-    from gtm_metrics import apply_sheet_owner_names, exclusion_reason, is_open_pipeline, renewal_book
+    from gtm_metrics import (apply_sheet_owner_names, close_date_passed, commit_for_close_month,
+                             deals_with_sheet, exclusion_reason, is_open_pipeline, renewal_book)
 
     today = "2026-09-27"
     legacy = {"id": "deal-52905159943", "dealName": "Renewal", "stage": "No stage", "close": None, "closed": False, "amount": 50000, "pipeline": "686463412", "companyId": "company:unknown"}
@@ -319,13 +320,28 @@ def test_placeholder_name_stays_in_the_open_book():
     expansion = {"dealName": "Acme - Budget Module", "stage": "No stage", "close": "2026-12-01", "closed": False, "amount": 10000, "pipeline": "855205465", "companyId": "company:1"}
     check("cs pipeline expansion stays out", not is_open_pipeline(expansion, today) and exclusion_reason(expansion, today) == "renewal")
     new_business = {"dealName": "Acme - New Deal", "stage": "Discovery", "close": "2026-12-01", "closed": False, "amount": 10000, "pipeline": "default"}
-    check("default pipeline stays open", is_open_pipeline(new_business, today))
+    check("default pipeline without the sheet is not in the book", not is_open_pipeline(new_business, today) and exclusion_reason(new_business, today) == "In HubSpot, not on the Sheet")
+    sheet_active = {"dealName": "Acme - New Deal", "stage": "SQL", "close": "2026-12-01", "closed": False, "amount": 10000, "pipeline": "default", "sheetClass": "active", "onSheet": True}
+    check("sheet active stays open", is_open_pipeline(sheet_active, today) and exclusion_reason(sheet_active, today) is None)
+    sheet_past = {"dealName": "CrossCountry", "stage": "SQL", "close": "2026-08-30", "closed": False, "amount": 50000, "pipeline": "default", "sheetClass": "active", "onSheet": True}
+    check("sheet past close stays in the book", is_open_pipeline(sheet_past, today) and exclusion_reason(sheet_past, today) is None and close_date_passed(sheet_past, today))
+    sheet_other_pipe = {"dealName": "Acme", "stage": "SQL", "close": "2026-12-01", "closed": False, "pipeline": "855205465", "sheetClass": "active", "onSheet": True}
+    check("sheet overrides a renewal pipeline", is_open_pipeline(sheet_other_pipe, today))
+    held = {"dealName": "Bioventus", "stage": "On Hold", "close": "2026-11-30", "closed": False, "sheetClass": "on hold", "onSheet": True}
+    check("on hold stays out", not is_open_pipeline(held, today) and exclusion_reason(held, today) == "On Hold")
     title_only = {"dealName": "Renewal", "stage": "No stage", "close": None, "closed": False, "pipeline": ""}
     check("title fallback still excludes", not is_open_pipeline(title_only, today) and exclusion_reason(title_only, today) == "renewal")
     closed = {"dealName": "Renewal", "stage": "No stage", "close": None, "closed": True, "pipeline": "686463412"}
     check("closed placeholder stays out", not is_open_pipeline(closed, today))
     past = {"dealName": "Acme", "stage": "Discovery", "close": "2020-01-01", "closed": False, "pipeline": "default"}
     check("past close stays out", not is_open_pipeline(past, today) and exclusion_reason(past, today) == "past close date")
+    month = commit_for_close_month([
+        {"stage": "Legal & Compliance", "stageLabel": "Legal & Compliance", "close": "2026-09-29", "amount": 200000, "sheetClass": "active", "onSheet": True, "closed": False, "name": "Perella"},
+        {"stage": "SQL", "stageLabel": "SQL", "close": "2026-08-30", "amount": 50000, "sheetClass": "active", "onSheet": True, "closed": False, "name": "CrossCountry"},
+    ], "2026-09", today)
+    check("past close stays out of the month commit", month["count"] == 1 and month["amount"] == 200000)
+    stub = deals_with_sheet([], {"deals": [{"id": "999", "name": "Sheet Only", "company": "Sheet Co", "owner": "Tim", "stage": "SQL", "amount": 10000, "close": "2026-01-01"}]})
+    check("sheet with no hubspot match stays in the book", len(stub) == 1 and is_open_pipeline(stub[0], today) and stub[0]["amount"] == 10000 and stub[0]["owner"] == "Tim")
     kidde = {"dealName": "Kidde - Renewal Agreement - 2027", "stage": "No stage", "close": "2027-10-01", "closed": False, "pipeline": "855205465", "companyId": "company:kidde", "amount": 514800}
     check("renewal agreement stays out", not is_open_pipeline(kidde, today) and exclusion_reason(kidde, today) == "renewal")
     placeholder = {"dealName": "Renewal", "pipeline": "686463412", "companyId": "company:kidde", "amount": 115000, "close": None, "closed": False, "stage": "No stage"}
