@@ -4,3 +4,12 @@ out/
 *.db
 *.sqlite*
 preview-check.png
+
+# Real contact data and generated snapshots. Never commit.
+hosting/opstream-gtm-hosted.html
+review/*.html
+handoff/
+var/*state*.json
+data/
+**/transcripts/
+**/transcripts.json

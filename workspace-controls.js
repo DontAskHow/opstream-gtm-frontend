@@ -51,7 +51,8 @@ Component.prototype.renderVals=function(){
   v.lessLabel='Less important ('+ordered.less.length+')';v.toggleLess=()=>this.setState({lessPrioritiesOpen:!s.lessPrioritiesOpen});
   v.priorityOrderNote=Object.keys(prefs.ratings).some(id=>raw.some(p=>p.id===id))?'Your order · important items first. Numbers show the review’s recommended rank.':'Recommended order · based on timing, blockers and useful next actions.';
   v.priorityNotice=s.storageError?'Preferences remain in this tab until browser saving succeeds.':'Preferences saved in this browser for future reviews.';
-  v.priorityIntro='Seven priorities from the retained account and marketing evidence. Reassessed September 10; source data through September 8.';
+  v.prioritiesEmpty=v.priorities.length===0;v.goBriefing=this.go('briefing');
+  v.priorityIntro=v.priorities.length?(v.priorities.length+' priorities from the collected record \u00b7 collected '+v.collectedShort+'.'):'No ranked priorities in this collection.';
   v.reviewScope=d.presentation.priorityReview.scope;
   v.accountOrderNote=s.accounts==='follow'?'Order: saved follow-up review · personal priority ratings do not change this list.':s.accounts==='leads'?'Order: newest lead date first · missing lead dates last.':'Order: '+({weighted:'Weighted ARR — highest first (amount × probability)',close:'Close date — earliest first',days:'Days in stage — highest first',name:'Account name — A to Z'}[s.sort||'weighted']);
   v.showAccountSort=s.accounts==='deals';

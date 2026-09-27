@@ -9,7 +9,9 @@
 .priority-content{min-width:0;display:flex;flex-direction:column;gap:12px}
 .priority-content h3{font-size:20px;margin:0;line-height:1.25;text-wrap:pretty}
 .priority-content p{margin:0;font-size:15px;line-height:1.55;text-wrap:pretty}
-.priority-content .priority-caveat,.priority-caveat{font-size:14px;line-height:1.5;color:var(--color-neutral-700)}
+.priority-content .priority-caveat,.priority-caveat{font-size:14px;line-height:1.5;color:var(--color-neutral-700);overflow-wrap:anywhere}
+.sc-interp{overflow-wrap:anywhere}
+.take-card{padding:16px 20px;margin:8px 0 4px;border-left:3px solid var(--color-accent,#0f766e);background:var(--color-surface);border-radius:0 10px 10px 0}.stat-card{border:1px solid var(--color-divider);border-radius:12px;padding:12px 16px;background:var(--color-surface);min-width:0}.stat-card h3{font-size:14px;margin:0 0 4px;overflow-wrap:break-word}.stat-card .stat-line{font-size:13px;color:var(--color-neutral-700)}.stat-card .stat-note{font-size:12px;color:var(--color-neutral-600);margin:6px 0 0}
 .priority-context{display:flex;flex-wrap:wrap;column-gap:18px;row-gap:6px;font-size:14px;line-height:1.5}
 .priority-context strong{font-weight:600}
 .priority-actions,.priority-feedback{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -76,6 +78,11 @@ a:hover,.btn-ghost,.priority-number{color:var(--color-accent-700)}
 .composer-addresses{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px}.composer-addresses .field{flex:1 1 220px}
 .composer-context{display:grid;gap:16px;margin-top:16px;padding:16px;background:var(--color-surface)}.composer-context textarea{font-size:14px}
 .composer-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-top:16px;border-top:1px solid var(--color-divider)}
+.send-confirm{margin-top:16px;padding:16px;background:var(--color-surface);border:1px solid var(--color-divider);border-radius:8px}
+.send-confirm h6{margin:0 0 8px;font-size:16px}
+.send-confirm p{margin:0 0 12px;font-size:14px;line-height:1.5}
+.send-confirm-body{max-height:200px;overflow-y:auto;padding:12px;background:var(--color-bg);border-radius:4px;font-size:14px;line-height:1.6;white-space:pre-wrap;margin-bottom:12px}
+.send-confirm .composer-actions{padding-top:0;border-top:none}
 .draft-status-label{display:flex;gap:6px;align-items:center;margin-left:auto;font-size:13px}.draft-status-label select{width:auto;font-size:13px}
 .draft-support{display:flex;flex-wrap:wrap;gap:20px;border-top:1px solid var(--color-divider);padding-top:12px}
 .form-error{margin:0;padding:10px 12px;border-left:3px solid var(--color-error);background:color-mix(in srgb,var(--color-error) 8%,white);color:var(--color-text);font-size:14px;line-height:1.5}
@@ -91,9 +98,29 @@ a:hover,.btn-ghost,.priority-number{color:var(--color-accent-700)}
 .evidence-prose{font-size:16px;line-height:1.65;overflow-wrap:anywhere}.evidence-prose p,.evidence-prose ul,.evidence-prose ol{margin:0 0 14px}.evidence-prose h3,.evidence-prose h4,.evidence-prose h5,.evidence-prose h6{font-size:17px;line-height:1.4;letter-spacing:normal;text-transform:none;margin:22px 0 10px}.evidence-prose li>p{margin-bottom:6px}.evidence-prose li{margin-bottom:6px}.evidence-prose a{color:var(--color-text)}
 .evidence-table-wrap{overflow:auto}.evidence-original{margin-top:16px;font-size:14px}.evidence-original summary{cursor:pointer;color:var(--color-neutral-700)}.evidence-original pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.5;padding:16px;background:var(--color-surface);max-height:420px;overflow:auto}
 .evidence-prose pre{white-space:pre-wrap;overflow-wrap:anywhere}
-@media(max-width:600px){.evidence-facts{grid-template-columns:1fr}.draft-purpose-tabs{gap:16px}.draft-status-label{margin-left:0}.connections-panel{padding:14px}.email-composer .email-message{min-height:280px}}
+@media(max-width:600px){.evidence-facts{grid-template-columns:1fr}.draft-purpose-tabs{gap:16px}.draft-status-label{margin-left:0}.connections-panel{padding:14px}.email-composer .email-message{min-height:280px}
+/* ---- mobile comfort layer ---- */
+main{padding:20px 16px 112px!important}
+header{padding:10px 16px!important}
+header nav{flex-wrap:nowrap!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch;scrollbar-width:none;max-width:100%;padding-bottom:2px}
+header nav::-webkit-scrollbar{display:none}
+header nav button{min-height:44px!important;padding:10px 14px!important;flex:0 0 auto}
+h1{font-size:28px!important}
+.btn{min-height:44px;display:inline-flex;align-items:center;justify-content:center}
+.feedback-control{min-height:44px!important;padding:10px 14px!important}
+aside[data-screen-label="Evidence"]{padding:16px!important}
+.priority-actions{flex-wrap:wrap}
+.priority-card{padding:16px}
+.take-card{padding:14px 16px}
+.meeting-row{grid-template-columns:minmax(0,1fr)!important;gap:6px!important}
+.meeting-row .m-kind{justify-self:start}
+.input{min-height:44px}
+.seg button{min-height:44px!important;padding:10px 16px!important}
+select.input{min-height:44px}
+.table-scroll{-webkit-overflow-scrolling:touch}
+}
 </style></head>
-<body><div role="note" style="padding:10px 20px;background:#143e32;color:white;font:14px sans-serif;text-align:center">PUBLIC DEMO · All data is synthetic · Changes stay in your browser · Email and Slack are disabled</div>
+<body><div id="topBanner" role="note" style="padding:10px 20px;background:#143e32;color:white;font:14px sans-serif;text-align:center">Company data · HubSpot, Fathom, Sheets, GA4 · Drafts stay in your browser · Nothing is sent without approval</div>
 <x-dc>
 <helmet>
 <link rel="stylesheet" href="_ds/modernist-b33a3025-c7ab-4acb-99c2-5c4275b50711/styles.css">
@@ -101,18 +128,23 @@ a:hover,.btn-ghost,.priority-number{color:var(--color-accent-700)}
 <style>
 body{margin:0;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)}
 a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
+@media (max-width:640px){
+  header{padding:10px 12px !important}
+  header nav{flex-wrap:nowrap !important;overflow-x:auto !important;-webkit-overflow-scrolling:touch;max-width:100%}
+  header nav button{flex-shrink:0;white-space:nowrap}
+}
 </style>
 </helmet>
 <div style="min-height:100vh;display:flex;flex-direction:column;font-family:var(--font-body);color:var(--color-text);background:var(--color-bg)">
 
   <header style="display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:12px 24px;border-bottom:2px solid var(--color-divider)">
-    <button onClick="{{ goToday }}" style="font-family:var(--font-heading);font-weight:800;font-size:17px;letter-spacing:-.01em;background:none;border:0;padding:6px 0;margin-right:16px;cursor:pointer;color:inherit">GTM Workspace</button>
+    <button onClick="{{ goBriefing }}" style="font-family:var(--font-heading);font-weight:800;font-size:17px;letter-spacing:-.01em;background:none;border:0;padding:6px 0;margin-right:16px;cursor:pointer;color:inherit">GTM Workspace</button>
     <nav style="display:{{ topNavDisplay }};flex-wrap:wrap;gap:2px">
       <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="6">
         <button onClick="{{ n.go }}" aria-current="{{ n.current }}" style="font:inherit;font-size:14px;background:none;border:0;border-bottom:2px solid {{ n.line }};color:{{ n.color }};padding:8px 8px 6px;cursor:pointer;font-weight:{{ n.weight }}">{{ n.label }}</button>
       </sc-for>
     </nav>
-    <button onClick="{{ goData }}" style="margin-left:auto;font:inherit;font-size:13px;background:none;border:0;padding:6px 0;color:var(--color-neutral-700);cursor:pointer;text-align:left">Collected Sep 8 · <span style="text-decoration:underline;text-underline-offset:3px">About this data</span></button>
+    <button onClick="{{ goData }}" style="margin-left:auto;font:inherit;font-size:13px;background:none;border:0;padding:6px 0;color:var(--color-neutral-700);cursor:pointer;text-align:left">Collected {{ collectedShort }} · <span style="text-decoration:underline;text-underline-offset:3px">About this data</span></button>
   <button class="workspace-account-button" onClick="{{ showConnections }}">Connections</button></header>
 
   <sc-if value="{{ bannerShown }}" hint-placeholder-val="{{ false }}">
@@ -122,12 +154,16 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
     </div>
   </sc-if>
 
+  <sc-if value="{{ toast }}">
+    <div role="status" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#143e32;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:1000;max-width:90vw">{{ toast }}</div>
+  </sc-if>
+
   <main style="flex:1;width:100%;max-width:1320px;margin:0 auto;padding:28px 24px {{ mainPadBottom }};box-sizing:border-box">
     <sc-if value="{{ isLoading }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Loading" style="display:flex;flex-direction:column;gap:20px;max-width:64ch">
         <h6 style="margin:0;color:var(--color-accent)">Week of September 7</h6>
         <h1 style="font-size:36px;margin:0">Where to focus</h1>
-        <p style="margin:0;font-size:15px;color:var(--color-neutral-700)">Loading the collected data. The last complete collection was Sep 8, 22:31; it will show if the check takes longer than a few seconds.</p>
+        <p style="margin:0;font-size:15px;color:var(--color-neutral-700)">Loading the collected data. It appears below once the check completes.</p>
         <div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
           <div style="height:2px;background:var(--color-divider)"></div>
           <sc-for list="{{ skeleton }}" as="k" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:40px minmax(0,1fr);gap:16px;padding:6px 0 18px;border-bottom:1px solid var(--color-divider)"><div style="height:28px;width:24px;background:var(--color-surface)"></div><div style="display:flex;flex-direction:column;gap:10px"><div style="height:20px;width:{{ k.w1 }};background:var(--color-surface)"></div><div style="height:14px;width:{{ k.w2 }};background:var(--color-surface)"></div><div style="height:14px;width:{{ k.w3 }};background:var(--color-surface)"></div></div></div></sc-for>
@@ -149,158 +185,238 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
   <form action="/auth/logout" method="post"><button class="text-control" type="submit">Sign out</button></form>
 </section></sc-if>
 
-<!-- TODAY -->
-    <sc-if value="{{ isToday }}" hint-placeholder-val="{{ true }}">
-      <div data-screen-label="Today" style="display:flex;flex-direction:column;gap:24px">
+<!-- BRIEFING -->
+    <sc-if value="{{ isBriefing }}" hint-placeholder-val="{{ true }}">
+      <div data-screen-label="Briefing" style="display:flex;flex-direction:column;gap:24px">
         <div>
-          <h6 style="margin:0 0 8px;color:var(--color-accent)">Week of September 7</h6>
-          <h1 style="font-size:36px;margin:0 0 8px">Where to focus</h1>
-          <p style="margin:0;font-size:15px;color:var(--color-neutral-700);max-width:64ch;text-wrap:pretty">{{ priorityIntro }}</p>
+          <h6 style="margin:0 0 8px;color:var(--color-accent)">Proactive briefing</h6>
+          <h1 style="font-size:36px;margin:0 0 8px">What needs you today</h1>
+          <p style="margin:0;font-size:15px;color:var(--color-neutral-700);max-width:64ch;text-wrap:pretty">{{ briefingIntro }}</p>
         </div>
-        <div style="display:flex;flex-wrap:wrap;gap:32px 40px;align-items:flex-start">
-          <section style="flex:2 1 480px;min-width:0;display:flex;flex-direction:column">
-            <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--color-divider);padding-bottom:8px"><h6 style="margin:0">Priorities</h6><span style="font-size:12px;color:var(--color-neutral-700)">Priorities reassessed Sep 10 · <button onClick="{{ goData }}" style="font:inherit;background:none;border:0;padding:0;color:inherit;text-decoration:underline;text-underline-offset:3px;cursor:pointer">what it covers</button></span></div>
-            <p class="priority-order-note">{{ priorityOrderNote }}</p><sc-for list="{{ priorities }}" as="p"><article class="priority-card" data-priority-id="{{ p.id }}" aria-label="{{ p.title }}">
-  <div class="priority-number">{{ p.n }}</div>
-  <div class="priority-content">
-    <h3>{{ p.title }}</h3>
-    <div class="priority-context">
-      <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
-      <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
-      <sc-if value="{{ p.hasContextRefs }}"><button class="text-control" onClick="{{ p.contextGo }}">{{ p.contextLabel }}</button></sc-if>
-    </div>
-    <p>{{ p.why }}</p>
-    <p><strong>Next step:</strong> {{ p.next }}</p>
-    <p class="priority-caveat">{{ p.caveat }}</p>
-    <div class="priority-actions">
-      <button onClick="{{ p.primaryGo }}" class="btn btn-primary">{{ p.primary }}</button>
-      <sc-if value="{{ p.hasSecondary }}"><button onClick="{{ p.secondaryGo }}" class="btn btn-secondary">{{ p.secondary }}</button></sc-if>
-    </div>
-    <div class="priority-feedback" role="group" aria-label="Priority feedback">
-      <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCount }}</span></button>
-      <button class="quiet-control" onClick="{{ p.importantGo }}" aria-pressed="{{ p.important }}" aria-label="{{ p.starLabel }}" title="{{ p.starLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{ p.starFill }}" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9L12 3Z"></path></svg></button>
-      <details class="priority-menu"><summary class="quiet-control" aria-label="More priority actions">•••</summary><div class="priority-menu-items"><button class="quiet-control" onClick="{{ p.lessGo }}">{{ p.lessActionLabel }}</button><sc-if value="{{ p.rated }}"><button class="quiet-control" onClick="{{ p.clearRating }}">Reset priority</button></sc-if></div></details>
-    </div>
-    <details class="priority-reason"><summary>{{ p.rankLabel }}</summary><p>{{ p.rankReason }}</p><button class="text-control" onClick="{{ p.sourcesGo }}">Review supporting records</button></details>
-    <sc-if value="{{ p.commentsOpen }}">
-      <section class="priority-comments" aria-label="Comments">
-        <sc-for list="{{ p.comments }}" as="c">
-          <div class="priority-comment" id="{{ c.anchorId }}">
-            <div class="comment-meta"><span><strong>{{ c.authorName }}</strong> · {{ c.date }}</span><sc-if value="{{ c.mine }}"><button class="text-control" onClick="{{ c.edit }}">Edit comment</button></sc-if></div>
-            <p class="comment-text">{{ c.text }}</p>
-            <sc-if value="{{ c.hasTags }}"><p class="comment-tags">{{ c.tags }}</p></sc-if>
-            <sc-for list="{{ c.deliveries }}" as="n"><div class="notification-receipt"><span>{{ n.label }}</span><sc-if value="{{ n.canRetry }}"><button class="text-control" onClick="{{ n.retry }}">Retry DM</button></sc-if></div></sc-for>
-          </div>
-        </sc-for>
-        <label class="comment-label" for="{{ p.editorId }}">{{ p.editorLabel }}</label>
-        <textarea id="{{ p.editorId }}" class="input" value="{{ p.commentText }}" onInput="{{ p.editCommentText }}" onKeyDown="{{ p.commentKeyDown }}" rows="3" maxlength="3000" placeholder="Add a comment. Type @ to mention a teammate." aria-controls="{{ p.mentionListId }}" aria-expanded="{{ p.hasSuggestions }}"></textarea>
-        <sc-if value="{{ p.hasSuggestions }}"><div class="mention-suggestions" id="{{ p.mentionListId }}" role="listbox" aria-label="Mention a teammate"><sc-for list="{{ p.mentionSuggestions }}" as="person"><button class="mention-option" role="option" aria-selected="{{ person.selected }}" onClick="{{ person.choose }}"><strong>{{ person.name }}</strong><span>{{ person.email }}</span></button></sc-for></div></sc-if>
-        <div class="comment-tag-controls">
-          <sc-for list="{{ p.editTags }}" as="tag"><button class="feedback-control" onClick="{{ tag.remove }}" aria-label="{{ tag.removeLabel }}">@{{ tag.name }} ×</button></sc-for>
-        </div>
-        <div class="priority-actions"><button class="btn btn-primary" disabled="{{ p.commentEmpty }}" onClick="{{ p.saveComment }}">{{ p.saveCommentLabel }}</button><button class="btn btn-secondary" onClick="{{ p.cancelComment }}">Cancel</button></div>
-        <sc-if value="{{ p.commentError }}"><p class="form-error" role="alert">{{ p.commentError }}</p></sc-if>
-        <p class="priority-caveat">Mentions notify teammates after Slack is connected. Your comment is saved either way.</p>
-      </section>
-    </sc-if>
-  </div>
-</article>
-</sc-for><sc-if value="{{ hasLessPriorities }}"><button class="btn btn-secondary less-priorities-toggle" aria-expanded="{{ lessOpen }}" onClick="{{ toggleLess }}">{{ lessLabel }}</button><sc-if value="{{ lessOpen }}"><sc-for list="{{ lessPriorities }}" as="p"><article class="priority-card" data-priority-id="{{ p.id }}" aria-label="{{ p.title }}">
-  <div class="priority-number">{{ p.n }}</div>
-  <div class="priority-content">
-    <h3>{{ p.title }}</h3>
-    <div class="priority-context">
-      <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
-      <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
-      <sc-if value="{{ p.hasContextRefs }}"><button class="text-control" onClick="{{ p.contextGo }}">{{ p.contextLabel }}</button></sc-if>
-    </div>
-    <p>{{ p.why }}</p>
-    <p><strong>Next step:</strong> {{ p.next }}</p>
-    <p class="priority-caveat">{{ p.caveat }}</p>
-    <div class="priority-actions">
-      <button onClick="{{ p.primaryGo }}" class="btn btn-primary">{{ p.primary }}</button>
-      <sc-if value="{{ p.hasSecondary }}"><button onClick="{{ p.secondaryGo }}" class="btn btn-secondary">{{ p.secondary }}</button></sc-if>
-    </div>
-    <div class="priority-feedback" role="group" aria-label="Priority feedback">
-      <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCount }}</span></button>
-      <button class="quiet-control" onClick="{{ p.importantGo }}" aria-pressed="{{ p.important }}" aria-label="{{ p.starLabel }}" title="{{ p.starLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{ p.starFill }}" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9L12 3Z"></path></svg></button>
-      <details class="priority-menu"><summary class="quiet-control" aria-label="More priority actions">•••</summary><div class="priority-menu-items"><button class="quiet-control" onClick="{{ p.lessGo }}">{{ p.lessActionLabel }}</button><sc-if value="{{ p.rated }}"><button class="quiet-control" onClick="{{ p.clearRating }}">Reset priority</button></sc-if></div></details>
-    </div>
-    <details class="priority-reason"><summary>{{ p.rankLabel }}</summary><p>{{ p.rankReason }}</p><button class="text-control" onClick="{{ p.sourcesGo }}">Review supporting records</button></details>
-    <sc-if value="{{ p.commentsOpen }}">
-      <section class="priority-comments" aria-label="Comments">
-        <sc-for list="{{ p.comments }}" as="c">
-          <div class="priority-comment" id="{{ c.anchorId }}">
-            <div class="comment-meta"><span><strong>{{ c.authorName }}</strong> · {{ c.date }}</span><sc-if value="{{ c.mine }}"><button class="text-control" onClick="{{ c.edit }}">Edit comment</button></sc-if></div>
-            <p class="comment-text">{{ c.text }}</p>
-            <sc-if value="{{ c.hasTags }}"><p class="comment-tags">{{ c.tags }}</p></sc-if>
-            <sc-for list="{{ c.deliveries }}" as="n"><div class="notification-receipt"><span>{{ n.label }}</span><sc-if value="{{ n.canRetry }}"><button class="text-control" onClick="{{ n.retry }}">Retry DM</button></sc-if></div></sc-for>
-          </div>
-        </sc-for>
-        <label class="comment-label" for="{{ p.editorId }}">{{ p.editorLabel }}</label>
-        <textarea id="{{ p.editorId }}" class="input" value="{{ p.commentText }}" onInput="{{ p.editCommentText }}" onKeyDown="{{ p.commentKeyDown }}" rows="3" maxlength="3000" placeholder="Add a comment. Type @ to mention a teammate." aria-controls="{{ p.mentionListId }}" aria-expanded="{{ p.hasSuggestions }}"></textarea>
-        <sc-if value="{{ p.hasSuggestions }}"><div class="mention-suggestions" id="{{ p.mentionListId }}" role="listbox" aria-label="Mention a teammate"><sc-for list="{{ p.mentionSuggestions }}" as="person"><button class="mention-option" role="option" aria-selected="{{ person.selected }}" onClick="{{ person.choose }}"><strong>{{ person.name }}</strong><span>{{ person.email }}</span></button></sc-for></div></sc-if>
-        <div class="comment-tag-controls">
-          <sc-for list="{{ p.editTags }}" as="tag"><button class="feedback-control" onClick="{{ tag.remove }}" aria-label="{{ tag.removeLabel }}">@{{ tag.name }} ×</button></sc-for>
-        </div>
-        <div class="priority-actions"><button class="btn btn-primary" disabled="{{ p.commentEmpty }}" onClick="{{ p.saveComment }}">{{ p.saveCommentLabel }}</button><button class="btn btn-secondary" onClick="{{ p.cancelComment }}">Cancel</button></div>
-        <sc-if value="{{ p.commentError }}"><p class="form-error" role="alert">{{ p.commentError }}</p></sc-if>
-        <p class="priority-caveat">Mentions notify teammates after Slack is connected. Your comment is saved either way.</p>
-      </section>
-    </sc-if>
-  </div>
-</article>
-</sc-for></sc-if></sc-if><p class="priority-caveat" style="margin-top:16px">{{ priorityNotice }}</p>
-          </section>
-          <aside style="flex:1 1 280px;min-width:0;display:flex;flex-direction:column;gap:32px">
-            <section>
-              <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--color-divider);padding-bottom:8px"><h6 style="margin:0">July – August</h6><button onClick="{{ goPerformance }}" style="font:inherit;font-size:12px;background:none;border:0;padding:0;color:var(--color-neutral-700);text-decoration:underline;text-underline-offset:3px;cursor:pointer">All numbers</button></div>
-              <sc-for list="{{ quickNumbers }}" as="q" hint-placeholder-count="5">
-                <button onClick="{{ goPerformance }}" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:12px 0;font:inherit;color:inherit;cursor:pointer">
-                  <span style="font-size:14px">{{ q.label }}</span>
-                  <span style="font-family:var(--font-heading);font-weight:800;font-size:24px;font-variant-numeric:tabular-nums;line-height:1">{{ q.value }}</span>
-                  <span style="font-size:12px;color:var(--color-neutral-700);grid-column:1/-1">{{ q.delta }}</span>
-                </button>
-              </sc-for>
-              <p style="margin:10px 0 0;font-size:12px;color:var(--color-neutral-700)">Jul 1 – Aug 30. Leads, MQLs and SQLs from the Lead Tracker; meetings from the CRM. These are separate counts, not a funnel.</p>
-            </section>
-            <section>
-              <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--color-divider);padding-bottom:8px"><h6 style="margin:0">Coming up</h6><button onClick="{{ goMeetings }}" style="font:inherit;font-size:12px;background:none;border:0;padding:0;color:var(--color-neutral-700);text-decoration:underline;text-underline-offset:3px;cursor:pointer">All meetings</button></div>
-              <sc-for list="{{ upcoming }}" as="m" hint-placeholder-count="4">
-                <button onClick="{{ m.go }}" style="display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:12px 0;font:inherit;color:inherit;cursor:pointer">
-                  <span style="font-size:12px;color:var(--color-neutral-700)">{{ m.when }}</span>
-                  <span style="font-weight:600;font-size:15px">{{ m.title }}</span>
-                  <span style="font-size:13px;color:var(--color-neutral-700)">{{ m.prep }}</span>
-                </button>
-              </sc-for>
-            </section>
-            <section style="background:var(--color-surface);padding:16px">
-              <h6 style="margin:0 0 6px">Reading the numbers</h6>
-              <p style="margin:0;font-size:13px;line-height:1.5;color:var(--color-neutral-800)">All figures are synthetic. Missing actuals are not zero; forecast amounts are not commitments.</p>
-              <button onClick="{{ goData }}" class="btn btn-ghost" style="margin-top:8px;padding-inline:0">About this data →</button>
-            </section>
-          </aside>
-        </div>
+        <sc-if value="{{ briefingEmpty }}">
+          <p class="muted-copy">Loading the collection…</p>
+        </sc-if>
+        <sc-if value="{{ isHollie }}">
+                  <sc-if value="{{ hasHollieOp }}">
+                    <section>
+                      <div class="section-rule"><h6 style="margin:0">Morning brief</h6><span style="font-size:12px;color:var(--color-neutral-700)">{{ hollieGenNote }}</span></div>
+                      <sc-if value="{{ hasAgentBrief }}">
+                        <div class="take-card">
+                          <div>
+                            <h3 style="font-size:14px;margin:0 0 6px">Assistant's take <span style="font-weight:400;color:var(--color-neutral-700)">· {{ agentBriefGenNote }}</span></h3>
+                            <sc-if value="{{ agentBriefGreeting }}"><p style="font-size:14px;margin:0 0 8px"><em>{{ agentBriefGreeting }}</em></p></sc-if>
+                            <sc-if value="{{ hasAgentBriefTop }}"><p style="font-size:14px;margin:8px 0 4px"><strong>Start with these</strong></p>
+                              <sc-for list="{{ agentBriefTop }}" as="abt"><p style="font-size:14px;margin:0 0 6px"><strong>{{ abt.title }}</strong> — {{ abt.why }}</p></sc-for>
+                            </sc-if>
+                            <sc-for list="{{ agentBriefParas }}" as="abp"><p style="font-size:14px;margin:0 0 8px">{{ abp }}</p></sc-for>
+                            <sc-if value="{{ hasAgentBriefNew }}"><p style="font-size:14px;margin:8px 0 4px"><strong>New since last brief</strong></p>
+                              <sc-for list="{{ agentBriefNew }}" as="abn"><p class="priority-caveat" style="margin:0 0 4px">• {{ abn }}</p></sc-for>
+                            </sc-if>
+                            <sc-if value="{{ hasAgentBriefWatch }}"><p style="font-size:14px;margin:8px 0 4px"><strong>Watch out</strong></p>
+                              <sc-for list="{{ agentBriefWatch }}" as="abw"><p class="priority-caveat" style="margin:0 0 4px">• {{ abw }}</p></sc-for>
+                            </sc-if>
+                          </div>
+                        </div>
+                      </sc-if>
+                      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;padding:8px 0 4px">
+                        <sc-for list="{{ hollieBriefCards }}" as="bc">
+                          <div class="stat-card">
+                            <h3>{{ bc.title }}</h3>
+                            <div class="stat-line"><span>{{ bc.line }}</span></div>
+                            <sc-if value="{{ bc.note }}"><p class="stat-note">{{ bc.note }}</p></sc-if>
+                            <div><button onClick="{{ bc.go }}" class="btn btn-ghost" style="padding:2px 0;font-size:13px">{{ bc.goLabel }} →</button></div>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </section>
+                    <sc-if value="{{ hasHeartbeat }}">
+                      <section>
+                        <div class="section-rule"><h6 style="margin:0">Pulse</h6><span style="font-size:12px;color:var(--color-neutral-700)">Proactive check · {{ heartbeatGenNote }}</span></div>
+                        <sc-if value="{{ heartbeatSummary }}"><p style="font-size:14px;margin:0 0 8px">{{ heartbeatSummary }}</p></sc-if>
+                        <sc-for list="{{ heartbeatInsights }}" as="hbi">
+                          <p style="font-size:14px;margin:0 0 8px"><strong>{{ hbi.title }}</strong> — {{ hbi.detail }}</p>
+                        </sc-for>
+                        <sc-if value="{{ hasHeartbeatFixes }}">
+                          <div class="section-rule" style="margin-top:4px"><h6 style="margin:0">Fixes ready</h6><span style="font-size:12px;color:var(--color-neutral-700)">Prepared by the heartbeat · field fixes are in "Needs your decision" below</span></div>
+                          <sc-for list="{{ heartbeatFixes }}" as="fx">
+                            <sc-if value="{{ fx.isDraft }}">
+                              <article class="priority-card" aria-label="{{ fx.title }}">
+                                <div class="priority-number">✎</div>
+                                <div class="priority-content">
+                                  <h3>{{ fx.title }}</h3>
+                                  <sc-if value="{{ fx.detail }}"><p>{{ fx.detail }}</p></sc-if>
+                                  <sc-if value="{{ fx.draftSubject }}"><p class="priority-context"><span>Subject: {{ fx.draftSubject }}</span></p></sc-if>
+                                  <div class="priority-actions">
+                                    <sc-if value="{{ !fx.created }}">
+                                      <button onClick="{{ fx.createGo }}" class="btn btn-primary">Create draft</button>
+                                    </sc-if>
+                                    <sc-if value="{{ fx.created }}"><span class="muted-copy">Draft created — opened in Drafts.</span></sc-if>
+                                  </div>
+                                </div>
+                              </article>
+                            </sc-if>
+                            <sc-if value="{{ fx.isAsk }}">
+                              <p style="font-size:14px;margin:0 0 8px"><strong>{{ fx.title }}</strong> — {{ fx.question }}</p>
+                            </sc-if>
+                          </sc-for>
+                        </sc-if>
+                      </section>
+                    </sc-if>
+                    <section style="display:flex;flex-direction:column">
+                      <div class="section-rule"><h6 style="margin:0">Needs your decision</h6><span style="font-size:12px;color:var(--color-neutral-700)">CRM changes proposed by the assistant · nothing is written to HubSpot</span></div>
+                      <sc-if value="{{ aiProposalsPending }}"><p class="muted-copy">{{ aiProposalsWaitingNote }}</p></sc-if>
+                      <sc-for list="{{ aiProposals }}" as="ap">
+                        <article class="priority-card" aria-label="{{ ap.title }}">
+                          <div class="priority-number">?</div>
+                          <div class="priority-content">
+                            <h3>{{ ap.title }}</h3>
+                            <div class="priority-context"><span>{{ ap.changeLine }}</span><span>{{ ap.meta }}</span></div>
+                            <sc-if value="{{ ap.rationale }}"><p>{{ ap.rationale }}</p></sc-if>
+                            <p class="priority-caveat"><strong>Status:</strong> {{ ap.statusLabel }}</p>
+                            <div class="priority-actions">
+                              <sc-if value="{{ !ap.decided }}">
+                                <button onClick="{{ ap.approveGo }}" class="btn btn-primary">Approve</button>
+                                <button onClick="{{ ap.declineGo }}" class="btn btn-secondary">Decline</button>
+                              </sc-if>
+                              <sc-if value="{{ ap.decided }}"><span class="muted-copy">Recorded in this workspace.</span></sc-if>
+                            </div>
+                          </div>
+                        </article>
+                      </sc-for>
+                      <sc-if value="{{ !aiProposals.length }}"><p class="muted-copy">Nothing waiting. When the assistant spots a stale field or a wrong value, its proposal lands here for your call.</p></sc-if>
+                    </section>
+                    <section style="display:flex;flex-direction:column">
+                      <div class="section-rule"><h6 style="margin:0">Action queue</h6><span style="font-size:12px;color:var(--color-neutral-700)">Organized around your goals · ranked by the assistant · {{ hollieNewNote }}</span></div>
+                      <sc-if value="{{ hollieQueueEmpty }}"><p class="muted-copy">{{ hollieQueueEmptyNote }}</p></sc-if>
+                      <sc-for list="{{ hollieQueueGroups }}" as="g">
+                        <h6 style="margin:18px 0 2px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-neutral-700)">{{ g.label }} · {{ g.count }}</h6>
+                        <sc-if value="{{ g.status }}"><p class="muted-copy" style="margin:0 0 4px;font-size:12px">{{ g.status }}</p></sc-if>
+                        <sc-for list="{{ g.items }}" as="a">
+                        <article class="priority-card" aria-label="{{ a.title }}">
+                          <div class="priority-number">{{ a.n }}</div>
+                          <div class="priority-content">
+                            <h3>{{ a.title }} <sc-if value="{{ a.isNew }}"><span style="font-size:11px;font-weight:700;color:var(--color-accent-700);text-transform:uppercase;letter-spacing:.06em"> · new</span></sc-if><sc-if value="{{ a.needsDecision }}"><span style="font-size:11px;font-weight:700;color:var(--color-accent-700);text-transform:uppercase;letter-spacing:.06em"> · needs your decision</span></sc-if></h3>
+                            <div class="priority-context"><span>{{ a.kind }}</span><sc-if value="{{ a.context }}"><span>{{ a.context }}</span></sc-if></div>
+                            <p>{{ a.why }}</p>
+                            <p class="priority-caveat"><strong>Confidence:</strong> {{ a.confidenceText }}</p>
+                            <div class="priority-actions">
+                              <button onClick="{{ a.primaryGo }}" class="btn btn-primary">{{ a.primary }}</button>
+                              <button onClick="{{ a.doneGo }}" class="btn btn-secondary">{{ a.doneLabel }}</button>
+                              <button onClick="{{ a.dismissGo }}" class="btn btn-secondary">{{ a.dismissLabel }}</button>
+                              <sc-if value="{{ a.hasAccount }}"><button onClick="{{ a.accountGo }}" class="text-control">Open account</button></sc-if>
+                              <sc-for list="{{ a.evidenceLinks }}" as="el"><button onClick="{{ el.go }}" class="text-control">{{ el.label }}</button></sc-for>
+                            </div>
+                          </div>
+                        </article>
+                        </sc-for>
+                      </sc-for>
+                    </section>
+                    <section style="display:flex;flex-direction:column">
+                      <div class="section-rule"><h6 style="margin:0">Meeting prep</h6><span style="font-size:12px;color:var(--color-neutral-700)">Auto-generated · next 7 days</span></div>
+                      <sc-if value="{{ holliePrepEmpty }}"><p class="muted-copy">{{ holliePrepNote }}</p></sc-if>
+                      <sc-for list="{{ holliePrep }}" as="pr">
+                        <article class="priority-card" aria-label="{{ pr.title }}">
+                          <div class="priority-number">◷</div>
+                          <div class="priority-content">
+                            <h3>{{ pr.title }}</h3>
+                            <div class="priority-context"><span>{{ pr.startLine }}</span></div>
+                            <sc-if value="{{ pr.callGoal }}"><p style="font-size:14px"><strong>Goal for this call:</strong> {{ pr.callGoal }}</p></sc-if>
+                            <sc-if value="{{ pr.attendees.length }}"><p><strong>Who you're meeting:</strong></p>
+                              <sc-for list="{{ pr.attendees }}" as="at"><p class="priority-caveat">• {{ at }}</p></sc-for>
+                            </sc-if>
+                            <sc-if value="{{ pr.dealsLine }}"><p><strong>Open deals:</strong> {{ pr.dealsLine }}</p></sc-if>
+                            <sc-if value="{{ pr.lastCallLine }}"><p><strong>Last call:</strong> {{ pr.lastCallLine }}</p>
+                              <sc-if value="{{ pr.lastCallPurpose }}"><p class="priority-caveat"><em>{{ pr.lastCallPurpose }}</em></p></sc-if>
+                              <sc-if value="{{ pr.lastCallTakeaways.length }}"><p class="priority-caveat"><strong>Key takeaways:</strong></p>
+                                <sc-for list="{{ pr.lastCallTakeaways }}" as="tk"><p class="priority-caveat">• {{ tk }}</p></sc-for>
+                              </sc-if>
+                              <sc-if value="{{ !pr.lastCallTakeaways.length }}"><sc-for list="{{ pr.lastCallSummary }}" as="ls"><p class="priority-caveat">{{ ls }}</p></sc-for></sc-if>
+                            </sc-if>
+                            <sc-if value="{{ pr.actions.length }}"><p><strong>Open actions:</strong></p>
+                              <sc-for list="{{ pr.actions }}" as="ac"><p class="priority-caveat">• {{ ac }}</p></sc-for>
+                            </sc-if>
+                            <p><strong>Suggested agenda:</strong></p>
+                            <sc-for list="{{ pr.agenda }}" as="ag"><p class="priority-caveat">• {{ ag }}</p></sc-for>
+                            <div class="priority-actions">
+                              <sc-if value="{{ pr.hasAccount }}"><button onClick="{{ pr.accountGo }}" class="btn btn-secondary">Open account</button></sc-if>
+                              <sc-for list="{{ pr.evidenceLinks }}" as="el"><button onClick="{{ el.go }}" class="text-control">{{ el.label }}</button></sc-for>
+                            </div>
+                          </div>
+                        </article>
+                      </sc-for>
+                    </section>
+                  </sc-if>
+                    <section>
+                      <div class="section-rule"><h6 style="margin:0">How the assistant works</h6><span style="font-size:12px;color:var(--color-neutral-700)">Your autonomy settings</span></div>
+                      <p class="muted-copy" style="font-size:13px"><sc-for list="{{ hollieAutonomy }}" as="au"><strong>{{ au.label }}:</strong> {{ au.text }}<span> · </span></sc-for></p>
+                    </section>
+                  <sc-if value="{{ noHollieOp }}">
+                    <section style="display:flex;flex-direction:column">
+                      <div class="section-rule"><h6 style="margin:0">Action queue</h6><span style="font-size:12px;color:var(--color-neutral-700)">Assistant data not loaded — showing pipeline ranking</span></div>
+                      <sc-for list="{{ briefingActions }}" as="a">
+                        <article class="priority-card" aria-label="{{ a.title }}">
+                          <div class="priority-number">{{ a.n }}</div>
+                          <div class="priority-content">
+                            <h3>{{ a.title }}</h3>
+                            <div class="priority-context"><span>{{ a.context }}</span></div>
+                            <p>{{ a.why }}</p>
+                            <sc-if value="{{ a.changed }}"><p class="priority-caveat"><strong>What changed:</strong> {{ a.changed }}</p></sc-if>
+                            <p class="priority-caveat"><strong>Confidence:</strong> {{ a.confidence }}</p>
+                            <div class="priority-actions">
+                              <button onClick="{{ a.primaryGo }}" class="btn btn-primary">{{ a.primary }}</button>
+                              <sc-if value="{{ a.secondary }}"><button onClick="{{ a.secondaryGo }}" class="btn btn-secondary">{{ a.secondary }}</button></sc-if>
+                              <sc-if value="{{ a.hasDealEvidence }}"><button onClick="{{ a.dealEvidenceGo }}" class="text-control">Deal record</button></sc-if>
+                            </div>
+                          </div>
+                        </article>
+                      </sc-for>
+                    </section>
+                  </sc-if>
+                </sc-if>
+
       </div>
     </sc-if>
 
-    <!-- PERFORMANCE -->
-    <sc-if value="{{ isPerformance }}" hint-placeholder-val="{{ false }}">
-      <div data-screen-label="Performance" style="display:flex;flex-direction:column;gap:24px">
+<!-- PERFORMANCE -->
+    <sc-if value="{{ isPipeline }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Pipeline" style="display:flex;flex-direction:column;gap:24px">
         <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px">
-          <div><h1 style="font-size:36px;margin:0 0 4px">Performance</h1><p style="margin:0;color:var(--color-neutral-700)">Demand, pipeline, spend and visibility.</p></div>
+          <div><h1 style="font-size:36px;margin:0 0 4px">Pipeline</h1><p style="margin:0;color:var(--color-neutral-700)">Deals, demand, spend and visibility from the company record.</p></div>
           <div class="seg" role="tablist">
             <sc-for list="{{ perfTabs }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.go }}" role="tab" aria-selected="{{ t.selected }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for>
           </div>
         </div>
+        <section aria-label="Key numbers">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;padding:16px 0;border-top:2px solid var(--color-divider)">
+            <sc-for list="{{ briefingMetrics }}" as="m">
+              <div><div style="font-size:12px;color:var(--color-neutral-700)">{{ m.label }}</div><div style="font-size:24px;font-weight:700">{{ m.value }}</div></div>
+            </sc-for>
+          </div>
+        </section>
+        <sc-if value="{{ briefingDecisions.length }}">
+          <section style="display:flex;flex-direction:column">
+            <div class="section-rule"><h6 style="margin:0">Worth a decision</h6><span style="font-size:12px;color:var(--color-neutral-700)">Each links to its evidence</span></div>
+            <sc-for list="{{ briefingDecisions }}" as="d">
+              <article class="priority-card" aria-label="{{ d.title }}">
+                <div class="priority-number">?</div>
+                <div class="priority-content">
+                  <h3>{{ d.title }}</h3>
+                  <p>{{ d.why }}</p>
+                  <p class="priority-caveat"><strong>Confidence:</strong> {{ d.confidence }}</p>
+                  <div class="priority-actions"><button onClick="{{ d.evidenceGo }}" class="btn btn-secondary">{{ d.evidenceLabel }}</button></div>
+                </div>
+              </article>
+            </sc-for>
+          </section>
+        </sc-if>
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
           <sc-if value="{{ perfDemand }}" hint-placeholder-val="{{ true }}">
           <div class="seg">
             <sc-for list="{{ periods }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.go }}" style="font:inherit;font-size:13px;padding:7px 12px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for>
           </div>
           <sc-if value="{{ isCustom }}" hint-placeholder-val="{{ false }}">
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px">From<input type="date" class="input" min="2026-01-01" max="2026-09-08" value="{{ customStart }}" onChange="{{ setStart }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px">Through<input type="date" class="input" min="2026-01-01" max="2026-09-08" value="{{ customEnd }}" onChange="{{ setEnd }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px">From<input type="date" class="input" min="2026-01-01" max="2027-12-31" value="{{ customStart }}" onChange="{{ setStart }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px">Through<input type="date" class="input" min="2026-01-01" max="2027-12-31" value="{{ customEnd }}" onChange="{{ setEnd }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
           </sc-if>
           <span style="font-size:13px;color:var(--color-neutral-700)">{{ periodRange }}</span>
           </sc-if>
@@ -356,7 +472,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;padding-top:14px">
                 <sc-for list="{{ scorecard }}" as="k" hint-placeholder-count="4"><div><span style="display:block;font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums;line-height:1.1">{{ k.value }}</span><span style="font-size:12px;color:var(--color-neutral-700)">{{ k.label }}</span></div></sc-for>
               </div>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Synthetic scorecard. All pipeline values are examples, not buyer commitments.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Company scorecard. All pipeline values are owner estimates, not buyer commitments.</p>
             </section>
             <section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Latest owner notes</h6><button onClick="{{ goDeals }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">All opportunities</button></div>
@@ -366,7 +482,8 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <span style="font-size:13px;color:var(--color-neutral-800);grid-column:1/-1">{{ m.change }}</span>
                 </button>
               </sc-for>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">"Last meeting / what happened" column, Alex Morgan and Sam Rivera sheets, collected Sep 8.</p>
+              <sc-if value="{{ movementsEmpty }}"><p style="margin:0;font-size:14px;color:var(--color-neutral-800)">No owner notes were found — the “Last meeting / what happened” column came back empty.</p></sc-if>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">"Last meeting / what happened" column, owner pipeline sheets, collected {{ collectedShort }}.</p>
             </section>
           </div>
         </sc-if>
@@ -379,7 +496,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                 <thead><tr><th>Month</th><th style="text-align:right">Planned</th><th style="text-align:right">Recorded</th><th style="text-align:right">Difference</th></tr></thead>
                 <tbody><sc-for list="{{ spendMonths }}" as="m" hint-placeholder-count="9"><tr><td>{{ m.month }} <span class="tag tag-neutral" style="margin-left:6px;display:{{ m.tagDisplay }}">{{ m.tag }}</span></td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ m.budget }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ m.actual }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ m.diff }}</td></tr></sc-for></tbody>
               </table>
-              <p style="margin:12px 0 0;font-size:13px;color:var(--color-neutral-800);line-height:1.5">Synthetic monthly budget. Missing actuals mean not entered, not zero.</p>
+              <p style="margin:12px 0 0;font-size:13px;color:var(--color-neutral-800);line-height:1.5">Monthly budget. Missing actuals mean not entered, not zero.</p>
             </section>
             <section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Where the money went</h6><span style="font-size:12px;color:var(--color-neutral-700)">Recorded Jan – Jul · by channel</span></div>
@@ -390,7 +507,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <span style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ v.amount }}</span>
                 </div>
               </sc-for>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Example marketing spend grouped by channel. All amounts are synthetic.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Marketing spend grouped by channel, from the collected record.</p>
             </section>
           </div>
           <section>
@@ -412,10 +529,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               </div>
             </sc-for>
           </div>
-          <p style="margin:0;font-size:13px;color:var(--color-neutral-800);line-height:1.5;max-width:76ch">Website figures are for example.com only. Staging, localhost and preview hosts are excluded. AI visibility uses completed monitored answers in the retained collection; failed answers are excluded.</p>
+          <p style="margin:0;font-size:13px;color:var(--color-neutral-800);line-height:1.5;max-width:76ch">Website figures are for www.opstream.ai only. Staging, localhost and preview hosts are excluded. AI visibility uses completed monitored answers in the retained collection; failed answers are excluded.</p>
           <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
             <section style="flex:1 1 320px;min-width:0">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Visits by week</h6><span style="font-size:12px;color:var(--color-neutral-700)">example.com · May – Sep</span></div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Visits by week</h6><span style="font-size:12px;color:var(--color-neutral-700)">www.opstream.ai · May – Sep</span></div>
               <div style="display:grid;grid-template-columns:repeat({{ webCols }},minmax(0,1fr));gap:6px;align-items:end;height:160px;padding-top:16px">
                 <sc-for list="{{ webWeeks }}" as="w" hint-placeholder-count="10"><div style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0" title="{{ w.title }}"><div style="background:var(--color-accent-2);height:{{ w.h }}"></div></div></sc-for>
               </div>
@@ -450,7 +567,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
         </div>
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
           <input class="input" placeholder="Search companies and notes" value="{{ searchValue }}" onChange="{{ setSearch }}" style="max-width:320px;min-height:34px">
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ ownerValue }}" onChange="{{ setOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><option>Alex Morgan</option><option>Sam Rivera</option><option>Alex Morgan</option><option>Sam Rivera</option></select></label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ ownerValue }}" onChange="{{ setOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><sc-for list="{{ ownerOptions }}" as="o"><option value="{{ o.name }}">{{ o.name }}</option></sc-for></select></label>
           <sc-if value="{{ showAccountSort }}"><label style="display:flex;align-items:center;gap:8px;font-size:14px">Sort<select class="input" value="{{ sortValue }}" onChange="{{ setSort }}" style="width:auto;max-width:100%;min-height:34px"><option value="weighted">Weighted ARR — highest first</option><option value="close">Close date — earliest first</option><option value="days">Days in stage — highest first</option><option value="name">Account name — A to Z</option></select></label></sc-if>
           <div style="margin-left:auto;display:flex;gap:8px"><button onClick="{{ exportAccounts }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ exportLabel }}</button></div>
         </div>
@@ -465,11 +582,11 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             </sc-for></tbody>
           </table></div>
           <sc-if value="{{ dealsEmpty }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:14px;color:var(--color-neutral-800)"><span>{{ emptyNote }}</span><button onClick="{{ clearSearch }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">Clear search and owner</button></div></sc-if>
-          <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ dealsCount }} · Alex Morgan, Sam Rivera and "No AE" prep sheets, collected Sep 8. ARR and probability are owner-entered; the CRM may differ. Days in stage remain the recorded owner values.</p>
+          <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ dealsCount }} · Owner pipeline sheets, collected {{ collectedShort }}. ARR and probability are owner-entered; the CRM may differ. Days in stage remain the recorded owner values.</p>
         </sc-if>
 
         <sc-if value="{{ accountsFollow }}" hint-placeholder-val="{{ false }}"><sc-if value="{{ followUpsEmpty }}"><p>No follow-ups match these filters.</p></sc-if>
-          <p style="margin:0;font-size:13px;color:var(--color-neutral-700);max-width:70ch">From the review prepared Sep 8 for the largest open opportunities. It is a shortlist, not a portfolio assessment.</p>
+          <p style="margin:0;font-size:13px;color:var(--color-neutral-700);max-width:70ch">Open follow-ups. It is a working list, not a portfolio assessment.</p>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px">
             <sc-for list="{{ followUps }}" as="f" hint-placeholder-count="7">
               <article style="border-top:2px solid var(--color-text);padding-top:14px;display:flex;flex-direction:column;gap:10px;min-width:0">
@@ -512,15 +629,15 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <h6 style="margin:0 0 8px;color:var(--color-accent)">Why this account matters now</h6>
               <p style="margin:0 0 10px;font-size:16px;line-height:1.55;text-wrap:pretty">{{ acct.reason }}</p>
               <p style="margin:0 0 10px;font-size:15px;line-height:1.55"><strong style="font-weight:600">Next step:</strong> {{ acct.next }}</p>
-              <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ acct.uncertainty }} From the review prepared Sep 8.</p>
+              <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ acct.uncertainty }}</p>
             </section>
             </sc-if>
             <sc-if value="{{ acct.noReview }}" hint-placeholder-val="{{ false }}">
-            <section style="background:var(--color-surface);padding:16px 22px"><p style="margin:0;font-size:14px;line-height:1.5;color:var(--color-neutral-800)">Not in the Sep 8 review's shortlist (the largest open opportunities). The timeline below is the collected record.</p></section>
+            <section style="background:var(--color-surface);padding:16px 22px"><p style="margin:0;font-size:14px;line-height:1.5;color:var(--color-neutral-800)">The timeline below shows all recorded activity.</p></section>
             </sc-if>
             <sc-if value="{{ acct.hasDealReview }}" hint-placeholder-val="{{ false }}">
             <section>
-              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">What the review relied on</h6><span style="font-size:12px;color:var(--color-neutral-700)">Deal review · Sep 8</span></div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">What the review relied on</h6><span style="font-size:12px;color:var(--color-neutral-700)">Deal review · {{ collectedShort }}</span></div>
               <sc-for list="{{ acct.dealReview }}" as="r" hint-placeholder-count="2">
                 <div style="padding:12px 0;border-bottom:1px solid var(--color-divider);font-size:14px;line-height:1.5;display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start"><span class="tag tag-neutral">{{ r.kind }}</span><span>{{ r.text }}</span></div>
               </sc-for>
@@ -574,12 +691,12 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
     <sc-if value="{{ isMeetings }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Meetings" style="display:flex;flex-direction:column;gap:24px">
         <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px">
-          <div><h1 style="font-size:36px;margin:0 0 4px">Meetings</h1><p style="margin:0;color:var(--color-neutral-700)">Dated meetings and conversations from the CRM, recordings and owner notes.</p></div>
+          <div><h1 style="font-size:36px;margin:0 0 4px">Meetings</h1><p style="margin:0;color:var(--color-neutral-700)">Dated meetings and conversations from the CRM, recordings and owner notes. <button onClick="{{ goBriefing }}" style="background:none;border:0;padding:0;font:inherit;color:var(--color-accent-700);text-decoration:underline;text-underline-offset:3px;cursor:pointer">See prep briefs on the Briefing tab →</button></p></div>
           <div class="seg"><sc-for list="{{ meetingTabs }}" as="t" hint-placeholder-count="2"><button onClick="{{ t.go }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for></div>
         </div>
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
           <input class="input" placeholder="Search meetings, companies, attendees" value="{{ meetingSearchValue }}" onChange="{{ setMeetingSearch }}" style="max-width:320px;min-height:34px">
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ meetingOwnerValue }}" onChange="{{ setMeetingOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><option>Alex Morgan</option><option>Sam Rivera</option><option>Marketing</option></select></label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ meetingOwnerValue }}" onChange="{{ setMeetingOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><sc-for list="{{ meetingOwnerOptions }}" as="o"><option value="{{ o.name }}">{{ o.name }}</option></sc-for></select></label>
           <span style="margin-left:auto;font-size:12px;color:var(--color-neutral-700)">{{ meetingsNote }}</span>
         </div>
         <sc-if value="{{ meetingsEmpty }}" hint-placeholder-val="{{ false }}"><p style="margin:0;font-size:14px;color:var(--color-neutral-700)">No meetings match. Clear the search or choose Everyone.</p></sc-if>
@@ -587,10 +704,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           <section>
             <h6 style="margin:0 0 4px;padding-bottom:8px;border-bottom:2px solid var(--color-divider)">{{ g.label }}</h6>
             <sc-for list="{{ g.items }}" as="m" hint-placeholder-count="4">
-              <button onClick="{{ m.go }}" style="display:grid;grid-template-columns:120px minmax(0,1fr) auto;gap:4px 16px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:14px 0;font:inherit;color:inherit;cursor:pointer">
-                <span style="font-size:13px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ m.when }}</span>
-                <span style="min-width:0"><span style="font-weight:600;font-size:15px">{{ m.title }}</span><span style="display:block;font-size:13px;color:var(--color-neutral-700);margin-top:2px">{{ m.who }}</span></span>
-                <span class="tag tag-neutral">{{ m.kind }}</span>
+              <button onClick="{{ m.go }}" class="meeting-row" style="display:grid;grid-template-columns:120px minmax(0,1fr) auto;gap:4px 16px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:14px 0;font:inherit;color:inherit;cursor:pointer">
+                <span class="m-when" style="font-size:13px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ m.when }}</span>
+                <span class="m-main" style="min-width:0"><span style="font-weight:600;font-size:15px">{{ m.title }}</span><span style="display:block;font-size:13px;color:var(--color-neutral-700);margin-top:2px">{{ m.who }}</span></span>
+                <span class="m-kind tag tag-neutral">{{ m.kind }}</span>
               </button>
             </sc-for>
           </section>
@@ -654,7 +771,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
         <!-- DRAFTS -->
     <sc-if value="{{ isDrafts }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Drafts" class="draft-workspace">
-        <div><h1 style="font-size:36px;margin:0 0 4px">Drafts</h1><p class="muted-copy">Your emails, campaign copy and internal notes. Every saved version stays available.</p></div>
+        <div><h1 style="font-size:36px;margin:0 0 4px">Drafts</h1><p class="muted-copy">Follow-ups and copy waiting on your review. Nothing sends without you.</p></div>
         <div class="draft-purpose-tabs" role="tablist" aria-label="Draft purpose"><sc-for list="{{ draftTabs }}" as="tab"><button role="tab" aria-selected="{{ tab.selected }}" class="draft-purpose-tab" onClick="{{ tab.go }}">{{ tab.label }} <span>{{ tab.count }}</span></button></sc-for></div>
         <div class="draft-columns">
           <div class="draft-list">
@@ -664,7 +781,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           </div>
           <sc-if value="{{ hasDraft }}"><section class="email-composer" aria-label="Draft editor">
             <div class="section-rule"><h6>{{ draft.company }}</h6><span class="muted-copy" role="status">{{ draft.versionLabel }}</span></div>
-            <sc-if value="{{ isEmailDraft }}"><div class="sender-line"><span><strong>From</strong> {{ senderLabel }}</span><button class="text-control" onClick="{{ showConnections }}">{{ senderActionLabel }}</button></div></sc-if>
+            <sc-if value="{{ isEmailDraft }}"><div class="sender-line"><span><strong>From</strong> {{ senderLabel }}</span><span><sc-if value="{{ gmailOAuthConfigured }}"><sc-if value="{{ gmailEmail }}"><button class="text-control" onClick="{{ disconnectGmail }}">Disconnect</button></sc-if><sc-if value="{{ !gmailEmail }}"><button class="text-control" onClick="{{ connectGmail }}">Connect your Gmail</button></sc-if></sc-if><button class="text-control" onClick="{{ showConnections }}">{{ senderActionLabel }}</button></span></div></sc-if>
             <sc-if value="{{ isCampaignDraft }}"><div class="field"><label for="campaign-sender">Campaign sender reference</label><select id="campaign-sender" class="input" value="{{ draft.campaignSender }}" onChange="{{ editCampaignSender }}"><option value="">Choose a mailbox</option><sc-for list="{{ campaignSenders }}" as="sender"><option value="{{ sender.email }}">{{ sender.email }}</option></sc-for></select></div><p class="muted-copy">Prepare your copy here, then choose the sending accounts and launch in LemList.</p></sc-if>
             <div class="field"><label for="draft-subject">{{ subjectLabel }}</label><input id="draft-subject" class="input" maxlength="500" value="{{ draft.subject }}" onInput="{{ editSubject }}"></div>
             <sc-if value="{{ isEmailDraft }}">
@@ -677,11 +794,12 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div class="composer-context"><div class="field"><label for="draft-internal">Internal notes</label><textarea id="draft-internal" class="input" value="{{ draft.internalNotes }}" onInput="{{ editInternalNotes }}"></textarea></div><div class="field"><label for="draft-rationale">Review context</label><textarea id="draft-rationale" class="input" value="{{ draft.rationale }}" onInput="{{ editRationale }}"></textarea></div>
               <div class="content-modes"><label>Default content mode<select class="input" value="{{ contentMode }}" onChange="{{ setContentMode }}"><option value="cs">CS</option><option value="marketing">Marketing</option></select></label><label>This draft’s content mode<select class="input" value="{{ draftContentMode }}" onChange="{{ setDraftContentMode }}"><option value="default">Use default</option><option value="cs">CS</option><option value="marketing">Marketing</option></select></label></div><p class="content-mode-note">{{ contentModeNote }} Changing mode preserves your text.</p></div>
             </details>
-            <div class="composer-actions"><sc-if value="{{ isEmailDraft }}"><button class="btn btn-primary" onClick="{{ sendDraft }}" disabled="{{ sendDisabled }}">{{ sendLabel }}</button></sc-if><button class="btn btn-secondary" onClick="{{ saveDraft }}" disabled="{{ saveDisabled }}">{{ saveLabel }}</button><sc-if value="{{ isCampaignDraft }}"><button class="btn btn-secondary" onClick="{{ copyCampaign }}">Copy for LemList</button></sc-if><button class="btn btn-secondary" onClick="{{ exportDraft }}">Export</button><label class="draft-status-label">Status<select class="input" value="{{ draft.status }}" onChange="{{ editStatus }}"><option>Draft</option><option>Ready for review</option><option>Archived</option></select></label></div>
+            <div class="composer-actions"><sc-if value="{{ isEmailDraft }}"><button class="btn btn-primary" onClick="{{ sendDraft }}" disabled="{{ sendDisabled }}">{{ sendLabel }}</button><button class="btn btn-secondary" onClick="{{ generateEmail }}" disabled="{{ generateDisabled }}">{{ generateLabel }}</button><button class="btn btn-secondary" onClick="{{ copyEmail }}">Copy for Gmail</button></sc-if><button class="btn btn-secondary" onClick="{{ saveDraft }}" disabled="{{ saveDisabled }}">{{ saveLabel }}</button><sc-if value="{{ isCampaignDraft }}"><button class="btn btn-secondary" onClick="{{ copyCampaign }}">Copy for LemList</button></sc-if><button class="btn btn-secondary" onClick="{{ exportDraft }}">Export</button><label class="draft-status-label">Status<select class="input" value="{{ draft.status }}" onChange="{{ editStatus }}"><option>Draft</option><option>Ready for review</option><option>Archived</option></select></label></div>
+            <sc-if value="{{ sendConfirm }}"><div class="send-confirm" role="dialog" aria-label="Confirm send"><h6>Send this email?</h6><p><strong>From:</strong> {{ senderLabel }}<br><strong>To:</strong> {{ sendConfirm.to }}<br><strong>Subject:</strong> {{ sendConfirm.subject }}</p><div class="send-confirm-body">{{ sendConfirm.body }}</div><div class="composer-actions"><button class="btn btn-primary" onClick="{{ confirmSend }}">Confirm send</button><button class="btn btn-secondary" onClick="{{ cancelSend }}">Cancel</button></div></div></sc-if>
             <sc-if value="{{ draftFeedback }}"><p class="{{ draftFeedbackClass }}" role="status">{{ draftFeedback }}</p></sc-if>
             <sc-if value="{{ draftSaveConflict }}"><div class="workspace-notice"><span>Your edits are kept. The saved draft changed in another session.</span><button class="text-control" onClick="{{ reloadWorkspaceDraft }}">Load saved version</button><button class="text-control" onClick="{{ saveDraftCopy }}">Save my edits as a copy</button></div></sc-if>
             <sc-if value="{{ hasSendReceipt }}"><p class="send-receipt">{{ sendReceiptLabel }} <a href="https://mail.google.com/" target="_blank" rel="noopener noreferrer">Open Gmail</a></p></sc-if>
-            <div class="draft-support"><button class="text-control" onClick="{{ evDraftRefs }}">{{ draft.refs }} supporting records</button><button class="text-control" onClick="{{ showWorkspaceHistory }}">Version history</button></div>
+            <div class="draft-support"><sc-if value="{{ hasDraftRefs }}"><button class="text-control" onClick="{{ evDraftRefs }}">{{ draft.refs }} supporting records</button></sc-if><sc-if value="{{ !hasDraftRefs }}"><span style="font-size:13px;color:var(--color-neutral-700)">No supporting records attached</span></sc-if><button class="text-control" onClick="{{ showWorkspaceHistory }}">Version history</button></div>
           </section></sc-if>
         </div>
       </div>
@@ -698,7 +816,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           </div>
         </section>
         <section>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Sources · collected Sep 8, 2026</h6><span style="display:flex;align-items:center;gap:10px"><span style="font-size:12px;color:var(--color-neutral-700)">{{ checkNote }}</span><button onClick="{{ checkUpdates }}" disabled="{{ checking }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ checkLabel }}</button></span></div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Sources · {{ collectedShort }}</h6><span style="display:flex;align-items:center;gap:10px"><span style="font-size:12px;color:var(--color-neutral-700)">{{ checkNote }}</span><button onClick="{{ checkUpdates }}" disabled="{{ checking }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ checkLabel }}</button></span></div>
           <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:680px">
             <thead><tr><th>Source</th><th>Used for</th><th>Collected</th><th style="text-align:right">Records</th><th>Known limits</th></tr></thead>
             <tbody><sc-for list="{{ sources }}" as="s" hint-placeholder-count="8"><tr><td style="font-weight:600;white-space:nowrap">{{ s.name }}</td><td>{{ s.used }}</td><td style="white-space:nowrap;font-variant-numeric:tabular-nums;color:{{ s.color }}">{{ s.updated }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ s.count }}</td><td style="color:var(--color-neutral-800);font-size:13px">{{ s.gaps }}</td></tr></sc-for></tbody>
@@ -713,10 +831,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           </section>
           <section style="flex:1 1 300px;min-width:0">
             <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">The review</h6></div>
-            <p style="margin:12px 0;font-size:14px;line-height:1.5">{{ reviewScope }} Follow-ups and saved drafts retain their September 8 review context. Personal ratings change only your priority list.</p>
-            <button onClick="{{ refreshReview }}" disabled="{{ reviewRequested }}" class="btn btn-secondary">{{ refreshLabel }}</button><p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ refreshNote }}</p>
+            <p style="margin:12px 0;font-size:14px;line-height:1.5">{{ reviewScope }} Follow-ups and saved drafts keep the review context they were saved with. Personal ratings change only your priority list.</p>
+            <p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ refreshNote }}</p>
             <div style="padding-top:20px;margin-top:20px;border-top:2px solid var(--color-divider)"><h6 style="margin:0 0 8px">Records loaded</h6><p style="margin:0;font-size:14px;color:var(--color-neutral-800);line-height:1.5">{{ coverageNote }}</p></div>
-            <div style="padding-top:20px;margin-top:20px;border-top:2px solid var(--color-divider)"><h6 style="margin:0 0 8px">People</h6><p style="margin:0;font-size:14px;color:var(--color-neutral-800)">Demo User (marketing) · Alex Morgan, Sam Rivera (sales) · Demo User, Alex Morgan, Sam Rivera (other deal owners). Owner filters use these names.</p></div>
+            <div style="padding-top:20px;margin-top:20px;border-top:2px solid var(--color-divider)"><h6 style="margin:0 0 8px">People</h6><p style="margin:0;font-size:14px;color:var(--color-neutral-800)">{{ peopleNote }}</p></div>
           </section>
         </div>
       </div>
@@ -744,12 +862,12 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
       </sc-if>
       <p style="margin:0;font-size:13px;line-height:1.5;color:var(--color-neutral-800)">{{ ev.note }}</p>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding-top:12px;border-top:2px solid var(--color-divider)"><button onClick="{{ proposeCorrection }}" class="btn btn-secondary">Propose a correction</button><button onClick="{{ exportEvidence }}" disabled="{{ ev.missing }}" class="btn btn-secondary">Export record</button></div>
-      <details><summary style="cursor:pointer;font-size:12px;color:var(--color-neutral-700)">Technical identifiers</summary><code style="display:block;font-size:11px;margin-top:6px;word-break:break-all;color:var(--color-neutral-700)">{{ ev.ids }}</code></details>
+      <sc-if value="{{ ev.ids }}"><details><summary style="cursor:pointer;font-size:12px;color:var(--color-neutral-700)">Technical identifiers</summary><code style="display:block;font-size:11px;margin-top:6px;word-break:break-all;color:var(--color-neutral-700)">{{ ev.ids }}</code></details></sc-if>
     </aside>
   </sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props="{&quot;screen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;today&quot;,&quot;options&quot;:[&quot;today&quot;,&quot;performance&quot;,&quot;accounts&quot;,&quot;account&quot;,&quot;meetings&quot;,&quot;meeting&quot;,&quot;drafts&quot;,&quot;data&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Navigation&quot;},&quot;systemState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;normal&quot;,&quot;options&quot;:[&quot;normal&quot;,&quot;loading&quot;,&quot;review-running&quot;,&quot;review-ready&quot;,&quot;source-failed&quot;,&quot;stale&quot;,&quot;draft-conflict&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;States&quot;},&quot;mobile&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Layout&quot;}}">
+<script type="text/x-dc" data-dc-script data-props="{&quot;screen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;briefing&quot;,&quot;options&quot;:[&quot;briefing&quot;,&quot;pipeline&quot;,&quot;accounts&quot;,&quot;account&quot;,&quot;meetings&quot;,&quot;meeting&quot;,&quot;drafts&quot;,&quot;data&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Navigation&quot;},&quot;systemState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;normal&quot;,&quot;options&quot;:[&quot;normal&quot;,&quot;loading&quot;,&quot;review-running&quot;,&quot;review-ready&quot;,&quot;source-failed&quot;,&quot;stale&quot;,&quot;draft-conflict&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;States&quot;},&quot;mobile&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Layout&quot;}}">
 class Component extends DCLogic {
   state = { screen: null, perf: 'demand', accounts: 'deals', meetings: 'upcoming', evidence: false, draft: 0, period: 'quarter' };
   go(screen, extra) { return () => { this.setState({ screen, evidence: false, ...(extra || {}) }); window.scrollTo(0, 0); }; }
@@ -758,25 +876,49 @@ class Component extends DCLogic {
     const text = [header, ...rows].map(r => r.map(cell).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
     const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    this.setState({ toast: 'Exported ' + name, toastKey: Date.now() }); clearTimeout(this._toastT); this._toastT = setTimeout(() => { if (this.state && this.state.toast) this.setState({ toast: null }); }, 4000);
   }
   memo(key, dep, fn) { this._memo = this._memo || {}; const m = this._memo[key]; if (m && m.dep === dep) return m.val; const val = fn(); this._memo[key] = { dep, val }; return val; }
   loadTranscript(id) { if (!id || (this.state.transcripts && this.state.transcripts[id] !== undefined)) return; if (!this._trPromise) this._trPromise = fetch('data/transcripts.json').then(r => r.json()); this._trPromise.then(all => this.setState(s => ({ transcripts: { ...(s.transcripts || {}), [id]: all[id] || null } }))); }
-  componentDidMount() { fetch('data/records.json').then(r => r.json()).then(records => this.setState({ records })).catch(e => this.setState({ recordsError: String(e) })); }
+  componentDidMount() { fetch('data/records.json').then(r => r.json()).then(records => this.setState({ records })).catch(e => this.setState({ recordsError: String(e) })); fetch('data/hollie.json').then(r => r.json()).then(hollie => this.setState({ hollie })).catch(() => this.setState({ hollie: null })); fetch('data/agent-brief.json').then(r => r.json()).then(agentBrief => this.setState({ agentBrief })).catch(() => this.setState({ agentBrief: null })); fetch('/api/gmail/status').then(r => r.json()).then(g => { if (g.connected) this.setState({ gmailEmail: g.email }); }).catch(() => {}); }
+  hollieFeedback(itemId, action) { try { fetch('/api/hollie/feedback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ itemId, action }) }).catch(() => {}); } catch {} this.setState(s => ({ hollieDone: { ...(s.hollieDone || {}), [itemId]: action } })); }
+  decideProposal(idx, decision) { try { fetch('/api/proposals/decide', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idx, decision }) }).catch(() => {}); } catch {} this.setState(s => ({ proposals: (s.proposals || []).map((p, i) => i === idx ? { ...p, status: decision } : p) })); }
+  createHeartbeatDraft(i) {
+    const f = ((this.state.heartbeatFixes || {}).fixes || [])[i];
+    if (!f || f.type !== 'draft') return;
+    if ((this.state.heartbeatDraftsCreated || {})[i]) return;
+    try {
+      var account = null;
+      try { account = this._verifiedAccount ? this._verifiedAccount(f.company || '') : null; } catch (e) {}
+      var contactEmail = account && account.contacts && account.contacts[0] ? account.contacts[0].email : '';
+      var draft = this._newWorkspaceDraft('email', {
+        title: f.title || ((account && account.name ? account.name : (f.company || 'Follow-up')) + ' — follow-up'),
+        subject: f.draftSubject || '',
+        text: f.draftText || '',
+        recipients: contactEmail || '',
+        company: (account && account.name) || f.company || 'No company linked',
+        accountIds: account ? ['company:' + account.id] : [],
+        rationale: 'Drafted by the heartbeat.'
+      });
+      const done = () => { try { this.setState(s => ({ heartbeatDraftsCreated: { ...(s.heartbeatDraftsCreated || {}), [i]: true }, screen: 'drafts' })); window.scrollTo(0, 0); } catch (e) {} };
+      try { const p = this._saveWorkspaceDraft(draft); if (p && p.then) p.then(done).catch(done); else done(); } catch (e) { done(); }
+    } catch (e) {}
+  }
   edit(field) { return e => { const i = this.state.draft; const edits = { ...(this.state.edits || {}) }; edits[i] = { ...(edits[i] || {}), [field]: e.target.value }; this.setState({ edits }); }; }
   renderVals() { const t0 = performance.now(); const v = this.renderValsInner(); window.__rvMs = Math.round(performance.now() - t0); return v; }
   renderValsInner() {
-    const s = this.state.screen ?? this.props.screen ?? 'today';
+    const s = this.state.screen ?? this.props.screen ?? 'briefing';
     const st = this.state;
     const ink = 'var(--color-text)', bg = 'var(--color-bg)', accent = 'var(--color-accent)', muted = 'var(--color-neutral-700)', red = 'var(--color-accent-700)';
     const seg = (items, cur, key) => items.map(([id, label]) => ({ id, label, go: () => this.setState({ [key]: id }), selected: cur === id, bg: cur === id ? accent : 'transparent', fg: cur === id ? bg : ink }));
-    const navDefs = [['today', 'Today'], ['performance', 'Performance'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts'], ['data', 'Data']];
+    const navDefs = [['briefing', 'Briefing'], ['pipeline', 'Pipeline'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts']];
     const groupOf = { account: 'accounts', meeting: 'meetings' };
     const activeNav = groupOf[s] ?? s;
     const ev = key => e => { e && e.stopPropagation && e.stopPropagation(); this.setState({ evidence: key || 'doug-11' }); };
     const goEvidence = ev('doug-11');
     const goAccount = this.go('account'), goMeeting = this.go('meeting'), goDrafts = this.go('drafts');
     const goDeals = this.go('accounts', { accounts: 'deals' }), goLeads = this.go('accounts', { accounts: 'leads' }), goFollow = this.go('accounts', { accounts: 'follow' });
-    const goSpend = this.go('performance', { perf: 'spend' }), goDemand = this.go('performance', { perf: 'demand' });
+    const goSpend = this.go('pipeline', { perf: 'spend' }), goDemand = this.go('pipeline', { perf: 'demand' });
     const usd = n => '$' + Math.round(n).toLocaleString('en-US');
     const k = n => '$' + (n / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 }) + 'K';
     // Lead Tracker: new leads per week starting Jun 29 (lead date)
@@ -786,6 +928,9 @@ class Component extends DCLogic {
     const dealsRaw = this._verifiedOpportunityRows();
     const followRaw = [];
     const leadsRaw = this._verifiedLeadRows();
+    const ownerOptions=[...new Set([...dealsRaw.map(d=>d[1]),...leadsRaw.map(l=>l[2])].filter(o=>o&&o!=='—'))].sort().map(name=>({name}));
+    const meetingOwnerOptions=[...new Set([...(st.records?.companies||[]).flatMap(c=>[c.owner,...(c.recordings||[]).map(r=>r.recordedBy)])].filter(Boolean))].sort().map(name=>({name}));
+    const peopleNote=ownerOptions.length?('Owners in the collected record: '+ownerOptions.map(o=>o.name).join(' · ')+'. The owner filters use these values.'):'Owner information was not in the collected record.';
     const savedRaw = [];
     const suggestedRaw = [];
     const savedState = st.savedState || {}; // index -> {version, savedAt, history:[]}
@@ -796,11 +941,11 @@ class Component extends DCLogic {
       ...suggestedRaw.map(([title, company, text, rationale, refs]) => ({ kind: 'Suggested follow-up', title, company, text, rationale, refs, version: 0, type: 'Follow-up', status: 'Draft', recipients: '', saved: false })),
       ...(st.newDrafts || [])
     ];
-    const drafts = baseDrafts.map((d, i) => { const ss = savedState[i]; const base = ss ? { ...d, ...ss.fields, version: ss.version, saved: true, kind: d.kind === 'Suggested follow-up' ? 'Follow-up' : d.kind } : d; const e = edits[i] || {}; const dirty = Object.keys(e).some(k => e[k] !== base[k]); const cur = { ...base, ...e }; const savedNote = ss ? 'saved just now' : d.saved ? 'saved Sep 8' : null; return { ...cur, dirty, versionLabel: cur.version ? 'Version ' + cur.version + ' · ' + savedNote + (dirty ? ' · unsaved changes' : '') : (dirty ? 'Not yet saved · unsaved changes' : 'Not yet saved'), saveLabel: cur.version ? 'Save version ' + (cur.version + 1) : 'Save as version 1', saveDisabled: !dirty && !!cur.version, history: (ss ? ss.history : (d.version > 1 ? ['v1 · Sep 8, 15:58'] : [])).length ? 'Earlier versions: ' + (ss ? ss.history : ['v1 · Sep 8, 15:58']).join(' · ') + '. Each stays available.' : (cur.version ? 'First saved version. Earlier versions will be listed here.' : 'Suggested by the review prepared Sep 8. Saving creates version 1.') }; });
+    const drafts = baseDrafts.map((d, i) => { const ss = savedState[i]; const base = ss ? { ...d, ...ss.fields, version: ss.version, saved: true, kind: d.kind === 'Suggested follow-up' ? 'Follow-up' : d.kind } : d; const e = edits[i] || {}; const dirty = Object.keys(e).some(k => e[k] !== base[k]); const cur = { ...base, ...e }; const savedNote = ss ? 'saved just now' : d.saved ? 'saved ' + collectedShort : null; return { ...cur, dirty, versionLabel: cur.version ? 'Version ' + cur.version + ' · ' + savedNote + (dirty ? ' · unsaved changes' : '') : (dirty ? 'Not yet saved · unsaved changes' : 'Not yet saved'), saveLabel: cur.version ? 'Save version ' + (cur.version + 1) : 'Save as version 1', saveDisabled: !dirty && !!cur.version, history: (ss ? ss.history : (d.version > 1 ? ['v1 · ' + collectedLong] : [])).length ? 'Earlier versions: ' + (ss ? ss.history : ['v1 · ' + collectedLong]).join(' · ') + '. Each stays available.' : (cur.version ? 'First saved version. Earlier versions will be listed here.' : 'Suggested from the collected record. Saving creates version 1.') }; });
     const draftIndex = Math.min(st.draft, drafts.length - 1);
     const draft = drafts[draftIndex] || { title: 'Untitled draft', text: '', rationale: '', refs: 0, version: 0, history: [] };
     const now = () => new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    const saveDraft = () => { const d = drafts[draftIndex]; const prev = savedState[draftIndex]; const history = prev ? [...prev.history] : (d.version > 1 ? ['v1 · Sep 8, 15:58'] : []); if (d.version) history.unshift('v' + d.version + ' · ' + (prev ? prev.savedAt : 'Sep 8')); const fields = { title: d.title, text: d.text, rationale: d.rationale, type: d.type, status: d.status, recipients: d.recipients }; const next = { ...savedState, [draftIndex]: { version: d.version + 1, savedAt: now(), history, fields } }; const e2 = { ...edits }; delete e2[draftIndex]; this.setState({ savedState: next, edits: e2 }); };
+    const saveDraft = () => { const d = drafts[draftIndex]; const prev = savedState[draftIndex]; const history = prev ? [...prev.history] : (d.version > 1 ? ['v1 · ' + collectedLong] : []); if (d.version) history.unshift('v' + d.version + ' · ' + (prev ? prev.savedAt : collectedShort)); const fields = { title: d.title, text: d.text, rationale: d.rationale, type: d.type, status: d.status, recipients: d.recipients }; const next = { ...savedState, [draftIndex]: { version: d.version + 1, savedAt: now(), history, fields } }; const e2 = { ...edits }; delete e2[draftIndex]; this.setState({ savedState: next, edits: e2 }); };
     const newDraft = () => { const list = [...(st.newDrafts || []), { kind: 'New draft', title: 'Untitled draft', company: 'No company linked', text: '', rationale: '', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length }); };
     const q = (st.search || '').trim().toLowerCase();
     const mq = (st.meetingSearch || '').trim().toLowerCase();
@@ -809,11 +954,11 @@ class Component extends DCLogic {
     const filteredLeads = leadsRaw.filter(l => (!st.owner || st.owner === 'Everyone' || l[2] === st.owner) && (!q || (l[0] + ' ' + l[4] + ' ' + l[1]).toLowerCase().includes(q)));
     const dealRows = filteredDeals.map(d => [d[0], d[1], d[2], d[3], d[4] + '%', d[5], d[6] ?? '', d[7]]);
     // Lead Tracker by period: leads by lead date, MQL/SQL by their own dates
-    const periodData = {"six":{"range":"Demo — no company data","L":0,"M":0,"S":0,"bars":[],"src":[],"unit":""},"quarter":{"range":"Demo — no company data","L":0,"M":0,"S":0,"bars":[],"src":[],"unit":""},"year":{"range":"Demo — no company data","L":0,"M":0,"S":0,"bars":[],"src":[],"unit":""}};
+    const periodData = {"six":{"range":"Last 6 weeks · company record","L":0,"M":0,"S":0,"bars":[],"src":[],"unit":""},"quarter":{"range":"This quarter · company record","L":0,"M":0,"S":0,"bars":[],"src":[],"unit":""},"year":{"range":"Last 12 months · company record","L":0,"M":0,"S":0,"bars":[],"src":[],"unit":""}};
     const LEADS = (st.verified?.leads || []).map(r => [r.source, r.lead, r.mql, r.sql]);
     const fmt = d => new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
     if (st.period === 'custom') {
-      let a = st.start || '2026-08-01', b = st.end || '2026-09-08'; const inverted = a > b; if (inverted) [a, b] = [b, a];
+      let a = st.start || '2026-08-01', b = st.end || new Date().toISOString().slice(0, 10); const inverted = a > b; if (inverted) [a, b] = [b, a];
       const inR = d => d && d >= a && d <= b;
       const src = {}; let L = 0, M = 0, S = 0;
       for (const [s0, ld, md, sd] of LEADS) { const o = src[s0] = src[s0] || [s0, 0, 0, 0]; if (inR(ld)) { L++; o[1]++; } if (inR(md)) { M++; o[2]++; } if (inR(sd)) { S++; o[3]++; } }
@@ -827,8 +972,13 @@ class Component extends DCLogic {
     const barMax = Math.max(...pd.bars.map(b => b[1]));
     // ---- Records from the CRM / Fathom extract
     const REC = st.records || { companies: [] };
+    // Honest collection stamp for every "collected …" string below.
+    const genAt = (st.records || {}).generatedAt;
+    const collectedShort = genAt ? new Date(genAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '—';
+    const phxTime = iso => { try { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Phoenix' }); } catch { return ''; } };
+    const collectedLong = genAt ? collectedShort + ', ' + phxTime(genAt) + ' Phoenix time' : collectedShort;
     const fmtD = d => (d = d == null ? '' : String(d)) ? new Date((d.length === 10 ? d + 'T12:00:00Z' : (d.length === 16 ? d + ':00Z' : d))).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : '—';
-    const fmtDT = d => (d = d == null ? '' : String(d)) && d.length >= 16 ? fmtD(d) + ' · ' + d.slice(11, 16) + ' UTC' : fmtD(d);
+    const fmtDT = d => (d = d == null ? '' : String(d)) && d.length >= 16 ? fmtD(d) + ' · ' + phxTime(d.length === 16 ? d + ':00Z' : d) : fmtD(d);
     const money = n => n === null || n === undefined ? 'no amount' : '$' + Math.round(n).toLocaleString('en-US');
     const findCo = idOrName => this._verifiedAccount(idOrName);
     const goCo = (idOrName) => e => { e && e.stopPropagation && e.stopPropagation(); const c = findCo(idOrName); if (c) { this.setState({ screen: 'account', accountId: c.id, evidence: false, timelineAll: false, peopleAll: false }); window.scrollTo(0, 0); } else ev('sheet:' + idOrName)(e); };
@@ -842,7 +992,7 @@ class Component extends DCLogic {
     const timeline = this.memo('timeline', REC === (st.records || null) ? co.id + ':' + (REC.generatedAt || '') : Math.random(), () => [
       ...co.notes.map(n => ({ date: n.date, title: 'CRM note' + (n.owner ? ' · ' + n.owner : ''), kind: 'CRM', text: n.text.replace(/https?:\/\/([^\s\/]+)[^\s]*/g, '[link: $1]').slice(0, 260) + (n.text.length > 260 ? '…' : ''), go: ev('note:' + co.id + ':' + n.id) })),
       ...co.recordings.map(r => ({ date: r.date.slice(0, 10), title: r.title, kind: 'Recorded', text: (r.summary.find(b => b.t === 'p' || b.t === 'li') || {}).x || (r.actions[0] ? 'Action: ' + r.actions[0] : (r.minutes ? r.minutes + ' min' : '')), go: goMtg(r.id) })),
-      ...co.meetings.filter(m => !co.recordings.some(r => r.date.slice(0, 10) === m.start.slice(0, 10))).map(m => ({ date: m.start.slice(0, 10), title: m.title, kind: m.start.slice(0, 10) > '2026-09-08' ? 'Upcoming' : 'Calendar', text: m.outcome ? m.outcome.toLowerCase().replace(/_/g, ' ') : 'CRM calendar entry', go: ev('crm-meeting:' + co.id + ':' + m.id) })),
+      ...co.meetings.filter(m => !co.recordings.some(r => r.date.slice(0, 10) === m.start.slice(0, 10))).map(m => ({ date: m.start.slice(0, 10), title: m.title, kind: m.start.slice(0, 10) > new Date().toISOString().slice(0, 10) ? 'Upcoming' : 'Calendar', text: m.outcome ? m.outcome.toLowerCase().replace(/_/g, ' ') : 'CRM calendar entry', go: ev('crm-meeting:' + co.id + ':' + m.id) })),
       ...co.deals.flatMap(d => d.history.map(hh => ({ date: hh.date, title: 'Stage → ' + hh.label, kind: 'CRM', text: d.name, go: ev('deal:' + d.id) }))),
       ...co.deals.flatMap(d => d.amountHistory.slice(0, 4).map(a => ({ date: a.date, title: 'Amount set to ' + money(a.value), kind: 'CRM', text: d.name, go: ev('deal:' + d.id) }))),
       ...(co.calls || []).map(cl => ({ date: cl.date, title: cl.title + (cl.minutes ? ' · ' + cl.minutes + ' min' : ''), kind: 'Call', text: (cl.text || 'CRM call log') + (cl.owner ? ' · ' + cl.owner : ''), go: ev('call:' + co.id + ':' + cl.id) })),
@@ -853,7 +1003,7 @@ class Component extends DCLogic {
       name: co.name, description: (co.description || '').length > 320 ? co.description.slice(0, 300).replace(/[,;]\s*\S*$/, '') + '…' : (co.description || ''), hasDescription: !!co.description,
       subtitle: [co.domain, co.owner ? 'Owner ' + co.owner : null, co.industry ? co.industry.toLowerCase().replace(/_/g, ' ') : null, co.employees ? co.employees.toLocaleString('en-US') + ' employees' : null, [co.city, co.country].filter(Boolean).join(', ') || null, co.lifecycle ? 'CRM: ' + co.lifecycle : null].filter(Boolean).join(' · '),
       hasReview: !!review, noReview: !review && !!st.records, reason: review ? review[2] : '', next: review ? review[3] : '', uncertainty: review ? review[4] : '',
-      draftLabel: review ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: review ? () => { this.setState({ screen: 'drafts', draft: review[5] }); window.scrollTo(0, 0); } : () => { const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + co.name, company: co.name, text: '', rationale: openDeal ? openDeal.name + ' · ' + openDeal.stageLabel + ' · ' + money(openDeal.amount) : '', refs: 1, version: 0, type: 'Follow-up', status: 'Draft', recipients: co.contacts.slice(0, 2).map(c => c.name).join(', '), saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
+      draftLabel: review ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: review ? () => { this.setState({ screen: 'drafts', draft: review[5] }); window.scrollTo(0, 0); } : () => { const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + co.name, company: co.name, text: '', rationale: openDeal ? openDeal.name + ' · ' + openDeal.stageLabel + ' · ' + money(openDeal.amount) : '', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: co.contacts.slice(0, 2).map(c => c.name).join(', '), saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
       timeline: tlShown.map(t => ({ ...t, date: fmtD(t.date) })), timelineNote: timeline.length + ' dated items · notes, calls, recordings, calendar, stage and amount changes, open tasks', hasMoreTimeline: timeline.length > tlShown.length, moreTimelineLabel: 'Show all ' + timeline.length, showAllTimeline: () => this.setState({ timelineAll: true }),
       hasRelated: !!(co.related && co.related.length), relatedNote: co.related && co.related.length ? 'Includes ' + co.related.length + ' related CRM company record' + (co.related.length > 1 ? 's' : '') + ' (' + co.related.map(r => r.name).join(', ') + ') whose contacts, meetings and emails are merged here. Records are kept separate in the CRM.' : '',
       emailNote: co.emails ? co.emails.count + ' CRM emails on file' + (co.emails.latest ? ', latest ' + fmtD(String(co.emails.latest).slice(0, 10)) : '') + '. Email bodies are not shown in this workspace.' : 'No CRM emails on file for this company.',
@@ -875,67 +1025,232 @@ class Component extends DCLogic {
       hasActions: !!(mrec.actions && mrec.actions.length), actions: mrec.actions || [],
       hasSummary: !!(mrec.summary && mrec.summary.length), noSummary: !!(st.records && !(mrec.summary && mrec.summary.length)), summary: (mrec.summary || []).map(styleBlock),
       transcript: mrec.transcriptLines ? mrec.transcriptLines.toLocaleString('en-US') + ' lines' : 'not available', recordGo: ev('recording:' + mrec.id),
-      canLoadTranscript: !!mrec.hasTranscript, transcriptBtn: st.transcriptOpen === mrec.id ? 'Hide transcript' : 'Read transcript', loadTranscript: () => { if (st.transcriptOpen === mrec.id) this.setState({ transcriptOpen: null }); else { this.loadTranscript(mrec.id); this.setState({ transcriptOpen: mrec.id }); } }, transcriptOpen: st.transcriptOpen === mrec.id && !!(st.transcripts && st.transcripts[mrec.id]), lines: (st.transcripts && st.transcripts[mrec.id]) || [], transcriptNote: mrec.hasTranscript ? 'Speakers and timestamps as recorded by Fathom.' : 'Transcript text for this recording was not included in the extract.',
+      canLoadTranscript: !!mrec.hasTranscript, transcriptBtn: st.transcriptOpen === mrec.id ? 'Hide transcript' : 'Read transcript', loadTranscript: () => { if (st.transcriptOpen === mrec.id) this.setState({ transcriptOpen: null }); else { this.loadTranscript(mrec.id); this.setState({ transcriptOpen: mrec.id }); } }, transcriptOpen: st.transcriptOpen === mrec.id && !!(st.transcripts && st.transcripts[mrec.id]), lines: (st.transcripts && st.transcripts[mrec.id]) || [], transcriptNote: mrec.hasTranscript ? 'Speakers and timestamps as recorded by Fathom.' : 'Transcript text for this recording was not included.',
       hasCompany: true, company: mrec.companyId ? mco.name : mrec.companyName, companyGo: mrec.companyId ? goCo(mrec.companyId) : ev('recording:' + mrec.id), dealLine: !mrec.companyId ? 'Matched by invitee domain only; this company was not in the CRM extract' : mdeal ? mdeal.stageLabel + ' · ' + money(mdeal.amount) + ' · close ' + fmtD(mdeal.close) + (mdeal.owner ? ' · ' + mdeal.owner : '') + (mrec.matchedBy && /shared/.test(mrec.matchedBy) ? ' · recording shared with another account' : '') : 'No open opportunity',
-      draftLabel: mreview ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: mreview ? () => { this.setState({ screen: 'drafts', draft: mreview[5] }); window.scrollTo(0, 0); } : () => { const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up: ' + mrec.title, company: mco.name, text: '', rationale: (mrec.actions || []).join('\n'), refs: 1, version: 0, type: 'Follow-up', status: 'Draft', recipients: (mrec.invitees || []).filter(i => i.email && !/opstream/.test(i.email)).map(i => i.name || i.email).slice(0, 3).join(', '), saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
+      draftLabel: mreview ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: mreview ? () => { this.setState({ screen: 'drafts', draft: mreview[5] }); window.scrollTo(0, 0); } : () => { const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up: ' + mrec.title, company: mco.name, text: '', rationale: (mrec.actions || []).join('\n'), refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: (mrec.invitees || []).filter(i => i.email && !/opstream/.test(i.email)).map(i => i.name || i.email).slice(0, 3).join(', '), saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
       invitees: (mrec.invitees || []).map(i => ({ name: i.name || i.email || 'Unnamed', email: i.email || '' })),
       hasRelated: allRecs.filter(r => r.companyId === mrec.companyId && r.id !== mrec.id).length > 0, related: allRecs.filter(r => r.companyId === mrec.companyId && r.id !== mrec.id).slice(0, 5).map(r => ({ title: r.title, date: fmtD(r.date.slice(0, 10)), go: goMtg(r.id) }))
     };
-    const sheetRow = (company) => { const d = dealsRaw.find(x => x[0] === company); if (!d) return null; const rowNo = {}; const tab = d[1] === 'Sample' ? 'Sample' : d[1] === 'Sample' ? 'Sample' : d[1] === 'Sample' && company === 'Sample' ? 'Sample' : 'Other'; return { kicker: 'Original record', title: 'Pipeline workbook · ' + tab + ', row ' + rowNo, meta: 'Google Sheets · collected Sep 8, 2026 · columns B – I fill from HubSpot, J – M are typed by the owner', rows: [['Deal / company', company], ['Owner', d[1]], ['Stage', d[2]], ['Close month', d[5]], ['ARR', d[3].toLocaleString('en-US')], ['Prob %', d[4]], ['Days in stage', d[6] ?? 'Not recorded'], ['Weighted ARR', Math.round(d[3] * d[4] / 100).toLocaleString('en-US')], ['Last meeting / what happened', d[7]]].map(([label, value]) => ({ label, value })), note: 'ARR, probability and close month are owner estimates, not buyer commitments. The CRM record may differ.', ids: 'sheets/main · ' + tab + '!A' + rowNo + ':M' + rowNo + ' · sample-sheet:' + tab + ':row-' + rowNo + ' · capture 2026-09-08' }; };
+    const sheetRow = (company) => { const d = dealsRaw.find(x => x[0] === company); if (!d) return null; const tab = d[1]; return { kicker: 'Pipeline workbook', title: company, meta: d[1] + (d[2] ? ' · ' + d[2] : ''), rows: [['Stage', d[2] || '—'], ['Close month', d[5] || '—'], ['ARR', d[3] ? d[3].toLocaleString('en-US') : '—'], ['Probability', d[4] != null ? d[4] + '%' : '—'], ['Days in stage', d[6] ?? '—'], ['Weighted ARR', d[3] && d[4] != null ? Math.round(d[3] * d[4] / 100).toLocaleString('en-US') : '—'], ['Last meeting / what happened', d[7] || '—']].map(([label, value]) => ({ label, value })), note: 'ARR, probability and close month are owner estimates, not buyer commitments.', operational: true }; };
     const refOnly = (title, meta, ids, note) => ({ kicker: 'Referenced record', title, meta, rows: [], missing: true, note, ids });
     const evidenceMap = {};
     const evKey = typeof st.evidence === 'string' ? st.evidence : 'doug-11';
     const dyn = (() => { const [kind, a, b] = evKey.split(':'); const c = REC.companies.find(x => x.id === a) || REC.companies.find(x => x.deals.some(d => d.id === a));
-      if (kind === 'note' && c) { const n = c.notes.find(x => x.id === b) || {}; return { kicker: 'Original record', title: 'CRM note · ' + fmtD(n.date), meta: 'HubSpot · ' + (n.owner || 'owner not recorded') + ' · collected Sep 8, 22:31', rows: [{ label: 'Company', value: c.name }, { label: 'Note (full collected text)', value: n.text }], note: 'Full note text from the retained CRM record.', ids: 'hubspot/main · hubspot_note · company ' + c.id }; }
-      if (kind === 'deal' && c) { const d = c.deals.find(x => x.id === a); return { kicker: 'Original record', title: 'CRM deal ' + d.id, meta: 'HubSpot · collected Sep 8, 22:31', rows: [['Deal name', d.name], ['Stage', d.stageLabel + ' (' + d.stage + ')'], ['Amount', d.amount === null ? 'Not entered' : d.amount.toLocaleString('en-US') + ' ' + (d.currency || '')], ['Probability (stage default)', d.probability === null ? '—' : d.probability + '%'], ['Close date', d.close || 'Not set'], ['Created', d.created], ['Owner', d.owner || 'Not assigned'], ['Stage history', d.history.map(x => x.label + ' · ' + x.date).join(' → ') || '—'], ['Amount history', d.amountHistory.map(x => x.value.toLocaleString('en-US') + ' · ' + x.date).join(' → ') || '—'], ['Close date history', d.closeHistory.map(x => x.value + ' · ' + x.date).join(' → ') || '—']].map(([label, value]) => ({ label, value })), note: 'Stage names for numeric stage ids were inferred from the owner sheets; the pipeline catalog was not in the extract. Close dates are CRM forecasts.', ids: 'hubspot/main · hubspot_deal · ' + d.id + ' · capture 5f96c55d' }; }
-      if (kind === 'company' && c) return { kicker: 'Original record', title: 'CRM company ' + c.id, meta: 'HubSpot · collected Sep 8, 22:31', rows: [['Name', c.name], ['Domain', c.domain || '—'], ['Industry', c.industry || '—'], ['Employees', c.employees || '—'], ['Location', [c.city, c.country].filter(Boolean).join(', ') || '—'], ['Lifecycle stage', c.lifecycle || '—'], ['Owner', c.owner || '—'], ['Created', c.created || '—'], ['Contacts on file', c.contacts.length], ['Emails on file', c.emails ? c.emails.count : 0]].map(([label, value]) => ({ label, value })), note: c.description || '', ids: 'hubspot/main · hubspot_company · ' + c.id };
-      if (kind === 'contact' && c) { const p = c.contacts.find(x => (x.email || x.name) === b) || {}; return { kicker: 'Original record', title: p.name || 'Contact', meta: 'HubSpot contact · collected Sep 8, 22:31', rows: [['Title', p.title || '—'], ['Email', p.email || '—'], ['Company', c.name]].map(([label, value]) => ({ label, value })), note: 'Only populated CRM properties were extracted.', ids: 'hubspot/main · hubspot_contact · company ' + c.id }; }
-      if (kind === 'crm-meeting' && c) { const m = c.meetings.find(x => x.id === b) || {}; return { kicker: 'Original record', title: m.title || 'CRM meeting', meta: 'HubSpot calendar · collected Sep 8, 22:31', rows: [['Start', fmtDT(m.start)], ['Outcome', m.outcome || 'Not recorded'], ['Company', c.name], ['Fathom notes attached', m.hasNotes ? 'Yes' : 'No']].map(([label, value]) => ({ label, value })), note: 'Calendar entries count as "completed" only when the outcome is set in the CRM.', ids: 'hubspot/main · hubspot_meeting · ' + m.id }; }
-      if (kind === 'call' && c) { const cl = (c.calls || []).find(x => x.id === b) || {}; return { kicker: 'Original record', title: cl.title || 'CRM call', meta: 'HubSpot call · ' + fmtD(cl.date) + ' · collected Sep 8, 22:31', rows: [['Owner', cl.owner || '—'], ['Duration', cl.minutes ? cl.minutes + ' min' : '—'], ['Body preview', cl.text || '—'], ['Recording on file', cl.recordingUrl ? 'Yes (not collected)' : 'No'], ['Company', c.name]].map(([label, value]) => ({ label, value })), note: 'Call logs come from the CRM; recording audio is not included.', ids: 'hubspot/main · hubspot_call · ' + cl.id }; }
-      if (kind === 'recording') { const r = allRecs.find(x => x.id === a); if (!r) return null; return { kicker: 'Original record', title: r.title, meta: 'Fathom · ' + fmtDT(r.date) + ' · collected Sep 8, 22:07', rows: [['Recorded by', r.recordedBy || '—'], ['Duration', r.minutes ? r.minutes + ' min' : '—'], ['Invitees', r.invitees.map(i => i.name || i.email).join(', ')], ['Action items', r.actions.length], ['Transcript lines', r.transcriptLines || '—'], ['Transcript in extract', r.hasTranscript ? 'Yes' : 'No'], ['Matched account', r.companyName]].map(([label, value]) => ({ label, value })), note: 'Summary and action items are Fathom\u2019s own; the transcript was not included in this extract.', ids: 'fathom/main · fathom_meeting · evidence ' + r.id }; }
+      if (kind === 'note' && c) { const n = c.notes.find(x => x.id === b) || {}; return { kicker: c.name + (n.date ? ' · ' + fmtD(n.date) : ''), title: 'Note' + (n.owner ? ' from ' + n.owner : ''), meta: '', rows: n.text ? [{ label: '', value: n.text }] : [], note: '', operational: true }; }
+      if (kind === 'deal' && c) { const d = c.deals.find(x => x.id === a); const dl = d.displayLine || ''; const what = dl.indexOf(d.name) === 0 ? dl : d.name + (dl ? ' — ' + dl : ''); return { kicker: c.name, title: what, meta: d.isOpen ? 'Open opportunity' : 'Closed', rows: [d.amount != null ? { label: 'Amount', value: money(d.amount) } : null, d.close ? { label: 'Expected close', value: fmtD(d.close) } : null, d.owner ? { label: 'Owner', value: d.owner } : null].filter(Boolean), note: '', operational: true }; }
+      if (kind === 'company' && c) return { kicker: [c.domain, c.industry, c.employees ? c.employees.toLocaleString('en-US') + ' employees' : null, [c.city, c.country].filter(Boolean).join(', ') || null].filter(Boolean).join(' · '), title: c.name, meta: '', rows: (c.contacts || []).slice(0, 5).map(p => ({ label: p.title || 'Contact', value: p.name + (p.email ? ' · ' + p.email : '') })).concat((c.deals || []).filter(d => d.isOpen).slice(0, 3).map(d => { const dl = d.displayLine || ''; return { label: 'Open deal', value: dl.indexOf(d.name) === 0 ? dl : d.name + (dl ? ' — ' + dl : '') }; })), note: '', operational: true };
+      if (kind === 'contact' && c) { const p = c.contacts.find(x => (x.email || x.name) === b) || {}; const theirMeetings = (c.meetings || []).filter(m => (m.start || '').slice(0, 10) <= new Date().toISOString().slice(0, 10)).slice(-3); return { kicker: c.name, title: p.name || 'Contact', meta: p.title || '', rows: (p.email ? [{ label: 'Email', value: p.email }] : []).concat(theirMeetings.length ? [{ label: 'Recent meetings', value: theirMeetings.map(m => m.title + ' · ' + fmtD((m.start || '').slice(0, 10))).join('\n') }] : []), note: '', operational: true }; }
+      if (kind === 'crm-meeting' && c) { const m = c.meetings.find(x => x.id === b) || {}; const rec = (c.recordings || []).find(r => (r.date || '').slice(0, 10) === (m.start || '').slice(0, 10)); const who = rec ? (rec.invitees || []).map(i => i.name || i.email).filter(x => x && !/@opstream\.ai/i.test(x)).slice(0, 6) : (c.contacts || []).slice(0, 4).map(p => p.name + (p.title ? ' — ' + p.title : '')); const deal = (c.deals || []).find(d => d.isOpen); return { kicker: fmtDT(m.start) || 'Meeting', title: m.title || 'Meeting', meta: c.name, rows: (who.length ? [{ label: 'Who was there', value: who.join(', ') }] : []).concat(rec && rec.summary ? [{ label: 'What was discussed', value: rec.summary.slice(0, 2).map(p => (p.x || p).toString().replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')).join(' ') }] : []).concat(rec && rec.actions && rec.actions.length ? [{ label: 'Action items', value: rec.actions.slice(0, 5).join(' · ') }] : []).concat(deal ? [{ label: 'Related deal', value: (deal.displayLine && deal.displayLine.indexOf(deal.name) === 0 ? deal.displayLine : deal.name + (deal.displayLine ? ' — ' + deal.displayLine : '')) }] : []).concat(!rec && !m.outcome ? [{ label: 'Notes', value: 'No call notes or recording were captured for this meeting.' }] : []), note: rec ? '' : '', operational: true }; }
+      if (kind === 'call' && c) { const cl = (c.calls || []).find(x => x.id === b) || {}; return { kicker: c.name + (cl.date ? ' · ' + fmtD(cl.date) : ''), title: cl.title || 'Call', meta: cl.owner || '', rows: (cl.minutes ? [{ label: 'Duration', value: cl.minutes + ' min' }] : []).concat(cl.text ? [{ label: 'What was said', value: cl.text }] : []), note: '', operational: true }; }
+      if (kind === 'recording') { const r = allRecs.find(x => x.id === a); if (!r) return null; const who = (r.invitees || []).map(i => i.name || i.email).filter(x => x && !/@opstream\.ai/i.test(x)); return { kicker: fmtDT(r.date) + (r.minutes ? ' · ' + r.minutes + ' min' : ''), title: r.title, meta: r.companyName, rows: (who.length ? [{ label: 'Who was on the call', value: who.slice(0, 8).join(', ') }] : []).concat(r.summary && r.summary.length ? [{ label: 'Key points', value: r.summary.slice(0, 4).map(p => '• ' + (p.x || p).toString().replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')).join('\n') }] : []).concat(r.actions && r.actions.length ? [{ label: 'Action items', value: r.actions.slice(0, 6).map(a => '• ' + a).join('\n') }] : []), note: '', operational: true }; }
       return null; })();
     const evRec = dyn || evidenceMap[evKey] || (evKey.startsWith('sheet:') ? sheetRow(evKey.slice(6)) : null) || refOnly('Record unavailable', 'No matching collected record', evKey, 'This link does not resolve to a record in this collection.');
     const evVal = { missing: false, ...evRec, hasRows: !!(evRec.rows && evRec.rows.length) };
     const stageOrder = ['Legal & Compliance', 'Decision', 'Demo meeting', 'Discovery/RFP received', 'SQL'];
     const stagesAgg = stageOrder.map(stage => { const rows = dealsRaw.filter(d => d[2] === stage); return [stage, rows.length, rows.reduce((n, d) => n + d[3], 0)]; }).concat([]);
     const maxStage = Math.max(...stagesAgg.map(x => x[2]));
+    // ---- Proactive briefing: what needs a human, per role ----
+    const opps = st.verified?.opportunities || [];
+    const oppByName = Object.fromEntries(opps.map(o => [o.name, o]));
+    const rankedDeals = [...dealsRaw].sort((a, b) => (b[6] ?? -1) - (a[6] ?? -1));
+    const totalPipe = rankedDeals.reduce((n, d) => n + (d[3] || 0), 0);
+    const weightedPipe = opps.reduce((n, o) => n + (o.amount || 0) * (o.probability || 0), 0);
+    const unqualifiedLeads = (st.verified?.leads || []).filter(l => !l.mql);
+    const unsentDrafts = drafts.filter(d => !d.version).length;
+    const draftForCompany = (company, rationale) => () => { const cc = findCo(company); const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + company, company, text: '', rationale, refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: cc ? cc.contacts.slice(0, 2).map(x => x.name).join(', ') : '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); };
+    const dealEvidenceId = company => { const cc = findCo(company); const dd = cc && (cc.deals.find(d => !d.closed) || cc.deals[0]); return dd ? dd.id : null; };
+    const briefingActions = rankedDeals.map(([company, owner, stage, arr, prob, close, days, note], i) => {
+      const cc = findCo(company); const evid = dealEvidenceId(company);
+      const daysKnown = days !== null && days !== undefined;
+      return {
+        n: i + 1, title: 'Move ' + company + ' out of ' + stage,
+        context: usd(arr) + ' · ' + prob + '% · ' + (daysKnown ? days + ' days in stage' : 'stage age not in extract') + ' · close ' + close + ' · ' + owner,
+        why: (note ? note + ' ' : '') + (daysKnown ? 'No recorded stage movement in ' + days + ' days' + (i === 0 ? ' — the longest-stuck deal in the pipeline.' : '.') : 'Stage age is not in the CRM extract; ranked by pipeline order.'),
+        confidence: 'Medium · ' + (daysKnown ? 'days-in-stage is the only staleness signal collected.' : 'based on open pipeline records.'),
+        changed: cc && cc.lastContact ? 'Last contact ' + fmtD(cc.lastContact) + '.' : '',
+        primary: 'Draft follow-up', primaryGo: draftForCompany(company, (note || '') + ' ' + stage + ' · ' + usd(arr) + (daysKnown ? ' · ' + days + ' days in stage.' : '.')),
+        secondary: 'Open account', secondaryGo: goCo(company),
+        hasDealEvidence: !!evid, dealEvidenceGo: evid ? ev('deal:' + evid) : null,
+      };
+    });
+    if (unqualifiedLeads.length) briefingActions.push({ n: briefingActions.length + 1, title: 'Qualify ' + unqualifiedLeads.length + ' new leads', context: unqualifiedLeads.slice(0, 4).map(l => l.name).join(', ') + (unqualifiedLeads.length > 4 ? ' · +' + (unqualifiedLeads.length - 4) + ' more' : ''), why: 'These leads have no MQL date — nobody has decided whether they are worth a meeting yet.', confidence: 'High · straight from the lead tracker.', changed: '', primary: 'Review new leads', primaryGo: this.go('accounts', { accounts: 'leads' }), hasDealEvidence: false });
+    if (unsentDrafts) briefingActions.push({ n: briefingActions.length + 1, title: 'Review ' + unsentDrafts + ' unsent draft' + (unsentDrafts > 1 ? 's' : ''), context: 'Drafts waiting in the workspace', why: 'Drafts are created but never sent — a human reviews and sends each one.', confidence: 'High · counted from your drafts.', changed: '', primary: 'Open drafts', primaryGo: goDrafts, hasDealEvidence: false });
+    // ---- Hollie operator: invisible background operator output (data/hollie.json) ----
+    const hop = st.hollie || null;
+    const hollieDoneMap = st.hollieDone || {};
+    const drawerLabel = k => k.indexOf('deal:') === 0 ? 'Deal record' : k.indexOf('crm-meeting:') === 0 ? 'Meeting record' : k.indexOf('recording:') === 0 ? 'Call notes' : k.indexOf('note:') === 0 ? 'CRM note' : k.indexOf('call:') === 0 ? 'Call record' : k.indexOf('company:') === 0 ? 'Company record' : 'Record';
+    const dedupeKeys = keys => [...new Set(keys || [])];
+    const seedDraft = (q) => () => { const existing = (st.newDrafts || []).findIndex(x => x.seedId === q.id); if (existing >= 0) { this.setState({ screen: 'drafts', draft: baseDrafts.length - (st.newDrafts || []).length + existing }); window.scrollTo(0, 0); return; } const seed = q.draftSeed || {}; const list = [...(st.newDrafts || []), { kind: 'Follow-up', seedId: q.id, title: seed.subject || ('Follow up with ' + (q.company || 'account')), company: q.company || 'No company linked', text: seed.body || '', rationale: 'From the call notes. ' + (q.why || '') + ' Drafts are never sent automatically.', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: seed.recipients || '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts', draftFeedback: 'Draft created. Write your message, then use Copy for Gmail to paste it into Gmail — nothing sends from here.', draftFeedbackClass: 'form-success' }); window.scrollTo(0, 0); };
+    const nudgeDraft = (q) => () => { const existing = (st.newDrafts || []).findIndex(x => x.seedId === q.id); if (existing >= 0) { this.setState({ screen: 'drafts', draft: baseDrafts.length - (st.newDrafts || []).length + existing }); window.scrollTo(0, 0); return; } const cc = q.company ? findCo(q.company) : null; const contactName = cc && cc.contacts[0] ? cc.contacts[0].name.split(' ')[0] : 'there'; const nudgeText = 'Hi ' + contactName + ',\n\nWanted to check in on ' + (q.deal && q.deal !== q.company ? q.deal + ' at ' + q.company : q.company || 'our conversation') + '. ' + (q.daysQuiet ? "It's been " + q.daysQuiet + ' days since we last connected' : 'We haven\'t connected in a while') + ', and I wanted to see where things stand on your end.\n\n' + (q.stage ? 'Last we spoke, this was in ' + q.stage + '. ' : '') + 'Is this still a priority, or has something changed?\n\nHappy to jump on a quick call if helpful.\n\nBest,\nHollie'; const list = [...(st.newDrafts || []), { kind: 'Follow-up', seedId: q.id, title: 'Nudge ' + (q.company || 'account'), company: q.company || 'No company linked', text: nudgeText, rationale: (q.why || '') + ' Drafts are never sent automatically. Edit the generated nudge above to match your voice.', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: cc ? cc.contacts.slice(0, 2).map(x => x.name).join(', ') : '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts', draftFeedback: 'Draft created with a starting nudge — edit it to match your voice, then use Copy for Gmail to paste it into Gmail.', draftFeedbackClass: 'form-success' }); window.scrollTo(0, 0); };
+    const kindLabel = { followup_draft: 'Follow-up draft', stale_deal: 'Stale deal', unworked_lead: 'Unworked lead', crm_update: 'CRM update', meeting_prep: 'Meeting prep', sheet_review: 'Sheet check' };
+    const mdText = s => String(s == null ? '' : s).replace(/\[([^\]]+)\]\([^)\s]+\)/g, '$1');
+    const hollieQueue = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id]).map((q, i) => {
+      const confirmKey = st.confirmQueue;
+      const pm = q.kind === 'followup_draft' ? ['Open draft', seedDraft(q)] : q.kind === 'stale_deal' ? ['Draft nudge', nudgeDraft(q)] : q.kind === 'unworked_lead' ? ['Review leads', goLeads] : q.kind === 'sheet_review' ? (q.companyId ? ['Review in account', goCo(q.companyId)] : ['Review deals', goDeals]) : q.kind === 'crm_update' ? ['Review deals', goDeals] : ['Open meetings', goMeetings];
+      const confirmGo = (action, fn) => () => { const key = q.id + ':' + action; if (confirmKey === key) { this.setState({ confirmQueue: null }); fn(); } else { this.setState({ confirmQueue: key }); setTimeout(() => { if (this.state.confirmQueue === key) this.setState({ confirmQueue: null }); }, 6000); } };
+      return {
+        n: q.n || (i + 1), title: q.title, isNew: !!q.isNew, needsDecision: !!q.needsDecision,
+        kind: kindLabel[q.kind] || q.kind,
+        goal: q.goal || 'pipeline',
+        context: [q.company, (q.deal && q.deal !== q.company ? q.deal : null), q.stage].filter(Boolean).join(' · '),
+        why: mdText(q.why),
+        confidenceText: mdText((q.confidence || '') + (q.confidenceNote ? ' · ' + q.confidenceNote : '')),
+        primary: pm[0], primaryGo: pm[1],
+        dismissLabel: confirmKey === q.id + ':dismiss' ? 'Confirm dismiss' : 'Dismiss',
+        dismissGo: confirmGo('dismiss', () => this.hollieFeedback(q.id, 'dismiss')),
+        doneLabel: confirmKey === q.id + ':done' ? 'Confirm done' : 'Done',
+        doneGo: confirmGo('done', () => this.hollieFeedback(q.id, 'done')),
+        hasAccount: !!q.companyId && q.kind !== 'sheet_review', accountGo: q.companyId ? goCo(q.companyId) : null,
+        evidenceLinks: dedupeKeys(q.drawerKeys).slice(0, 3).map(k => ({ label: drawerLabel(k), go: ev(k) })),
+      };
+    }) : [];
+    const hb = hop ? hop.brief : null;
+    const hollieBriefCards = hb ? [
+      { title: 'Meetings today & tomorrow', line: hb.meetings.items.length ? hb.meetings.items.map(m => m.title + ' · ' + fmtDT(m.start)).join(' / ') : 'None scheduled', note: hb.meetings.note, go: this.go('meetings', { meetings: 'upcoming' }), goLabel: 'Open meetings' },
+      { title: 'Deals gone quiet', line: hb.quietDeals.items.length + ' with no engagement in 14+ days', note: hb.quietDeals.note, go: goFollow, goLabel: 'Open follow-ups' },
+      { title: 'Follow-ups owed', line: hb.followupsOwed.items.length + ' calls with open action items', note: hb.followupsOwed.note, go: goFollow, goLabel: 'Open follow-ups' },
+      { title: 'New leads', line: hb.newLeads.items.length + ' unworked', note: hb.newLeads.note, go: goLeads, goLabel: 'Open new leads' },
+    ] : [];
+    const hollieAutonomy = hop ? [
+      { label: 'Meeting prep', text: (hop.autonomyText || {}).meeting_prep },
+      { label: 'Follow-up drafts', text: (hop.autonomyText || {}).draft_followups },
+      { label: 'CRM updates', text: (hop.autonomyText || {}).crm_updates },
+      { label: 'Sending anything', text: (hop.autonomyText || {}).send_anything },
+      { label: 'External messages', text: (hop.autonomyText || {}).external_messages },
+    ].filter(a => a.text) : [];
+    const holliePrep = hop ? (hop.prep || []).map(pr => ({
+      title: pr.title, startLine: fmtDT(pr.start) + (pr.company ? ' · ' + pr.company : ''),
+      agenda: pr.suggestedAgenda || [],
+      actions: (pr.unresolvedActions || []).map(a => mdText(a.action) + (a.from ? ' — ' + a.from : '')),
+      lastCallLine: pr.lastCall ? (pr.lastCall.title || 'Last call') + ' · ' + (pr.lastCall.date || '') : '',
+      lastCallSummary: pr.lastCall ? (pr.lastCall.summary || []).slice(0, 2).map(mdText) : [],
+      dealsLine: ((pr.accountHistory || {}).openDeals || []).map(d => { const dl = d.displayLine || ''; return dl.startsWith(d.name) ? dl : d.name + (dl ? ' — ' + dl : ''); }).join('; '),
+      attendees: (() => { const inv = ((pr.lastCall || {}).invitees || []).map(i => i.name); return inv.length ? inv : (pr.attendees || []).map(a => a.name + (a.title ? ' — ' + a.title : '')); })(),
+      lastCallPurpose: ((pr.lastCall || {}).purpose) || '',
+      lastCallTakeaways: ((pr.lastCall || {}).takeaways || []).map(mdText),
+      callGoal: pr.callGoal || '',
+      hasAccount: !!pr.companyId, accountGo: pr.companyId ? goCo(pr.companyId) : null,
+      evidenceLinks: dedupeKeys(pr.drawerKeys).slice(0, 3).map(k => ({ label: drawerLabel(k), go: ev(k) })),
+    })) : [];
+    // ---- Agent's proactive take: LLM-written morning brief (data/agent-brief.json) ----
+    const ab = st.agentBrief || null;
+    const agentBriefParas = ab ? (ab.paragraphs || []) : [];
+    const agentBriefNew = ab ? (ab.whatsNew || []) : [];
+    const agentBriefWatch = ab ? (ab.watchOuts || []) : [];
+    const agentBriefTop = ab ? (ab.topActions || []) : [];
+    const hasAgentBrief = agentBriefParas.length > 0;
+    const hasAgentBriefNew = agentBriefNew.length > 0;
+    const hasAgentBriefTop = agentBriefTop.length > 0;
+    const hasAgentBriefWatch = agentBriefWatch.length > 0;
+    const agentBriefGreeting = ab ? (ab.greeting || '') : '';
+    const agentBriefGenNote = ab && ab.generatedAt ? 'Written ' + fmtDT(ab.generatedAt) : '';
+    // ---- Heartbeat: periodic proactive pulse (data/heartbeat.json) ----
+    const pulse = st.heartbeat || null;
+    const heartbeatInsights = pulse ? (pulse.insights || []) : [];
+    const hasHeartbeat = heartbeatInsights.length > 0;
+    const heartbeatSummary = pulse ? (pulse.summary || '') : '';
+    const heartbeatGenNote = pulse && pulse.generatedAt ? 'Checked ' + fmtDT(pulse.generatedAt) : '';
+    // ---- Heartbeat fixes: prepared fixes with one-tap actions (data/heartbeat-fixes.json) ----
+    const fixRaw = (st.heartbeatFixes && st.heartbeatFixes.fixes) || [];
+    const createdFixes = st.heartbeatDraftsCreated || {};
+    const heartbeatFixes = fixRaw.map((f, i) => ({
+      idx: i,
+      type: f.type,
+      title: f.title || 'Fix',
+      detail: f.detail || '',
+      question: f.question || '',
+      draftSubject: f.draftSubject || '',
+      draftText: f.draftText || '',
+      isDraft: f.type === 'draft',
+      isAsk: f.type === 'ask',
+      created: !!createdFixes[i],
+      createGo: () => this.createHeartbeatDraft(i),
+    }));
+    const hasHeartbeatFixes = heartbeatFixes.length > 0;
+    const approvals = st.approvals || {};
+    const stuckDeals = rankedDeals.filter(d => (d[6] ?? 0) >= 8);
+    const stuckValue = stuckDeals.reduce((n, d) => n + (d[3] || 0), 0);
+    const qv = st.verified?.quick || {};
+    const briefingMetrics = [
+      { label: 'Open pipeline', value: rankedDeals.length ? usd(totalPipe) : '—' },
+      { label: 'Weighted pipeline', value: rankedDeals.length ? usd(weightedPipe) : '—' },
+      { label: 'Stuck 8+ days', value: rankedDeals.length ? usd(stuckValue) + ' across ' + stuckDeals.length + ' deals' : '—' },
+      { label: 'Leads / MQL / SQL', value: (qv.leads ?? '—') + ' / ' + (qv.mql ?? '—') + ' / ' + (qv.sql ?? '—') },
+    ];
+    const topDeal = rankedDeals[0];
+    const briefingDecisions = topDeal ? [
+      { title: 'Push ' + topDeal[0] + ' or let it slip', why: topDeal[0] + ' is the largest deal (' + usd(topDeal[3]) + ') and the longest in stage (' + topDeal[6] + ' days). The close date is ' + fmtD(topDeal[5]) + '. Either get a pilot proposal in front of them this week or accept the close slipping.', confidence: 'Medium · company record; close dates are owner estimates, not buyer commitments.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal[0]) },
+      { title: rankedDeals.filter(d => d[5] === topDeal[5]).length + ' of ' + rankedDeals.length + ' deals share a ' + fmtD(topDeal[5]) + ' close', why: 'If they all move at once, pilot delivery and compliance review stack up in the same window. Decide now whether to sequence them or staff up.', confidence: 'Medium · close dates are owner estimates, not buyer commitments.', evidenceLabel: 'Review by close date', evidenceGo: this.go('accounts', { accounts: 'deals', sort: 'close' }) },
+    ] : [];
     return {
       ...(() => {
         const mode = st.systemState ?? this.props.systemState ?? 'normal';
         const mobile = String(this.props.mobile ?? '') === 'true';
         const banners = {
-          'review-running': { bg: 'var(--color-surface)', fg: ink, btnBg: 'transparent', title: 'Review running', text: 'Requested 09:12. Priorities, follow-ups and suggested drafts below are from the Sep 8 review until it finishes.', action: 'Details', go: this.go('data') },
-          'review-ready': { bg: 'var(--color-accent-100)', fg: 'var(--color-accent-900)', btnBg: 'transparent', title: 'A newer review is ready', text: 'Prepared today 09:41 on the Sep 8 data. Showing the Sep 8 review until you switch; your saved drafts are unaffected.', action: 'Show the new review', go: () => this.setState({ systemState: 'normal', screen: 'today' }) },
-          'source-failed': { bg: 'var(--color-accent-100)', fg: 'var(--color-accent-900)', btnBg: 'transparent', title: 'AI visibility did not refresh', text: 'Collection failed Sep 8 with server errors (HTTP 504). AI figures are from Aug 24; other sources are current.', action: 'See sources', go: this.go('data') },
+          'review-running': { bg: 'var(--color-surface)', fg: ink, btnBg: 'transparent', title: 'Review running', text: 'Requested 09:12. Priorities, follow-ups and suggested drafts below are from the collected record until it finishes.', action: 'Details', go: this.go('data') },
+          'review-ready': { bg: 'var(--color-accent-100)', fg: 'var(--color-accent-900)', btnBg: 'transparent', title: 'A newer review is ready', text: 'Prepared today on the collected record. Showing the collected data until you switch; your saved drafts are unaffected.', action: 'Show the new review', go: () => this.setState({ systemState: 'normal', screen: 'briefing' }) },
+          'source-failed': { bg: 'var(--color-accent-100)', fg: 'var(--color-accent-900)', btnBg: 'transparent', title: 'AI visibility did not refresh', text: 'A source collection failed. Source dates are listed on the Data tab.', action: 'See sources', go: this.go('data') },
           'stale': { bg: 'var(--color-surface)', fg: ink, btnBg: 'transparent', title: 'Newer data collected', text: 'A collection completed at 09:30. Numbers refresh on their own; open records keep the data you were reviewing.', action: 'Refresh now', go: () => this.setState({ systemState: 'normal' }) }
         };
         const banner = banners[mode];
         return { isMobile: mobile, topNavDisplay: mobile ? 'none' : 'flex', mainPadBottom: mobile ? '24px' : '56px', isLoading: mode === 'loading', notLoading: mode !== 'loading', bannerShown: !!banner, banner: banner || {}, draftConflict: mode === 'draft-conflict' && s === 'drafts', reloadDraft: () => this.setState({ systemState: 'normal', edits: {} }), keepMine: () => this.setState({ systemState: 'normal' }), skeleton: [{ w1: '70%', w2: '95%', w3: '60%' }, { w1: '55%', w2: '90%', w3: '40%' }, { w1: '65%', w2: '85%', w3: '55%' }, { w1: '50%', w2: '92%', w3: '35%' }],
-          mobileNav: [['today', 'Today'], ['performance', 'Numbers'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts']].map(([id, label]) => ({ id, label, go: this.go(id), current: activeNav === id ? 'page' : undefined, line: activeNav === id ? accent : 'transparent', color: activeNav === id ? ink : muted, weight: activeNav === id ? 600 : 400 })) };
+          mobileNav: [['briefing', 'Briefing'], ['pipeline', 'Pipeline'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts']].map(([id, label]) => ({ id, label, go: this.go(id), current: activeNav === id ? 'page' : undefined, line: activeNav === id ? accent : 'transparent', color: activeNav === id ? ink : muted, weight: activeNav === id ? 600 : 400 })) };
       })(),
       navItems: navDefs.map(([id, label]) => ({ id, label, go: this.go(id), current: activeNav === id ? 'page' : undefined, line: activeNav === id ? accent : 'transparent', color: activeNav === id ? ink : muted, weight: activeNav === id ? 600 : 400 })),
-      goToday: this.go('today'), goPerformance: this.go('performance'), goAccounts: this.go('accounts'), goAccount, goMeetings: this.go('meetings'), goMeeting, goDrafts, goData: this.go('data'), goDeals,
-      isToday: s === 'today', isPerformance: s === 'performance', isAccounts: s === 'accounts', isAccount: s === 'account', isMeetings: s === 'meetings', isMeeting: s === 'meeting', isDrafts: s === 'drafts', isData: s === 'data',
+      goBriefing: this.go('briefing'), goPipeline: this.go('pipeline'), goAccounts: this.go('accounts'), goAccount, goMeetings: this.go('meetings'), goMeeting, goDrafts, goData: this.go('data'), goDeals,
+      toast: st.toast || null,
+      isBriefing: s === 'briefing', isPipeline: s === 'pipeline', isAccounts: s === 'accounts', isAccount: s === 'account', isMeetings: s === 'meetings', isMeeting: s === 'meeting', isDrafts: s === 'drafts', isData: s === 'data',
       acct, mtg, coverageNote: REC.coverage ? 'This prototype loads ' + REC.coverage.primary + ' accounts (' + REC.coverage.companiesInExtract + ' CRM company records, ' + REC.coverage.foldedRelated + ' duplicates folded), ' + REC.coverage.contacts.toLocaleString('en-US') + ' contacts, ' + REC.coverage.notes + ' notes, ' + REC.coverage.calls + ' calls, ' + REC.coverage.meetings + ' calendar entries, ' + REC.coverage.tasks + ' tasks and ' + REC.coverage.fathomTotal + ' recordings (' + REC.coverage.unmatchedRecordings + ' with companies outside the extract), full transcripts for ' + (REC.coverage.transcripts || 0) + ' of them. ' + (REC.coverage.ownersArchived || 0) + ' of 54 CRM owners are archived and shown as (former). Email bodies were excluded. Stage names for numeric CRM stage ids are inferred from the owner sheets; the connector does not export the stage catalog.' : '',
       meetingsNote: st.records ? (new Set(allRecs.map(r => r.id)).size) + ' recordings · ' + (REC.unmatchedRecordings || []).length + ' with companies outside the 31 extracted accounts · CRM calendar entries for upcoming' : 'Loading meeting records…',
       evidenceOpen: !!st.evidence, openEvidence: goEvidence, ev: evVal, evReviewSample: ev('review-sample'), evRecordingSample: ev('recording-sample'), evTim13: ev('tim-13'), evDraftRefs: ev('draft-refs'), closeEvidence: () => this.setState({ evidence: false }), stop: e => e.stopPropagation(),
       priorities: [],
-      quickNumbers: [{"label":"New leads","value":"0","delta":"Synthetic"},{"label":"Marketing qualified","value":"0","delta":"Synthetic"},{"label":"Sales qualified","value":"0","delta":"Synthetic"},{"label":"Meetings completed","value":"0","delta":"Synthetic"},{"label":"Weighted pipeline","value":"0","delta":"Synthetic"}],
+      briefingIntro: 'The workspace leads with what changed and what needs your judgment. Drafts are created but never sent; nothing leaves this workspace without you.',
+      isHollie: true,
+      briefingEmpty: rankedDeals.length === 0, briefingMetrics, briefingDecisions,
+      hasHollieOp: !!hop, noHollieOp: !hop,
+      hollieGenNote: hop ? 'Assistant run ' + fmtD((hop.generatedAt || '').slice(0, 10)) + ' · ' + (hop.queue || []).length + ' items in queue' : '',
+      hollieBriefCards, hollieAutonomy,
+      hollieQueue, hollieQueueEmpty: hollieQueue.length === 0,
+      hollieQueueEmptyNote: hop ? 'Queue is clear — nothing new from the assistant since the last run.' : '',
+      hollieNewCount: hollieQueue.filter(q => q.isNew).length,
+      hollieNewNote: (() => { const n = hollieQueue.filter(q => q.isNew).length; return n > 0 ? n + ' new or updated since the last run — look for the · new tag.' : 'Nothing new since the last run.'; })(),
+      hollieQueueGroups: (hop && hop.goals && hop.goals.length ? hop.goals.map(g => ({ label: g.title, status: g.status || '', items: hollieQueue.filter(q => q.goal === g.id) })).filter(g => g.items.length).map(g => ({ ...g, count: g.items.length })) : ['Follow-up draft', 'Stale deal', 'Unworked lead', 'Sheet check', 'CRM update', 'Meeting prep'].map(label => ({ label, status: '', items: hollieQueue.filter(q => q.kind === label) })).filter(g => g.items.length).map(g => ({ ...g, count: g.items.length }))),
+      aiProposals: (st.proposals || []).map((p, i) => ({
+        idx: i,
+        title: (p.company || 'Account') + ' · ' + (p.field || 'field update'),
+        changeLine: (p.currentValue && p.currentValue !== 'unknown' ? p.currentValue : 'no value on record') + ' → ' + (p.proposedValue || '—'),
+        rationale: p.rationale || '',
+        meta: (p.by === 'assistant' ? 'Proposed by the assistant' : 'Proposed') + (p.at ? ' · ' + fmtD(String(p.at).slice(0, 10)) : ''),
+        decided: p.status === 'approved' || p.status === 'declined',
+        statusLabel: p.status === 'approved' ? 'Approved' : p.status === 'declined' ? 'Declined' : 'Awaiting your decision',
+        approveGo: () => this.decideProposal(i, 'approved'),
+        declineGo: () => this.decideProposal(i, 'declined'),
+      })),
+      aiProposalsPending: (st.proposals || []).filter(p => p.status === 'proposed').length,
+      aiProposalsWaitingNote: (() => { const n = (st.proposals || []).filter(p => p.status === 'proposed').length; return n + ' proposal' + (n === 1 ? '' : 's') + ' waiting on you.'; })(),
+      holliePrep, holliePrepEmpty: holliePrep.length === 0,
+      holliePrepNote: hop ? (hop.prepNote || '') : '',
+      hasAgentBrief, hasAgentBriefNew, hasAgentBriefWatch,
+      agentBriefGreeting, agentBriefGenNote, agentBriefParas, agentBriefNew, agentBriefWatch, agentBriefTop, hasAgentBriefTop,
+      hasHeartbeat, heartbeatSummary, heartbeatGenNote, heartbeatInsights,
+      hasHeartbeatFixes, heartbeatFixes,
+      quickNumbers: [{"label":"New leads","value":"0","delta":"Company record"},{"label":"Marketing qualified","value":"0","delta":"Company record"},{"label":"Sales qualified","value":"0","delta":"Company record"},{"label":"Meetings completed","value":"0","delta":"Company record"},{"label":"Weighted pipeline","value":"0","delta":"Company record"}],
       upcoming: [],
-      perfTabs: seg([['demand', 'Demand & pipeline'], ['spend', 'Spend & campaigns'], ['web', 'Website & AI']], st.perf, 'perf'),
+      perfTabs: seg([['demand', 'Demand'], ['spend', 'Spend'], ['web', 'Website & AI']], st.perf, 'perf'),
       perfDemand: st.perf === 'demand', perfSpend: st.perf === 'spend', perfWeb: st.perf === 'web',
       periods: seg([['six', 'Six weeks'], ['quarter', 'Quarter to date'], ['year', '2026'], ['custom', 'Custom']], st.period, 'period'),
-      periodRange: pd.range, isCustom: st.period === 'custom', customStart: st.start || '2026-08-01', customEnd: st.end || '2026-09-08',
+      periodRange: pd.range, isCustom: st.period === 'custom', customStart: st.start || '2026-08-01', customEnd: st.end || new Date().toISOString().slice(0, 10),
       setStart: e => this.setState({ start: e.target.value }), setEnd: e => this.setState({ end: e.target.value }),
       barsTitle: st.period === 'year' || (st.period === 'custom' && !pd.unit) ? 'New leads by month' : 'New leads by week',
       scopeNote: st.perf === 'web' ? 'Website: May 18 – Sep 7 (analytics start). AI visibility: monitored answers through Aug 24. No period filter applies.' : st.perf === 'spend' ? 'Spend: Jan – Sep 2026 by month, as entered in the budget workbook. Campaign reports as of Sep 1. No period filter applies.' : 'Period applies to the lead, MQL and SQL counts. Pipeline is the current state; meeting counts are Jul – Aug.',
-      demandMetrics: [{"label":"New leads","value":"0","delta":"Synthetic","note":"","go":null},{"label":"Marketing qualified","value":"0","delta":"Synthetic","note":"","go":null},{"label":"Sales qualified","value":"0","delta":"Synthetic","note":"","go":null},{"label":"Meetings completed","value":"0","delta":"Synthetic","note":"","go":null},{"label":"Recordings","value":"0","delta":"Synthetic","note":"","go":null}],
+      demandMetrics: [{"label":"New leads","value":"0","delta":"Company record","note":"","go":null},{"label":"Marketing qualified","value":"0","delta":"Company record","note":"","go":null},{"label":"Sales qualified","value":"0","delta":"Company record","note":"","go":null},{"label":"Meetings completed","value":"0","delta":"Company record","note":"","go":null},{"label":"Recordings","value":"0","delta":"Company record","note":"","go":null}],
       weeks: pd.bars.map(([label, leads]) => ({ label, leads, title: pd.unit + label + ': ' + leads + ' new leads', leadH: Math.round(leads / barMax * 100) + '%' })),
       barCols: pd.bars.length,
       channels: pd.src.map(([channel, leads, mql, sql]) => ({ channel, leads, mql, sql, rate: leads ? Math.round(sql / leads * 100) + '%' : '—' })),
       stages: stagesAgg.map(([stage, count, amt]) => ({ stage, count, amount: k(amt), w: Math.round(amt / maxStage * 100) + '%' })),
       scorecard: [],
-      movements: dealsRaw.filter(d => [].includes(d[0])).map(d => ({ name: d[0], meta: d[1] + ' · ' + d[2], change: d[7], go: ev('sheet:' + d[0]) })),
+      movements: dealsRaw.filter(d => (d[7] || '').trim()).slice(0, 6).map(d => ({ name: d[0], meta: d[1] + ' · ' + d[2], change: d[7], go: ev('sheet:' + d[0]) })),
+      movementsEmpty: !dealsRaw.some(d => (d[7] || '').trim()),
       spendMonths: [].map(([month, plan, act, tag]) => ({ month, budget: Math.round(plan).toLocaleString('en-US'), actual: act === null ? '—' : Math.round(act).toLocaleString('en-US'), diff: act === null || tag ? 'Not comparable' : (act - plan >= 0 ? '+' : '−') + Math.round(Math.abs(act - plan)).toLocaleString('en-US'), tag: tag || '', tagDisplay: tag ? 'inline-flex' : 'none' })),
       spendChannels: [].map(([name, amt]) => ({ name, amount: Math.round(amt).toLocaleString('en-US'), w: Math.round(amt / 230640 * 100) + '%' })),
       ads: [],
@@ -943,10 +1258,10 @@ class Component extends DCLogic {
       webWeeks: webWeeksRaw.map(([label, v]) => ({ label, title: 'Week of ' + label + ': ' + v.toLocaleString('en-US') + ' visits', h: Math.round(v / 3134 * 100) + '%' })),
       webSources: [].map(([name, v, e, ke]) => ({ name, visits: v.toLocaleString('en-US'), engaged: Math.round(e / v * 100) + '%', ke })),
       landing: [].map(([page, v, e, ke]) => ({ page, visits: v.toLocaleString('en-US'), engaged: e.toLocaleString('en-US'), ke })),
-      accountTabs: seg([['deals', 'Open opportunities'], ['follow', 'Needs follow-up'], ['leads', 'New leads']], st.accounts, 'accounts'),
+      accountTabs: seg([['deals', 'Open opportunities'], ['follow', 'Needs follow-up'], ['leads', 'New leads']], st.accounts, 'accounts').map(t => ({ ...t, go: () => { if (st.accounts !== t.id) this.setState({ accounts: t.id, sort: 'weighted' }); } })),
       accountsDeals: st.accounts === 'deals', accountsFollow: st.accounts === 'follow', accountsLeads: st.accounts === 'leads',
       setSort: e => this.setState({ sort: e.target.value }), setOwner: e => this.setState({ owner: e.target.value }), sortValue: st.sort || 'weighted', ownerValue: st.owner || 'Everyone',
-      searchValue: st.search || '', setSearch: e => this.setState({ search: e.target.value }), clearSearch: () => this.setState({ search: '', owner: 'Everyone' }),
+      searchValue: st.search || '', setSearch: e => this.setState({ search: e.target.value }), clearSearch: () => this.setState({ search: '', owner: 'Everyone', contributor: null }), ownerOptions, meetingOwnerOptions, peopleNote,
       dealsEmpty: filteredDeals.length === 0, leadsEmpty: filteredLeads.length === 0, emptyNote: 'Nothing matches' + (q ? ' “' + (st.search || '').trim() + '”' : '') + (st.owner && st.owner !== 'Everyone' ? ' for ' + st.owner : '') + '.',
       dealsCount: filteredDeals.length + ' of ' + dealsRaw.length + ' opportunities', leadsCount: filteredLeads.length + ' of ' + leadsRaw.length + ' recent leads',
       exportLabel: st.accounts === 'leads' ? 'Export ' + filteredLeads.length + ' leads' : st.accounts === 'follow' ? 'Export follow-ups' : 'Export ' + filteredDeals.length + ' opportunities',
@@ -961,38 +1276,104 @@ class Component extends DCLogic {
       proposeCorrection: () => { this.setState({screen:'drafts',newDrafts:[...(st.newDrafts || []),{title:'Proposed correction',kind:'Proposed correction',type:'Proposed correction',company:'No company linked',text:'Describe the correction.',rationale:'',refs:0,version:0,status:'Draft',recipients:''}]}); },
       meetingSearchValue: st.meetingSearch || '', setMeetingSearch: e => this.setState({ meetingSearch: e.target.value }), meetingOwnerValue: mOwner, setMeetingOwner: e => this.setState({ meetingOwner: e.target.value }),
       savedCount: drafts.filter(d => d.version > 0).length, newDraft, saveDraft,
-      editTitle: this.edit('title'), editText: this.edit('text'), editRationale: this.edit('rationale'), editType: this.edit('type'), editStatus: this.edit('status'), editRecipients: this.edit('recipients'),
-      checking: !!st.checking, checkLabel: st.checking ? 'Checking\u2026' : 'Check for updates', checkNote: st.checked ? 'Checked ' + st.checked + ' · no newer collection than Sep 8, 22:31' : '',
+      isEmailDraft: draft.type !== 'Campaign',
+      isCampaignDraft: draft.type === 'Campaign',
+      // Gmail integration: status, send, AI generation
+      senderLabel: st.gmailEmail ? st.gmailEmail : 'Gmail not connected',
+      senderActionLabel: st.gmailEmail ? 'Change' : 'Connect Gmail',
+      showConnections: () => { this.setState({ screen: 'data' }); window.scrollTo(0, 0); },
+      sendLabel: st.sending ? 'Sending…' : (st.gmailEmail ? 'Send via Gmail' : 'Connect Gmail to send'),
+      sendDisabled: !!st.sending || !st.gmailEmail || !(draft.recipients || '').trim() || !(draft.text || '').trim(),
+      sendDraft: () => {
+        if (!st.gmailEmail || st.sending) return;
+        const to = (draft.recipients || '').trim();
+        const subject = (draft.subject || draft.title || '').trim();
+        const body = (draft.text || '').trim();
+        if (!to || !body) return;
+        this.setState({ sendConfirm: { to, subject, body } });
+      },
+      sendConfirm: st.sendConfirm || null,
+      cancelSend: () => this.setState({ sendConfirm: null }),
+      confirmSend: async () => {
+        const c = this.state.sendConfirm;
+        if (!c || this.state.sending) return;
+        this.setState({ sending: true, sendConfirm: null, draftFeedback: null });
+        try {
+          const r = await fetch('/api/gmail/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: c.to, subject: c.subject, body: c.body, confirmed: true }) });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || 'Send failed');
+          this.setState({ sending: false, draftFeedback: 'Sent via Gmail to ' + c.to + '.', draftFeedbackClass: 'form-success', hasSendReceipt: true, sendReceiptLabel: 'Sent ' + new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ' to ' + c.to + '.' });
+        } catch (e) {
+          this.setState({ sending: false, draftFeedback: 'Could not send: ' + (e.message || 'error'), draftFeedbackClass: 'form-error' });
+        }
+      },
+      copyEmail: () => {
+        const t = (draft.subject ? draft.subject + '\n\n' : '') + (draft.text || '');
+        if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => this.setState({ draftFeedback: 'Copied. Paste into Gmail to send.', draftFeedbackClass: 'form-success' }));
+      },
+      generateLabel: st.generating ? 'Generating…' : 'Generate with AI',
+      generateDisabled: !!st.generating,
+      generateEmail: async () => {
+        if (this.state.generating) return;
+        const d = drafts[Math.min(this.state.draft, drafts.length - 1)] || {};
+        const ctx = ['Write a follow-up email for Hollie at Opstream.',
+          'Company: ' + (d.company || 'unknown'),
+          'Recipient(s): ' + (d.recipients || 'unknown'),
+          d.rationale ? 'Context: ' + d.rationale : '',
+          d.text ? 'Current draft text (improve or rewrite): ' + d.text.slice(0, 2000) : 'No draft text yet — write from scratch.',
+          'Return the email with a clear subject line first (as "Subject: ..."), then the body. Keep it concise and professional. Sign as Hollie.'].filter(Boolean).join('\n');
+        this.setState({ generating: true, draftFeedback: null });
+        try {
+          const r = await fetch('/api/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: ctx, history: [] }) });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || 'Generation failed');
+          const answer = j.answerText || '';
+          const m = answer.match(/^Subject:\s*(.+)$/im);
+          const subject = m ? m[1].trim() : d.subject || d.title || '';
+          const body = m ? answer.slice(m.index + m[0].length).trim() : answer;
+          const i = this.state.draft;
+          const edits = { ...(this.state.edits || {}) };
+          edits[i] = { ...(edits[i] || {}), subject, text: body };
+          this.setState({ generating: false, edits, draftFeedback: 'AI draft generated. Review and edit before sending.', draftFeedbackClass: 'form-success' });
+        } catch (e) {
+          this.setState({ generating: false, draftFeedback: 'Could not generate: ' + (e.message || 'error'), draftFeedbackClass: 'form-error' });
+        }
+      },
+      editTitle: this.edit('title'), editSubject: this.edit('subject'), editText: this.edit('text'), editRationale: this.edit('rationale'), editType: this.edit('type'), editStatus: this.edit('status'), editRecipients: this.edit('recipients'),
+      checking: !!st.checking, checkLabel: st.checking ? 'Checking\u2026' : 'Check for updates', checkNote: st.checked ? 'Checked ' + st.checked + ' · no newer collection than ' + collectedLong : '',
       checkUpdates: () => { this.setState({ checking: true }); setTimeout(() => this.setState({ checking: false, checked: now() }), 1200); },
       reviewRequested: !!st.reviewRequested, refreshLabel: st.reviewRequested ? 'Review requested' : 'Refresh the review', refreshNote: st.reviewRequested ? 'Requested ' + st.reviewRequested + '. The workspace stays usable while it runs; Today will show "new review available" when it finishes.' : 'Runs on the data already collected. Takes several minutes.',
       refreshReview: () => this.setState({ reviewRequested: now() }),
-      deals: filteredDeals.sort((a, b) => { const sort = st.sort || 'weighted'; if (sort === 'name') return a[0].localeCompare(b[0]); if (sort === 'days') return (b[6] ?? -1) - (a[6] ?? -1); if (sort === 'close') { const key = d => { const m = String(d[5]) === 'Apr 30' ? ['', 'Apr', '26'] : String(d[5]).match(/^(\w{3}) (\d{2})$/); return m ? '20' + m[2] + '-' + ({ Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' })[m[1]] : d[5]; }; return key(a).localeCompare(key(b)); } return b[3] * b[4] - a[3] * a[4]; }).map(([company, owner, stage, arr, prob, close, days, note]) => ({ company, owner, stage, arr: usd(arr), prob: prob + '%', close, days: days === null ? '—' : days, daysColor: days !== null && days > 120 ? red : ink, note, go: goCo(company) })),
-      followUps: followRaw.map(([name, meta, reason, next, uncertainty, draftIndex]) => ({ name, meta, reason, next, uncertainty, go: goCo(name), openLabel: 'Open account', draftGo: () => { this.setState({ screen: 'drafts', draft: draftIndex }); window.scrollTo(0, 0); } })),
+      deals: filteredDeals.sort((a, b) => { const sort = st.sort || 'weighted'; if (sort === 'name') return a[0].localeCompare(b[0]); if (sort === 'days') return (b[6] ?? -1) - (a[6] ?? -1); if (sort === 'close') { const key = d => { const m = String(d[5]) === 'Apr 30' ? ['', 'Apr', '26'] : String(d[5]).match(/^(\w{3}) (\d{2})$/); return m ? '20' + m[2] + '-' + ({ Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' })[m[1]] : (d[5] || ''); }; return key(a).localeCompare(key(b)); } return b[3] * b[4] - a[3] * a[4]; }).map(([company, owner, stage, arr, prob, close, days, note]) => ({ company, owner, stage, arr: usd(arr), prob: prob == null ? '—' : prob + '%', close, days: days === null ? '—' : days, daysColor: days !== null && days > 120 ? red : ink, note, go: goCo(company) })),      followUps: followRaw.map(([name, meta, reason, next, uncertainty, draftIndex]) => ({ name, meta, reason, next, uncertainty, go: goCo(name), openLabel: 'Open account', draftGo: () => { this.setState({ screen: 'drafts', draft: draftIndex }); window.scrollTo(0, 0); } })),
       leads: filteredLeads.map(([company, source, owner, date, note, mql, sql]) => ({ company, source, owner, date, note, mql: mql || '—', sql: sql || '—' })),
       timeline: [],
       accountSources: [],
       meetingTabs: seg([['upcoming', 'Upcoming'], ['past', 'Past']], st.meetings, 'meetings'),
       meetingGroups: this.memo('meetingGroups', st.meetings + ':' + (REC.generatedAt || ''), () => {
         const ownerOf = r => (r.recordedBy || '').split(' ')[0];
+        const todayStr = new Date().toISOString().slice(0, 10); const plus = (d, n) => { const t = new Date(d + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
         const monthKey = d => d.slice(0, 7);
         const monthLabel = k => new Date(k + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
         let items;
         if (st.meetings === 'upcoming') {
-          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => m.start.slice(0, 10) >= '2026-09-09' && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => ({ when: fmtDT(m.start), sort: m.start, title: m.title, who: c.name + (c.owner ? ' · ' + c.owner : ''), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: c.owner || '' })));
+          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => m.start.slice(0, 10) >= todayStr && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => ({ when: fmtDT(m.start), sort: m.start, title: m.title, who: c.name + (c.owner && !/^Owner \d+$/.test(c.owner) ? ' · ' + c.owner : ''), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: c.owner || '' })));
           const notes = [];
           items = [...ups, ...notes].sort((a, b) => a.sort.localeCompare(b.sort));
-          const g = {}; for (const it of items) { const k = it.sort <= '2026-09-14' ? 'This week' : it.sort <= '2026-09-21' ? 'Next week' : 'Later'; (g[k] = g[k] || []).push(it); }
+          const g = {}; for (const it of items) { const k = it.sort.slice(0, 10) <= plus(todayStr, 7) ? 'This week' : it.sort.slice(0, 10) <= plus(todayStr, 14) ? 'Next week' : 'Later'; (g[k] = g[k] || []).push(it); }
           return ['This week', 'Next week', 'Later'].filter(k => g[k]).map(k => ({ label: k, items: g[k] }));
         }
-        const seen = new Set(); items = allRecs.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; }).filter(r => r.date && r.date.slice(0, 10) <= '2026-09-08').map(r => ({ when: fmtDT(r.date), sort: r.date, title: r.title, who: r.companyName + (r.recordedBy ? ' · ' + r.recordedBy : ''), kind: 'Recorded', go: goMtg(r.id), owner: ownerOf(r) })).sort((a, b) => b.sort.localeCompare(a.sort));
+        const seen = new Set(); items = allRecs.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; }).filter(r => r.date && r.date.slice(0, 10) <= new Date().toISOString().slice(0, 10)).map(r => ({ when: fmtDT(r.date), sort: r.date, title: r.title, who: r.companyName + (r.recordedBy ? ' · ' + r.recordedBy : ''), kind: 'Recorded', go: goMtg(r.id), owner: ownerOf(r) })).sort((a, b) => b.sort.localeCompare(a.sort));
         const g = {}; for (const it of items) { const k = monthKey(it.sort); (g[k] = g[k] || []).push(it); }
         return Object.keys(g).sort().reverse().map(k => ({ label: monthLabel(k), items: g[k] }));
       }).map(g => ({ ...g, items: g.items.filter(m => (mOwner === 'Everyone' || m.owner === mOwner || m.who.includes(mOwner)) && (!mq || (m.title + ' ' + m.who + ' ' + m.kind).toLowerCase().includes(mq))) })).filter(g => g.items.length),
-      saved: drafts.map((d, i) => ({ d, i })).filter(x => x.d.version > 0).map(({ d, i }) => ({ title: d.title, status: d.status, meta: 'v' + d.version + ' · ' + (savedState[i] ? 'just now' : 'Sep 8') + ' · ' + d.company + (d.dirty ? ' · unsaved changes' : ''), go: () => this.setState({ draft: i }), bg: draftIndex === i ? 'var(--color-surface)' : 'transparent' })),
-      suggested: drafts.map((d, i) => ({ d, i })).filter(x => x.d.version === 0).map(({ d, i }) => ({ title: d.title, meta: (d.kind === 'Suggested follow-up' ? 'Review prepared Sep 8 · ' : d.kind + ' · ') + d.company + (d.dirty ? ' · unsaved changes' : ''), go: () => this.setState({ draft: i }), bg: draftIndex === i ? 'var(--color-surface)' : 'transparent' })),
+      saved: drafts.map((d, i) => ({ d, i })).filter(x => x.d.version > 0).map(({ d, i }) => ({ title: d.title, status: d.status, meta: 'v' + d.version + ' · ' + (savedState[i] ? 'just now' : collectedShort) + ' · ' + d.company + (d.dirty ? ' · unsaved changes' : ''), go: () => this.setState({ draft: i }), bg: draftIndex === i ? 'var(--color-surface)' : 'transparent' })),
+      suggested: drafts.map((d, i) => ({ d, i })).filter(x => x.d.version === 0).map(({ d, i }) => ({ title: d.title, meta: (d.kind === 'Suggested follow-up' ? 'Collected record · ' : d.kind + ' · ') + d.company + (d.dirty ? ' · unsaved changes' : ''), go: () => this.setState({ draft: i }), bg: draftIndex === i ? 'var(--color-surface)' : 'transparent' })),
       draft: { ...draft, refs: String(draft.refs) },
+      hasDraftRefs: Number(draft.refs) > 0,
+      draftFeedback: st.draftFeedback || null,
+      draftFeedbackClass: st.draftFeedbackClass || 'form-success',
       get meetingsEmpty() { return this.meetingGroups.length === 0; },
-      readingRules: [{ title: 'Missing spend is not zero', text: 'August and September have no actuals entered. They show as not entered, never as underspend.' }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'Leads, MQLs and SQLs come from the tracker; completed meetings from the CRM; recordings from Fathom. They are separate populations.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. Only the tracker decides qualification.' }, { title: 'Each source has its own date', text: 'Most sources were collected Sep 8. AI visibility is from Aug 24; later collections failed with server errors.' }],
+      readingRules: [{ title: 'Missing spend is not zero', text: 'August and September have no actuals entered. They show as not entered, never as underspend.' }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'Leads, MQLs and SQLs come from the tracker; completed meetings from the CRM; recordings from Fathom. They are separate populations.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. Only the tracker decides qualification.' }, { title: 'Each source has its own date', text: 'The extract was generated from the company brain (HubSpot, Fathom, Sheets, GA4).' }],
       sources: [],
       definitions: [{ source: 'Inbound', lead: 'Gated content (excl. spam/jobs); simple email form', mql: 'Demo request, meeting booked, pricing, contact form', sql: 'Meeting happened' }, { source: 'Outbound', lead: 'Prospect replied with positive engagement', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'Events', lead: 'Gave us contact info / badge scanned', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'RFP', lead: 'Said they want to send an RFI/RFP', mql: 'Sent RFI/RFP', sql: 'Invitation to start demo' }]
     };

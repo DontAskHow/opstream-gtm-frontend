@@ -6,8 +6,8 @@ Component.prototype.componentDidMount = function () {
   catch {this._showcaseReadFailed=true;this.setState({storageError:'Saved browser data could not be read. Existing stored data has not been replaced. Keep this tab open to retain new edits.'});}
   this._showcaseRestore=()=>{
     const p=new URL(location.href).searchParams;
-    const views=['today','performance','accounts','account','meetings','meeting','drafts','data'];
-    const patch={screen:views.includes(p.get('view'))?p.get('view'):'today',evidence:false,perf:'demand',accounts:'deals',meetings:'upcoming',period:'quarter',search:'',owner:'Everyone',sort:'weighted',meetingSearch:'',meetingOwner:'Everyone',start:'',end:'',draft:0,contributor:null};
+    const views=['briefing','pipeline','accounts','account','meetings','meeting','drafts','data'];
+    const patch={screen:views.includes(p.get('view'))?p.get('view'):'briefing',evidence:false,perf:'demand',accounts:'deals',meetings:'upcoming',period:'quarter',search:'',owner:'Everyone',sort:'weighted',meetingSearch:'',meetingOwner:'Everyone',start:'',end:'',draft:0,contributor:null};
     for(const k of showcaseRouteKeys) if(p.has(k)) patch[k]=k==='draft'?Number(p.get(k)):p.get(k);
     for(const [key,values] of Object.entries({perf:['demand','spend','web'],accounts:['deals','follow','leads'],meetings:['upcoming','past'],period:['six','quarter','year','custom'],sort:['weighted','close','days','name']}))if(!values.includes(patch[key]))patch[key]=values[0];
     if(!Number.isInteger(patch.draft)||patch.draft<0)patch.draft=0;
@@ -28,13 +28,14 @@ Component.prototype.componentDidMount = function () {
   addEventListener('resize',this._showcaseResize);
   addEventListener('keydown',this._showcaseKey);
   this._loadVerified();
+  fetch('/api/gmail/status').then(r=>r.json()).then(g=>{if(g.connected)this.setState({gmailEmail:g.email});}).catch(()=>{});
 };
 Component.prototype.componentDidUpdate = function (...args) {
   showcaseOriginal.update?.apply(this,args);
   const st=this.state;
   this._saveBrowserState();
   if(!this._showcaseRestoring){
-    const u=new URL(location.href);u.search='';u.searchParams.set('view',st.screen||'today');
+    const u=new URL(location.href);u.search='';u.searchParams.set('view',st.screen||'briefing');
     for(const k of showcaseRouteKeys)if(st[k]!=null&&st[k]!=='')u.searchParams.set(k,st[k]);
     if(st.screen==='account'&&st.accountId)u.searchParams.set('account',st.accountId);
     if(st.screen==='meeting'&&st.meetingId)u.searchParams.set('meeting',st.meetingId);
@@ -56,14 +57,14 @@ Component.prototype._saveBrowserState = function (retry=false) {
 Component.prototype.renderVals = function () {
   const props=this.props;this.props={...props,mobile:innerWidth<400};
   let v;try{v=showcaseOriginal.render.call(this);}finally{this.props=props;}
-  v.refreshLabel='View the collected review';v.reviewRequested=false;
-  v.refreshNote='This showcase uses the Sep 8 collection. Draft changes stay in this browser.';
-  v.refreshReview=this.go('today');
-  v.checkLabel=this.state.checking?'Checking…':'Check showcase data';
+  // The review is rebuilt by the scheduled 6-hour collection; there is no
+  // on-demand refresh in this workspace, so offer no button for one.
+  v.reviewRequested=false;v.refreshReview=null;v.refreshLabel='';
+  v.checkLabel=this.state.checking?'Checking…':'Check for updates';
   v.checkNote=this.state.showcaseCheck||'';
   v.checkUpdates=async()=>{
     this.setState({checking:true});
-    try{const r=await fetch('data/records.json',{cache:'no-store'});if(!r.ok)throw new Error();const records=await r.json();this.setState({records,checking:false,showcaseCheck:'Showcase collection available · Sep 8, 2026'});}
+    try{const r=await fetch('data/records.json',{cache:'no-store'});if(!r.ok)throw new Error();const records=await r.json();this.setState({records,checking:false,showcaseCheck:'Collection loaded'});}
     catch{this.setState({checking:false,showcaseCheck:'Could not load the collection. Try again.'});}
   };
   return v;

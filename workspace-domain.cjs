@@ -22,7 +22,7 @@ const workspaceDomain = (() => {
       const d = document({ ...original, company: company(original.accountIds) }, index);
       const retained = (verified.draftVersions[d.id] || []).map(x => ({ ...document({ ...x.draft, company: d.company }), savedAt: x.draft.updatedAt, origin: 'Retained source' }));
       const history = new Map(retained.map(h => [h.version, h]));
-      history.set(d.version, { ...d, history: undefined, savedAt: original.updatedAt || '2026-09-08', origin: 'Original supplied draft' });
+      history.set(d.version, { ...d, history: undefined, savedAt: original.updatedAt || String(records.generatedAt||'').slice(0,10) || null, origin: 'Original supplied draft' });
       const revision = revisions.drafts[d.id] || {};
       return { ...d, ...revision, history: [...history.values()], version: d.version + 1, updatedAt: revisions.updatedAt };
     });

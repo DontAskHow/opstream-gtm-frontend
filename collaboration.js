@@ -26,6 +26,13 @@ Component.prototype._loadWorkspace = async function() {
 };
 Component.prototype.componentDidMount = function() {
   collaborationOriginal.mount.call(this);this._loadWorkspace();
+  fetch('/api/gmail/status').then(r=>r.json()).then(g=>{if(g.connected)this.setState({gmailEmail:g.email});this.setState({gmailOAuthConfigured:!!g.oauthConfigured});}).catch(()=>{});
+  // Handle OAuth callback results from URL params
+  try{
+    const p=new URL(location.href).searchParams;
+    if(p.get('gmail')==='connected'){this.setState({draftFeedback:'Gmail connected. You can now send emails from your account.',draftFeedbackClass:'form-success'});history.replaceState(null,'',location.pathname+'?view=drafts');}
+    else if(p.get('gmail')==='error'){this.setState({draftFeedback:'Gmail connection failed. Try again.',draftFeedbackClass:'form-error'});history.replaceState(null,'',location.pathname+'?view=drafts');}
+  }catch{}
   this._workspaceFocus=()=>{if(this.state.workspaceReady)this._workspaceApi('/comments').then(data=>this.setState({sharedComments:data.comments})).catch(()=>{});};
   addEventListener('focus',this._workspaceFocus);
   if(typeof document!=='undefined')addEventListener('keydown',event=>{
@@ -93,18 +100,14 @@ Component.prototype._saveWorkspaceDraft = async function(draft=this._currentWork
 Component.prototype._sendWorkspaceDraft = async function() {
   if(this.state.draftSending||this.state.draftSaving)return;
   let draft=this._currentWorkspaceDraft();if(!draft)return;
-  this.setState({draftSending:true,draftFeedback:null});
-  try{
-    if(draft.dirty||!(this.state.remoteDrafts||[]).some(d=>d.id===draft.id))draft=await this._saveWorkspaceDraft(draft);
-    const prior=(this.state.sends||[]).find(r=>r.draftId===draft.id&&r.version===draft.version);
-    const operationId=prior?.id||this._pendingSend?.[draft.id+':'+draft.version]||crypto.randomUUID();
-    this._pendingSend={...this._pendingSend,[draft.id+':'+draft.version]:operationId};
-    const {receipt}=await this._workspaceApi('/drafts/'+encodeURIComponent(draft.id)+'/send',{version:draft.version,operationId,retry:prior?.status==='failed'});
-    this.setState({sends:[...(this.state.sends||[]).filter(r=>r.draftId!==receipt.draftId||r.version!==receipt.version),receipt],
-      draftFeedback:receipt.status==='sent'?'Sent from your connected Google mailbox.':receipt.error||'The send is in progress. Refresh to check its outcome.',
-      draftFeedbackClass:receipt.status==='sent'?'form-success':'form-error'});
-  }catch(error){this.setState({draftFeedback:error.message,draftFeedbackClass:'form-error'});try{const data=await this._workspaceApi('/bootstrap');this.setState({sends:data.sends});}catch{/* Keep the unconfirmed operation; the server prevents replay. */}}
-  finally{this.setState({draftSending:false});}
+  // Use the real Gmail API via /api/gmail/send. Requires explicit confirmation
+  // which the UI handles via sendConfirm state.
+  const to=(draft.recipients||'').trim();
+  const subject=(draft.subject||draft.title||'').trim();
+  const body=(draft.text||'').trim();
+  if(!to||!body){this.setState({draftFeedback:'Add a recipient and message before sending.',draftFeedbackClass:'form-error'});return;}
+  if(!this.state.gmailEmail){this.setState({draftFeedback:'Connect Gmail before sending.',draftFeedbackClass:'form-error'});return;}
+  this.setState({sendConfirm:{to,subject,body,draftId:draft.id}});
 };
 Component.prototype._connectWorkspaceProvider = async function(provider) {
   this.setState({connectionError:null,connectionBusy:provider});
@@ -158,14 +161,38 @@ Component.prototype._workspaceHistory = async function() {
   const draft=this._currentWorkspaceDraft();if(!draft)return;
   try{
     const result=await this._workspaceApi('/drafts/'+encodeURIComponent(draft.id)+'/history');
-    const distinct=[...new Map(result.history.map(d=>[d.version+':'+JSON.stringify([d.subject,d.text,d.rationale]),d])).values()].sort((a,b)=>b.version-a.version);
+    const history=Array.isArray(result?.history)?result.history:Array.isArray(result?.versions)?result.versions:[];
+    const distinct=[...new Map(history.map(d=>[d.version+':'+JSON.stringify([d.subject,d.text,d.rationale]),d])).values()].sort((a,b)=>b.version-a.version);
     this.setState({workspaceHistory:distinct,evidence:'workspace-history'});
   }catch(error){this.setState({draftFeedback:error.message,draftFeedbackClass:'form-error'});}
 };
 Component.prototype.renderVals = function() {
   const v=collaborationOriginal.render.call(this),s=this.state,ready=!!s.workspaceReady;
   v.workspaceLoading=!!s.workspaceLoading;v.workspaceError=s.workspaceError||s.preferencesError||'';v.reloadWorkspace=()=>this._loadWorkspace();
-  v.connectionsOpen=!!s.connectionsOpen;v.showConnections=()=>this.setState({connectionsOpen:true});v.hideConnections=()=>this.setState({connectionsOpen:false});
+  v.connectionsOpen=!!s.connectionsOpen;
+  v.showConnections=()=>this.setState({connectionsOpen:true});
+  v.hideConnections=()=>this.setState({connectionsOpen:false});
+  // Per-user Gmail OAuth: user connects their OWN Gmail
+  v.connectGmail=async()=>{
+    try{
+      const r=await fetch('/api/gmail/oauth/start');
+      const j=await r.json();
+      if(!r.ok)throw new Error(j.error||'OAuth not configured');
+      // Open Google sign-in in a popup; the callback redirects back to drafts
+      const w=window.open(j.authUrl,'gmail-oauth','width=500,height=600');
+      if(!w){window.location.href=j.authUrl;return;}
+      const check=setInterval(()=>{
+        try{
+          if(w.closed){clearInterval(check);window.location.reload();}
+        }catch{}
+      },1000);
+    }catch(e){this.setState({draftFeedback:'Could not start Gmail sign-in: '+(e.message||'error'),draftFeedbackClass:'form-error'});}
+  };
+  v.disconnectGmail=async()=>{
+    try{await fetch('/api/gmail/oauth/disconnect',{method:'POST'});this.setState({gmailEmail:null});window.location.reload();}
+    catch(e){this.setState({draftFeedback:'Could not disconnect: '+(e.message||'error'),draftFeedbackClass:'form-error'});}
+  };
+  v.gmailOAuthConfigured=!!s.gmailOAuthConfigured;
   v.signedInName=s.user?.name||s.user?.email||'';v.canImportBrowser=ready&&!!this._legacyBrowserRaw&&!s.browserImported;
   v.importLabel=s.importing?'Importing…':'Import my browser work';v.importBrowser=()=>this._importBrowser();
   v.downloadBrowserBackup=()=>this._workspaceDownload('opstream-browser-backup.json',this._legacyBrowserRaw,'application/json');
@@ -181,7 +208,7 @@ Component.prototype.renderVals = function() {
   v.slackTestDisabled=!!s.slackTestBusy||['sent','sending','unknown'].includes(slack.test?.status);
   v.slackTestLabel=s.slackTestBusy?'Sending test…':slack.test?.status==='failed'?'Retry test DM':'Send test DM to installer';
   v.slackTestReceipt=slack.test?(slack.test.status==='sent'?'Test DM accepted by Slack · '+slack.test.providerId:slack.test.error||'Test DM is in progress. Reload to check its outcome.'):'';
-  v.refreshNote='Source collection through September 8. Your saved work belongs to your signed-in account.';
+  v.refreshNote='The review refreshes automatically every 6 hours from the collected data. Latest review: '+v.collectedShort+'. Saved work stays in this browser.';
   if(!s.verified)return v;
   if(s.screen==='meeting'){
     const recording=[...s.records.companies.flatMap(c=>c.recordings),...s.records.unmatchedRecordings].find(r=>r.id===s.meetingId);
@@ -204,7 +231,7 @@ Component.prototype.renderVals = function() {
     p.saveComment=()=>this._saveWorkspaceComment(p.id);
     p.cancelComment=()=>{this._editComment(p.id,{text:'',tags:[],editingId:null,commentId:null,operationId:null,signature:null,error:null,hideSuggestions:true});this.setState({commentPriorityId:null});};
   }
-  v.priorityNotice=s.preferencesError?s.preferencesError:s.preferencesSaving?'Saving your preferences…':ready?'Priority preferences are saved to your account.':'';
+  v.priorityNotice=s.preferencesError?s.preferencesError:s.preferencesSaving?'Saving your preferences…':ready?'Priority preferences are saved in this browser.':'';
   const drafts=this._workspaceDrafts(),selectedDraft=this._currentWorkspaceDraft(),purpose=s.draftPurpose||selectedDraft?.purpose||'email';
   v.draftTabs=Object.entries(purposeNames).map(([id,label])=>({label,count:drafts.filter(d=>d.purpose===id).length,selected:purpose===id,go:()=>this._selectWorkspaceDraft(drafts.find(d=>d.purpose===id)?.id,id)}));
   const visible=drafts.filter(d=>d.purpose===purpose);v.draftListTitle=purposeNames[purpose]||'Drafts';v.draftsEmpty=!visible.length;
@@ -216,7 +243,7 @@ Component.prototype.renderVals = function() {
     const draft=selectedDraft,id=draft.id,edit=patch=>this._editWorkspaceDraft(id,patch),receipt=(s.sends||[]).find(r=>r.draftId===id&&r.version===draft.version);
     v.draft={...draft,refs:draft.supportRefs.length,versionLabel:(draft.version?'Version '+draft.version:'Not saved')+(draft.dirty?' · unsaved changes':'')};
     v.isEmailDraft=draft.purpose==='email';v.isCampaignDraft=draft.purpose==='campaign';v.subjectLabel=draft.purpose==='internal-note'?'Title':'Subject';v.messageLabel=draft.purpose==='internal-note'?'Note':'Message';
-    v.senderLabel=google.connected?google.email:'No Google mailbox connected';v.senderActionLabel=google.connected?'Manage connection':'Connect Google';
+    v.senderLabel=s.gmailEmail||'Gmail not connected — connect your Gmail to send';v.senderActionLabel=s.gmailEmail?'Manage connection':'Connect Gmail';
     v.campaignSenders=s.campaignSenders||[];v.editCampaignSender=e=>edit({campaignSender:e.target.value});
     v.editSubject=e=>edit({subject:e.target.value,title:e.target.value});v.editText=e=>edit({text:e.target.value});v.editRecipients=e=>edit({recipients:e.target.value});v.editCc=e=>edit({cc:e.target.value});v.editBcc=e=>edit({bcc:e.target.value});v.editRationale=e=>edit({rationale:e.target.value});v.editInternalNotes=e=>edit({internalNotes:e.target.value});v.editStatus=e=>edit({status:e.target.value});
     const contacts=(s.records.companies||[]).filter(c=>draft.accountIds.includes('company:'+c.id)).flatMap(c=>c.contacts||[]).filter(c=>c.email);
@@ -225,11 +252,47 @@ Component.prototype.renderVals = function() {
     v.saveDisabled=!ready||!!s.draftSaving||(!draft.dirty&&(s.remoteDrafts||[]).some(d=>d.id===id));v.saveLabel=s.draftSaving?'Saving…':'Save version '+(draft.version+1);
     v.saveDraft=()=>this._saveWorkspaceDraft().catch(()=>{});
     v.sendDisabled=!ready||!google.connected||!!s.draftSending||!!s.draftSaving||!draft.subject.trim()||!draft.recipients.trim()||!draft.text.trim()||(!draft.dirty&&receipt&&['sent','sending','unknown'].includes(receipt.status));
-    v.sendLabel=s.draftSending?'Sending…':!draft.dirty&&receipt?.status==='sent'?'Sent':!draft.dirty&&receipt?.status==='unknown'?'Check Gmail':!draft.dirty&&receipt?.status==='failed'?'Retry send':'Send email';
+    v.sendLabel=s.draftSending?'Sending…':!(google.connected||s.gmailEmail)?'Connect Gmail to send':'Send via Gmail';
+    v.sendDisabled=!!s.draftSending||!(google.connected||s.gmailEmail)||!(draft.recipients||'').trim()||!(draft.text||'').trim();
+    v.sendConfirm=s.sendConfirm||null;
+    v.cancelSend=()=>this.setState({sendConfirm:null});
+    v.confirmSend=async()=>{
+      const c=this.state.sendConfirm;if(!c||this.state.draftSending)return;
+      this.setState({draftSending:true,sendConfirm:null,draftFeedback:null});
+      try{
+        const r=await fetch('/api/gmail/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({to:c.to,subject:c.subject,body:c.body,confirmed:true})});
+        const j=await r.json();if(!r.ok)throw new Error(j.error||'Send failed');
+        this.setState({draftSending:false,draftFeedback:'Sent via Gmail to '+c.to+'.',draftFeedbackClass:'form-success',hasSendReceipt:true,sendReceiptLabel:'Sent '+new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})+' to '+c.to+'.'});
+      }catch(e){this.setState({draftSending:false,draftFeedback:'Could not send: '+(e.message||'error'),draftFeedbackClass:'form-error'});}
+    };
     v.sendDraft=()=>this._sendWorkspaceDraft();v.hasSendReceipt=!!receipt;v.sendReceiptLabel=receipt?({sent:'Gmail accepted version '+receipt.version+' · '+shortDate(receipt.updatedAt),unknown:'The send outcome is uncertain. Check Sent Mail before sending another version.',sending:'Waiting for Gmail’s response.',failed:receipt.error}[receipt.status]):'';
     v.evDraftRefs=()=>this._verifiedOpenRefs(draft.supportRefs,'Records behind this draft');
     v.exportDraft=()=>{if(draft.purpose==='campaign')this.csv('lemlist-campaign-draft.csv',['sender','subject','body'],[[draft.campaignSender,draft.subject,draft.text]]);else this.csv('opstream-draft.csv',['Field','Value'],[['Subject',draft.subject],['Purpose',draft.purpose],['To',draft.recipients],['Cc',draft.cc],['Bcc',draft.bcc],['Message',draft.text],['Internal notes',draft.internalNotes],['Review context',draft.rationale],['Version',draft.version]]);};
     v.copyCampaign=async()=>{try{await navigator.clipboard.writeText('Subject: '+draft.subject+'\n\n'+draft.text);this.setState({draftFeedback:'Campaign copy copied. Paste it into your LemList sequence.',draftFeedbackClass:'form-success'});}catch{this.setState({draftFeedback:'Clipboard access is unavailable. Use Export to download the campaign copy.',draftFeedbackClass:'form-error'});}};
+    v.copyEmail=async()=>{try{await navigator.clipboard.writeText('To: '+draft.recipients+'\nSubject: '+draft.subject+'\n\n'+draft.text);this.setState({draftFeedback:'Email copied. Paste it into Gmail to send.',draftFeedbackClass:'form-success'});}catch{this.setState({draftFeedback:'Clipboard access is unavailable. Use Export to download the email.',draftFeedbackClass:'form-error'});}};
+    v.generateLabel=s.generating?'Generating…':'Generate with AI';
+    v.generateDisabled=!!s.generating;
+    v.generateEmail=async()=>{
+      if(this.state.generating)return;
+      const d=this._currentWorkspaceDraft()||{};
+      const ctx=['Write a follow-up email for Hollie at Opstream.',
+        'Company: '+(d.accountIds?d.accountIds.join(', '):'unknown'),
+        'Recipient(s): '+(d.recipients||'unknown'),
+        d.rationale?'Context: '+d.rationale:'',
+        d.text?'Current draft text (improve or rewrite): '+String(d.text).slice(0,2000):'No draft text yet — write from scratch.',
+        'Return the email with a clear subject line first (as "Subject: ..."), then the body. Keep it concise and professional. Sign as Hollie.'].filter(Boolean).join('\n');
+      this.setState({generating:true,draftFeedback:null});
+      try{
+        const r=await fetch('/api/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:ctx,history:[]})});
+        const j=await r.json();if(!r.ok)throw new Error(j.error||'Generation failed');
+        const answer=j.answerText||'';
+        const m=answer.match(/^Subject:\s*(.+)$/im);
+        const subject=m?m[1].trim():(d.subject||d.title||'');
+        const body=m?answer.slice(m.index+m[0].length).trim():answer;
+        this._editWorkspaceDraft(d.id,{subject,text:body});
+        this.setState({generating:false,draftFeedback:'AI draft generated. Review and edit before sending.',draftFeedbackClass:'form-success'});
+      }catch(e){this.setState({generating:false,draftFeedback:'Could not generate: '+(e.message||'error'),draftFeedbackClass:'form-error'});}
+    };
     v.showWorkspaceHistory=()=>this._workspaceHistory();v.reloadWorkspaceDraft=async()=>{try{const result=await this._workspaceApi('/drafts/'+encodeURIComponent(id));const edits={...this.state.draftEdits};delete edits[id];this.setState({remoteDrafts:[...(this.state.remoteDrafts||[]).filter(d=>d.id!==id),result.draft],draftEdits:edits,draftSaveConflict:false,draftFeedback:null});}catch(error){this.setState({draftFeedback:error.message,draftFeedbackClass:'form-error'});}};
     v.saveDraftCopy=()=>{this._newWorkspaceDraft(draft.purpose,{...draft,id:crypto.randomUUID(),title:draft.title+' (copy)',subject:draft.subject,version:0,history:[]});return this._saveWorkspaceDraft().catch(()=>{});};
   }
@@ -244,7 +307,7 @@ Component.prototype.renderVals = function() {
       v.ev={kicker:'Saved versions',title:'Draft version history',meta:'Original and personal versions remain available.',rows:(s.workspaceHistory||[]).map(d=>({label:'Version '+d.version+' · '+(d.updatedAt||d.savedAt||''),value:[d.subject||d.title,d.recipients,d.text,d.internalNotes,d.rationale].filter(Boolean).join('\n\n')})),ids:selectedDraft?.id||'',note:'Saved to your account.',missing:false,hasRows:true};
       v.exportEvidence=()=>this._workspaceDownload('draft-history.json',JSON.stringify(s.workspaceHistory,null,2),'application/json');
     }
-    v.proposeCorrection=()=>this._newWorkspaceDraft('internal-note',{title:'Correction: '+v.ev.title,subject:'Correction: '+v.ev.title,text:'Describe the correction to '+v.ev.title+'.',internalNotes:'Keep the original record and supporting evidence until the correction is verified.',supportRefs:refs,rationale:v.ev.ids});
+    v.proposeCorrection=()=>{const title='Correction: '+v.ev.title;const existing=this._workspaceDrafts().find(d=>d.title===title&&d.purpose==='internal-note');if(existing){this.setState({screen:'drafts',draftId:existing.id,draftPurpose:existing.purpose,evidence:false,draftFeedback:'A correction draft for this record already exists — opened it instead of creating a duplicate.',draftFeedbackClass:'form-success'});window.scrollTo(0,0);return;}this._newWorkspaceDraft('internal-note',{title,subject:title,text:'Describe the correction to '+v.ev.title+'.',internalNotes:'Keep the original record and supporting evidence until the correction is verified.',supportRefs:refs,rationale:v.ev.ids});};
     this._readableEvidence=v.ev;
   }else this._readableEvidence=null;
   return v;
