@@ -159,6 +159,9 @@ def bucket_of_stage(label, buckets):
 def bucket_of_prob(prob):
     if prob is None:
         return None
+    # HubSpot stores hs_deal_stage_probability as 0-1; the Forecast tab thinks in percent.
+    if prob <= 1:
+        prob = prob * 100
     if prob >= 70:
         return "commit"
     if prob >= 30:
@@ -173,7 +176,7 @@ def main():
     if not os.path.isfile(DB):
         print("brain.db is missing at %s. Refusing to write synthetic data." % DB, file=sys.stderr)
         return 1
-    now = datetime.now(timezone.utc).isoformat()
+    now = os.environ.get("GTM_GENERATED_AT") or datetime.now(timezone.utc).isoformat()
     con = sqlite3.connect(DB)
     cur = con.cursor()
 
@@ -240,8 +243,10 @@ def main():
             raw_stage = str(hd.get("stage") or "").strip()
             if raw_stage and not raw_stage.isdigit() and "probability" not in raw_stage.lower():
                 hub_label = raw_stage
-            elif raw_stage:
-                hub_label = "HubSpot stage id %s" % raw_stage
+            elif hd.get("probability") is not None:
+                prob = hd["probability"]
+                prob = prob * 100 if prob <= 1 else prob
+                hub_label = "a stage at %d%% probability" % round(prob)
             else:
                 hub_label = "not available"
             mismatches.append({
