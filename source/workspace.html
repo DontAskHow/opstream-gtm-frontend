@@ -13,7 +13,7 @@
 .priority-content p{margin:0;font-size:15px;line-height:1.55;text-wrap:pretty}
 .priority-content .priority-caveat,.priority-caveat{font-size:14px;line-height:1.5;color:var(--color-neutral-700);overflow-wrap:anywhere}
 .sc-interp{overflow-wrap:anywhere}
-.take-card{padding:16px 20px;margin:8px 0 4px;border-left:3px solid var(--color-accent);background:var(--color-surface);border-radius:0 10px 10px 0}.stat-card{border:1px solid var(--color-divider);border-radius:12px;padding:12px 16px;background:var(--color-surface);min-width:0}.stat-card h3{font-size:14px;margin:0 0 4px;overflow-wrap:break-word}.stat-card .stat-line{font-size:13px;color:var(--color-neutral-700)}.stat-card .stat-note{font-size:12px;color:var(--color-neutral-600);margin:6px 0 0}
+.take-card{padding:16px 20px;margin:8px 0 4px;border-left:3px solid var(--color-accent,#0f766e);background:var(--color-surface);border-radius:0 10px 10px 0}.stat-card{border:1px solid var(--color-divider);border-radius:12px;padding:12px 16px;background:var(--color-surface);min-width:0}.stat-card h3{font-size:14px;margin:0 0 4px;overflow-wrap:break-word}.stat-card .stat-line{font-size:13px;color:var(--color-neutral-700)}.stat-card .stat-note{font-size:12px;color:var(--color-neutral-600);margin:6px 0 0}
 .priority-context{display:flex;flex-wrap:wrap;column-gap:18px;row-gap:6px;font-size:14px;line-height:1.5}
 .priority-context strong{font-weight:600}
 .priority-actions,.priority-feedback{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -151,10 +151,10 @@ select.input{min-height:44px}
 .show-checklist li small{display:block;color:var(--color-neutral-700);font-size:12px}
 .past-shows summary{cursor:pointer;font-size:14px;padding:12px 0}.past-shows p{margin:0;padding:8px 0;border-bottom:1px solid var(--color-divider);font-size:14px}
 .header-photo{display:inline-block;width:28px;height:28px;border-radius:50%;background-size:cover;background-position:center;background-color:var(--color-surface)}
-.header-initials{display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--color-text);color:var(--color-bg);align-items:center;justify-content:center;font-size:11px;font-weight:700}
+.header-initials{display:inline-flex;width:28px;height:28px;border-radius:50%;background:#0f766e;color:#fff;align-items:center;justify-content:center;font-size:11px;font-weight:700}
 @media(max-width:900px){.home-grid{grid-template-columns:minmax(0,1fr)}}
 </style></head>
-<body>
+<body><div id="topBanner" role="note" style="padding:10px 20px;background:#143e32;color:white;font:14px sans-serif;text-align:center">Company data · HubSpot, Fathom, Sheets, GA4 · Drafts stay in your browser · Nothing is sent without approval</div>
 <x-dc>
 <helmet>
 <link rel="stylesheet" href="_ds/modernist-b33a3025-c7ab-4acb-99c2-5c4275b50711/styles.css">
@@ -201,7 +201,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
   </sc-if>
 
   <sc-if value="{{ toast }}">
-    <div role="status" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--color-text);color:var(--color-bg);padding:10px 18px;border-radius:8px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:1000;max-width:90vw">{{ toast }}</div>
+    <div role="status" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#143e32;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:1000;max-width:90vw">{{ toast }}</div>
   </sc-if>
 
   <main style="flex:1;width:100%;max-width:1320px;margin:0 auto;padding:28px 24px {{ mainPadBottom }};box-sizing:border-box">
@@ -387,6 +387,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                 <sc-for list="{{ showsPast }}" as="sh"><p><strong>{{ sh.name }}</strong> · {{ sh.pastLine }} <sc-if value="{{ sh.hasFollowDrafts }}"><button class="text-control" onClick="{{ sh.followDraftsGo }}">{{ sh.followDraftsLabel }}</button> · </sc-if><button class="text-control" onClick="{{ sh.linkedinGo }}" disabled="{{ sh.linkedinDisabled }}">{{ sh.linkedinLabel }}</button></p></sc-for>
               </details></sc-if>
               <sc-if value="{{ hasUnattributed }}"><p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ unattributedNote }}</p></sc-if>
+              <sc-if value="{{ hasOutboundHomeNote }}"><p style="margin:6px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ outboundHomeNote }}</p></sc-if>
               <p style="margin:6px 0 0;font-size:12px;color:var(--color-neutral-700)">Posts are drafts. Nothing is posted to LinkedIn from here.</p>
             </section>
           </div>
@@ -629,6 +630,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div><div style="font-size:12px;color:var(--color-neutral-700)">{{ m.label }}</div><div style="font-size:24px;font-weight:700">{{ m.value }}</div></div>
             </sc-for>
           </div>
+          <p class="book-rule" style="margin:8px 0 0;font-size:13px;color:var(--color-neutral-700);line-height:1.5">{{ bookRuleLine }}</p>
         </section>
         <sc-if value="{{ briefingDecisions.length }}">
           <section style="display:flex;flex-direction:column">
@@ -662,7 +664,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
 
         <sc-if value="{{ perfDemand }}" hint-placeholder-val="{{ true }}">
           <section style="padding-top:8px">
-            <div class="section-rule"><h6 style="margin:0">Marketing</h6><span style="font-size:12px;color:var(--color-neutral-700)">This week, a 6-week average, and the quarter. America/Phoenix.</span></div>
+            <div class="section-rule"><h6 style="margin:0">Marketing</h6><span style="font-size:12px;color:var(--color-neutral-700)">Last 7 days, a 6-week average, and the quarter. America/Phoenix.</span></div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px 24px;padding:8px 0 16px">
               <sc-for list="{{ marketingIntervals }}" as="m" hint-placeholder-count="3">
                 <div style="min-width:0">
@@ -886,7 +888,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             </sc-for></tbody>
           </table></div>
           <sc-if value="{{ dealsEmpty }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:14px;color:var(--color-neutral-800)"><span>{{ emptyNote }}</span><button onClick="{{ clearSearch }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">Clear search and owner</button></div></sc-if>
-          <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ dealsCount }} · Owner pipeline sheets, collected {{ collectedShort }}. ARR and probability are owner-entered; the CRM may differ. Days in stage remain the recorded owner values.</p>
+          <p class="book-rule" style="margin:0 0 6px;font-size:12px;color:var(--color-neutral-700)">{{ bookRuleLine }}</p><p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ dealsCount }} · Owner pipeline sheets, collected {{ collectedShort }}. ARR and probability are owner-entered; the CRM may differ. Days in stage remain the recorded owner values.</p>
         </sc-if>
 
         <sc-if value="{{ accountsFollow }}" hint-placeholder-val="{{ false }}"><sc-if value="{{ followUpsEmpty }}"><p>No follow-ups match these filters.</p></sc-if>

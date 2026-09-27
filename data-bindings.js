@@ -20,6 +20,8 @@ Component.prototype._loadVerified = async function () {
     let proposals=[];try{const pr=await fetch('data/crm-proposals.json',{cache:'no-store'});if(pr.ok){const pj=await pr.json();proposals=Array.isArray(pj)?pj:[];}}catch{}
     let sheetReview=null;try{sheetReview=await read('sheet-review');}catch{}
     this.setState({verified,records,verifiedEvidence:evidence,draftSeeds,sheetLabels,hollie,agentBrief,heartbeat,heartbeatFixes,proposals,sheetReview,verifiedError:null,checking:false,checkedAt:workspaceModel.formatTime(new Date().toISOString())});
+    const banner=typeof document!=='undefined'&&document.getElementById('topBanner');
+    if(banner){const cDate=records.generatedAt?workspaceModel.formatDateTime(records.generatedAt):'';banner.textContent='Company data · HubSpot, Fathom, Sheets, GA4'+(cDate?' · collected '+cDate:'')+' · Drafts stay in your browser · Nothing is sent without approval';}
   } catch {this.setState({checking:false,verifiedError:'The collected data could not be loaded. Reload the page to try again.'});}
 };
 Component.prototype._verifiedRange = function () {
@@ -183,6 +185,9 @@ Component.prototype.renderVals = function () {
   v.hubspotOnlyValue=f.number(unlisted.count)+' · '+moneyShort(unlisted.amount);
   v.hubspotOnlyNote='In HubSpot, not on the Sheet. Shown for review. Not included in the open pipeline total.';
   v.showHubspotOnly=unlisted.count>0;
+  const mkRule=workspaceModel.moneyK.bind(workspaceModel);
+  const excluded=[renewals.count?f.number(renewals.count)+' renewals and customer expansions ('+mkRule(renewals.amount)+', renewal and customer-success pipelines)':'',held.count?f.number(held.count)+' On Hold ('+mkRule(held.amount)+')':'',unlisted.count?f.number(unlisted.count)+' HubSpot '+(unlisted.count===1?'deal':'deals')+' not on the Sheet ('+mkRule(unlisted.amount)+')':''].filter(Boolean);
+  v.bookRuleLine='Open pipeline is the '+f.number(pipe.count)+' active new-business rows on the master Sheet, '+moneyShort(pipe.openAmount)+'. A past close date stays in. Not included: '+(excluded.length?excluded.join('; '):'nothing else')+'. Closed and Disqualified rows are not pipeline.';
   const mk=workspaceModel.moneyK.bind(workspaceModel);
   const mkt=s.marketing||{},budget=mkt.spend||{};
   const budgetMonths=budget.connected?budget.months:(d.report.spend.months||[]);
@@ -195,7 +200,7 @@ Component.prototype.renderVals = function () {
   v.eventPayments=((mkt.shows||{}).unattributed||[]).map(u=>({vendor:u.vendor,amount:mk(u.amount)}));
   v.hasEventPayments=v.eventPayments.length>0;
   const outbound=mkt.outbound||{};
-  v.ads=(outbound.campaignStats||[]).map(c=>({name:c.name+' · LemList',sent:f.number(c.sent),replies:f.number(c.replied),bounces:f.number(c.bounced),note:'Collected '+v.collectedShort+'.'}));
+  v.ads=(outbound.campaignStats||[]).map(c=>({name:c.name+' · LemList',sent:f.number(c.sent),replies:f.number(c.replied),bounces:f.number(c.bounced),note:[c.opened!=null?f.number(c.opened)+' opened':'',c.delivered!=null?f.number(c.delivered)+' delivered':'',c.meetings!=null?f.number(c.meetings)+' meetings booked':'',c.status||''].filter(Boolean).join(' · ')+'. LemList, collected '+v.collectedShort+'.'}));
   for(const a of mkt.ads||[])v.ads.push({name:a.name,sent:f.number(a.impressions),replies:f.number(a.conversions),bounces:'—',note:(a.window?a.window+' · ':'')+mk(a.spend)+' spend · '+f.number(a.clicks)+' clicks. Platform conversions, not qualified leads.'});
   v.outboundNote=outbound.connected?'':(outbound.reason||'LemList is not connected yet.');
   v.hasOutboundNote=!!v.outboundNote;
@@ -228,7 +233,7 @@ Component.prototype.renderVals = function () {
   if(!v.showWeb&&v.perfTabs)v.perfTabs=v.perfTabs.filter(t=>t.id!=='web');
   if(!v.showSpend&&v.perfTabs)v.perfTabs=v.perfTabs.filter(t=>t.id!=='spend');
   const gaPages=(mkt.web&&mkt.web.pages&&mkt.web.pages.length)?mkt.web.pages:webPages;
-  v.landing=gaPages.slice(0,10).map(p=>({page:p.name,visits:f.number(p.sessions),engaged:f.number(p.engagedSessions),ke:p.keyEvents==null?'—':f.number(p.keyEvents)}));
+  v.landing=gaPages.slice(0,10).map(p=>({page:(p.display||p.name)+(p.strayHtml?' — the link ends in stray HTML “'+p.strayHtml+'”':''),visits:f.number(p.sessions),engaged:f.number(p.engagedSessions),ke:p.keyEvents==null?'—':f.number(p.keyEvents)}));
   v.webGapNote=(mkt.web&&!mkt.web.connected)?mkt.web.reason:'';v.hasWebGapNote=!!v.webGapNote;
   v.showLanding=(v.landing||[]).length>0;
   v.showWebBlock=v.showWebWeeks||v.showWebSources||v.showLanding;
@@ -248,7 +253,7 @@ Component.prototype.renderVals = function () {
   ];
   if(s.perf==='web')v.scopeNote='Website: '+webRange+' · www.opstream.ai only.'+(typeof web.aiCount==='number'?' AI: '+f.number(web.aiCount)+' completed monitored answers'+(web.aiEnd?' through '+f.date(web.aiEnd):'')+'.':'')+' No period filter applies.';
   else if(s.perf==='spend')v.scopeNote='Spend: Jan – Dec 2026, as entered in the workbook. Campaign counts use the '+v.collectedShort+' collection; advertising dates are shown per source.';
-  else v.scopeNote='The period '+period+' applies to new leads, meetings booked and meetings held. Open pipeline is the current book. All dates are America/Phoenix.';
+  else v.scopeNote='The period '+period+' applies to leads, MQLs and SQLs (Lead Tracker dates) and to completed meetings. Open pipeline is the current book. All dates are America/Phoenix.';
   const query=(s.search||'').trim().toLowerCase(),owner=s.owner||'Everyone',todayPhx=workspaceModel.phoenixToday();
   const prelim=opportunities.map(o=>{
     const company=workspaceModel.companyForOpportunity(o,s.records);
