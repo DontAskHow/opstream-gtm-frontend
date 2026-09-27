@@ -15,6 +15,7 @@ import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
@@ -508,7 +509,8 @@ function htmlify(raw) {
 }
 
 // --- static file serving (same policy as scripts/preview.mjs) ---
-const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.ttf': 'font/ttf' };
+const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.txt': 'text/plain; charset=utf-8', '.ttf': 'font/ttf' };
+const compressible = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.txt', '.map']);
 function serveStatic(req, res) {
   let file;
   try { file = path.resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://localhost').pathname)); }
@@ -516,8 +518,15 @@ function serveStatic(req, res) {
   if (file !== root && !file.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
   if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404).end(); return; }
-  res.setHeader('Content-Type', types[path.extname(file)] || 'application/octet-stream');
+  const ext = path.extname(file);
+  res.setHeader('Content-Type', types[ext] || 'application/octet-stream');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Vary', 'Accept-Encoding');
+  if (compressible.has(ext) && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+    res.setHeader('Content-Encoding', 'gzip');
+    fs.createReadStream(file).pipe(zlib.createGzip()).pipe(res);
+    return;
+  }
   fs.createReadStream(file).pipe(res);
 }
 

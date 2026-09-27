@@ -192,6 +192,7 @@ Component.prototype.renderVals = function() {
     try{await fetch('/api/gmail/oauth/disconnect',{method:'POST'});this.setState({gmailEmail:null});window.location.reload();}
     catch(e){this.setState({draftFeedback:'Could not disconnect: '+(e.message||'error'),draftFeedbackClass:'form-error'});}
   };
+  v.connectGmailAction=s.gmailOAuthConfigured?v.connectGmail:v.showConnections;
   v.gmailOAuthConfigured=!!s.gmailOAuthConfigured;
   v.signedInName=s.user?.name||s.user?.email||'';v.canImportBrowser=ready&&!!this._legacyBrowserRaw&&!s.browserImported;
   v.importLabel=s.importing?'Importing…':'Import my browser work';v.importBrowser=()=>this._importBrowser();
@@ -296,7 +297,7 @@ Component.prototype.renderVals = function() {
     v.showWorkspaceHistory=()=>this._workspaceHistory();v.reloadWorkspaceDraft=async()=>{try{const result=await this._workspaceApi('/drafts/'+encodeURIComponent(id));const edits={...this.state.draftEdits};delete edits[id];this.setState({remoteDrafts:[...(this.state.remoteDrafts||[]).filter(d=>d.id!==id),result.draft],draftEdits:edits,draftSaveConflict:false,draftFeedback:null});}catch(error){this.setState({draftFeedback:error.message,draftFeedbackClass:'form-error'});}};
     v.saveDraftCopy=()=>{this._newWorkspaceDraft(draft.purpose,{...draft,id:crypto.randomUUID(),title:draft.title+' (copy)',subject:draft.subject,version:0,history:[]});return this._saveWorkspaceDraft().catch(()=>{});};
   }
-  const wrapEntry=action=>()=>{this.setState({draftId:null,draftPurpose:null});const count=(this.state.newDrafts||[]).length;action();const additions=this.state.newDrafts||[];if(additions.length>count){const raw=additions[count],company=(s.records.companies||[]).find(c=>c.name===raw.company);const d=workspaceDomain.document({...raw,id:crypto.randomUUID(),subject:'Following up'+(raw.company?' · '+raw.company:''),text:'Hi,\n\nI wanted to follow up and see whether there are any questions we can help answer. What would be the most useful next step for your team?\n\nThank you.',recipients:'',accountIds:company?['company:'+company.id]:[]});this.setState({newDrafts:additions.map((x,i)=>i===count?d:x),draftId:d.id,draftPurpose:'email'});}};
+  const wrapEntry=action=>()=>{this.setState({draftId:null,draftPurpose:null});const count=(this.state.newDrafts||[]).length;action();const additions=this.state.newDrafts||[];if(additions.length>count){const raw=additions[count],company=(s.records.companies||[]).find(c=>c.name===raw.company);const d=workspaceDomain.document({...raw,id:raw.id||crypto.randomUUID(),subject:raw.subject||('Following up'+(raw.company?' · '+raw.company:'')),text:String(raw.text||''),recipients:raw.recipients||'',accountIds:company?['company:'+company.id]:(raw.accountIds||[])});this.setState({newDrafts:additions.map((x,i)=>i===count?d:x),draftId:d.id,draftPurpose:'email'});}};
   if(v.acct?.draftGo)v.acct.draftGo=wrapEntry(v.acct.draftGo);if(v.mtg?.draftGo)v.mtg.draftGo=wrapEntry(v.mtg.draftGo);
   for(const follow of v.followUps||[])follow.draftGo=wrapEntry(follow.draftGo);
   if(s.evidence){

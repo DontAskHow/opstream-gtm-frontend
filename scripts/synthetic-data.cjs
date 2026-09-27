@@ -16,6 +16,9 @@ for(let i=0;i<4;i++){
  drafts.push({id:'draft-'+id,purpose:i===3?'internal-note':'email',title:name+' — next steps',subject:name+' — next steps',text:'Hi Taylor,\n\nHere is a fictional follow-up for the demo. Shall we agree on one pilot workflow and its success criteria?\n\nThanks,\n'+owner,rationale:'Synthetic discovery follow-up.',recipients:'taylor@example.com',cc:'',bcc:'',internalNotes:'Demo only.',campaignSender:'',company:name,accountIds:['company:'+id],supportRefs:[ref],refs:[ref],status:'Draft',version:1,updatedAt:'2026-09-08T12:00:00Z',history:[],contentMode:'default'});
  fs.mkdirSync('out/data/transcripts',{recursive:true});fs.writeFileSync('out/data/transcripts/'+recording.id+'.json',JSON.stringify([{speaker:owner,timestamp:'00:00',text:'This is a synthetic demonstration transcript.'},{speaker:'Taylor Example',timestamp:'00:10',text:'Let us define the pilot and success criteria.'}]));
 }
+const htmlNote='<p>Pilot scope is <strong>one workflow</strong>.</p><script>alert(1)</script><p>Next step is a written plan.</p>';
+companies[0].notes.push({id:'note-html-demo-0',date:'2026-09-21',text:htmlNote,owner:companies[0].owner,refs:['demo-evidence-0']});
+companies[0].notes.push({id:'note-html-demo-0-dup',date:'2026-09-21',text:htmlNote,owner:companies[0].owner,refs:['demo-evidence-0']});
 function extraAccount(spec){
  const id=spec.id,ref='demo-evidence-'+id;
  evidence[ref]={ref,nativeId:id,source:'Synthetic CRM',capturedAt:'2026-08-01',title:spec.name+' record',content:'Synthetic record for metric checks.',fields:{owner:spec.owner,stage:spec.stage||'No stage',amount:spec.amount}};
@@ -26,6 +29,7 @@ function extraAccount(spec){
 }
 const alex=owners[0].name;
 extraAccount({id:'summit',name:'Summit Peak',owner:alex,stage:'Decision',dealName:'Summit Peak expansion',amount:500000,probability:50,close:'2026-12-01',lastContact:'2026-04-20',daysInStage:337});
+companies.find(c=>c.id==='summit').meetings.push({id:'meeting-summit-future',title:'Summit Peak planning',start:'2026-10-20T18:00:00Z',outcome:null});
 extraAccount({id:'harbor',name:'Harbor and Co',owner:alex,stage:'Discovery/RFP received',dealName:'Harbor and Co pilot',amount:350000,probability:40,close:'2026-12-01',lastContact:'2026-09-20',daysInStage:12});
 extraAccount({id:'nostage',name:'Blank Stage Co',owner:'Owner 8675309',stage:'',dealName:'Blank Stage Co pilot',amount:120000,probability:null,close:'2026-12-15',lastContact:'2026-09-20',daysInStage:null});
 extraAccount({id:'past',name:'Past Close Co',owner:alex,stage:'Discovery/RFP received',dealName:'Past Close Co pilot',amount:200000,probability:20,close:'2026-01-15',lastContact:'2026-01-10',daysInStage:400});

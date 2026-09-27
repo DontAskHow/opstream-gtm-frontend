@@ -49,6 +49,17 @@ const workspaceModel = {
     const time=new Intl.DateTimeFormat('en-US',{timeZone:this.PHOENIX,hour:'numeric',minute:'2-digit'}).format(when);
     return date+' · '+time+' Phoenix';
   },
+  // CRM notes are stored as HTML. Show the words, never the tags or scripts.
+  plainNote(value) {
+    let s=String(value??'');
+    if(!/<[a-z!/]/i.test(s))return s;
+    s=s.replace(/<script[\s\S]*?<\/script>/gi,'').replace(/<style[\s\S]*?<\/style>/gi,'');
+    s=s.replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li|h[1-6]|tr|blockquote)>/gi,'\n');
+    s=s.replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi,'$1 ');
+    s=s.replace(/<[^>]+>/g,'');
+    s=s.replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>').replace(/&quot;/gi,'"').replace(/&#39;|&apos;/gi,"'");
+    return s.replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').replace(/[ \t]{2,}/g,' ').trim();
+  },
   formatTime(value) {
     const raw=String(value??'').trim();if(!raw)return '';
     const parsed=Date.parse(raw.length===16?raw+':00Z':raw);
