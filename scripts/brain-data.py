@@ -50,6 +50,30 @@ def owner_label(hubspot_owner_id):
         return 'Owner ' + str(hubspot_owner_id)[:8]
     return 'Unassigned'
 
+
+_ANALYTICS_SOURCE = {
+    'ORGANIC_SEARCH': 'Organic search',
+    'PAID_SEARCH': 'Paid search',
+    'EMAIL_MARKETING': 'Email',
+    'SOCIAL_MEDIA': 'Social',
+    'REFERRALS': 'Referral',
+    'OTHER_CAMPAIGNS': 'Other campaigns',
+    'DIRECT_TRAFFIC': 'Direct',
+    'OFFLINE': 'Offline',
+    'PAID_SOCIAL': 'Paid social',
+    'AI_REFERRALS': 'AI referral',
+}
+
+
+def lead_channel(props):
+    """Contact channel. Never the system name HubSpot — that collapsed every lead into one row."""
+    for key in ('hs_analytics_source', 'hs_latest_source', 'leadsource'):
+        raw = str((props or {}).get(key) or '').strip()
+        if not raw or raw.lower() in ('hubspot', 'crm', 'integration', 'unknown'):
+            continue
+        return _ANALYTICS_SOURCE.get(raw, raw.replace('_', ' ').title())
+    return 'Unknown source'
+
 def num(v):
     if v is None or v == '':
         return None
@@ -651,7 +675,7 @@ def main():
         if st == 'salesqualifiedlead':
             sql_total += 1
         nm = ' '.join(x for x in [p.get('firstname'), p.get('lastname')] if x).strip() or p.get('email') or 'Unknown'
-        lead_list.append({'id': 'lead-' + str(hs_id), 'name': nm, 'source': 'HubSpot',
+        lead_list.append({'id': 'lead-' + str(hs_id), 'name': nm, 'source': lead_channel(p),
                           'owner': owner_label(p.get('hubspot_owner_id')),
                           'lead': iso_date(p.get('createdate')),
                           '_created': p.get('createdate') or '',
@@ -711,7 +735,7 @@ def main():
             starts.append(p['hs_meeting_start_time'][:10])
 
     # spend from Channels_Marketing Budget / Actuals
-    months, channels = [], []
+    months, channels, channel_months = [], [], []
     try:
         rows = {rn: json.loads(rj) for rn, rj in
                 q(cur, "select row_num, row_json from sheets_data where spreadsheet_title='Channels_Marketing Budget' and tab='Actuals' order by row_num")}
@@ -731,6 +755,8 @@ def main():
                            'planned': round(pv) if pv is not None else None,
                            'actual': round(av) if av is not None else None})
         chan_totals = {}
+        # Per vendor, a blank month stays blank. Summing it as zero would invent spend.
+        chan_months = {}
         for rn, row in rows.items():
             if rn < 7 or not isinstance(row, list) or len(row) < 4:
                 continue
@@ -738,13 +764,21 @@ def main():
             if not cname:
                 continue
             tot = 0
-            for i, _ in month_idx:
+            seen = False
+            bucket = chan_months.setdefault(cname, {})
+            for i, mlabel in month_idx:
                 v = num(row[i]) if i < len(row) else None
-                if v:
+                prev = bucket.get(mlabel, 0)
+                if v is None or prev is None:
+                    bucket[mlabel] = None
+                else:
+                    bucket[mlabel] = prev + v
                     tot += v
-            if tot:
+                    seen = True
+            if seen:
                 chan_totals[cname] = chan_totals.get(cname, 0) + tot
         channels = [{'name': k, 'amount': round(v)} for k, v in sorted(chan_totals.items(), key=lambda x: -x[1])]
+        channel_months = [{'channel': name, 'months': [{'month': m, 'actual': None if amt is None else round(amt)} for m, amt in sorted(months.items())]} for name, months in sorted(chan_months.items())]
     except Exception as e:
         print(f'spend parse warning: {e}', flush=True)
 
@@ -785,7 +819,7 @@ def main():
                      'stages': sorted(stages.values(), key=lambda s: -s['amount']),
                      'scorecard': [{'label': 'Active deals', 'value': len(opportunities)},
                                    {'label': 'Discovery calls', 'value': len(fathom)}]},
-        'spend': {'months': months, 'channels': channels,
+        'spend': {'months': months, 'channels': channels, 'channelMonths': channel_months,
                   'campaigns': campaigns, 'advertising': []},
         'web': web,
     }

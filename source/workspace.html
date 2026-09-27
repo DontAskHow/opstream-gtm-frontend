@@ -424,6 +424,28 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
         </div>
 
         <sc-if value="{{ perfDemand }}" hint-placeholder-val="{{ true }}">
+          <section style="padding-top:8px">
+            <div class="section-rule"><h6 style="margin:0">Marketing</h6><span style="font-size:12px;color:var(--color-neutral-700)">This week, a 6-week average, and the quarter. America/Phoenix.</span></div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px 24px;padding:8px 0 16px">
+              <sc-for list="{{ marketingIntervals }}" as="m" hint-placeholder-count="3">
+                <div style="min-width:0">
+                  <div style="font-size:13px;color:var(--color-neutral-700)">{{ m.label }}</div>
+                  <div style="font-family:var(--font-heading);font-weight:800;font-size:32px;line-height:1.1;font-variant-numeric:tabular-nums">{{ m.leads }} <span style="font-size:14px;font-weight:500;color:var(--color-neutral-700)">leads</span></div>
+                  <div style="font-size:13px;color:var(--color-neutral-800);margin-top:4px">MQL {{ m.mql }} · SQL {{ m.sql }}</div>
+                  <div style="font-size:13px;color:var(--color-neutral-800)">Cost per lead: {{ m.cpl }}</div>
+                  <div style="font-size:12px;color:var(--color-neutral-700);margin-top:4px">{{ m.range }}</div>
+                  <div style="font-size:12px;color:var(--color-neutral-700)">{{ m.note }} {{ m.cplNote }}</div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Leads by source</h6><button onClick="{{ exportSources }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
+            <sc-if value="{{ marketingEmpty }}" hint-placeholder-val="{{ false }}"><p style="margin:12px 0;font-size:13px;color:var(--color-neutral-700)">No leads in these intervals.</p></sc-if>
+            <table class="table" style="font-size:14px">
+              <thead><tr><th>Source</th><th style="text-align:right">This week</th><th style="text-align:right">6-week average</th><th style="text-align:right">Quarter</th><th style="text-align:right">Cost / lead</th></tr></thead>
+              <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.week }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.six }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.quarter }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.cpl }}</td></tr></sc-for></tbody>
+            </table>
+            <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Sources are the lead’s channel, not the system the row was exported from. The 6-week column is the weekly average. Cost per lead uses quarter spend only when every month in the quarter has an actual; otherwise it says not connected.</p>
+          </section>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 24px;border-bottom:2px solid var(--color-divider)">
             <sc-for list="{{ demandMetrics }}" as="m" hint-placeholder-count="5">
               <button onClick="{{ m.go }}" style="display:flex;flex-direction:column;gap:4px;text-align:left;background:none;border:0;padding:16px 0 18px;font:inherit;color:inherit;cursor:pointer;min-width:0">
@@ -451,7 +473,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">New leads are counted by lead date. Marketing qualified is a meeting booked in the period. Sales qualified is a meeting held. Dates are America/Phoenix.</p>
             </section>
             <section style="flex:1 1 320px;min-width:0">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">By source · {{ periodRange }}</h6><button onClick="{{ exportSources }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Selected period by source · {{ periodRange }}</h6></div>
               <table class="table" style="font-size:14px">
                 <thead><tr><th>Source</th><th style="text-align:right">Leads</th><th style="text-align:right">MQL</th><th style="text-align:right">SQL</th><th style="text-align:right">SQL / leads</th></tr></thead>
                 <tbody><sc-for list="{{ channels }}" as="c" hint-placeholder-count="5"><tr><td>{{ c.channel }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.leads }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.mql }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.sql }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.rate }}</td></tr></sc-for></tbody>
@@ -1252,6 +1274,7 @@ class Component extends DCLogic {
       weeks: pd.bars.map(([label, leads]) => ({ label, leads, title: pd.unit + label + ': ' + leads + ' new leads', leadH: Math.round(leads / barMax * 100) + '%' })),
       barCols: pd.bars.length,
       channels: pd.src.map(([channel, leads, mql, sql]) => ({ channel, leads, mql, sql, rate: leads ? Math.round(sql / leads * 100) + '%' : '—' })),
+      marketingIntervals: [], marketingSources: [], marketingEmpty: true,
       stages: stagesAgg.map(([stage, count, amt]) => ({ stage, count, amount: k(amt), w: Math.round(amt / maxStage * 100) + '%' })),
       scorecard: [],
       movements: dealsRaw.filter(d => (d[7] || '').trim()).slice(0, 6).map(d => ({ name: d[0], meta: d[1] + ' · ' + d[2], change: d[7], go: ev('sheet:' + d[0]) })),

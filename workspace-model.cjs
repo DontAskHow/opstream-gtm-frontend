@@ -236,6 +236,87 @@ const workspaceModel = {
     const sources=[...new Set(matches.map(l=>l.source).filter(Boolean))];
     return sources.length===1?sources[0]:'Unattributed';
   },
+  weekStart(today) {
+    today=today||this.phoenixToday();
+    const sinceMonday=(new Date(today+'T12:00:00Z').getUTCDay()+6)%7;
+    return this.addDays(today,-sinceMonday);
+  },
+  formatMetric(n,average) {
+    if(!Number.isFinite(n))return '—';
+    if(!average)return Math.round(n).toLocaleString('en-US');
+    return (Math.round(n*10)/10).toFixed(1);
+  },
+  // Spend is recorded by month. A gap is not zero: if any month overlapping the
+  // range has no actual, the cost is not connected. Week and multi-week ranges
+  // are not a month, so they stay not connected rather than borrowing a month.
+  costPerLead(channel,leads,spend,start,end) {
+    const months=[];
+    let cursor=(start||'').slice(0,7);
+    const last=(end||'').slice(0,7);
+    if(!/^\d{4}-\d{2}$/.test(cursor)||!/^\d{4}-\d{2}$/.test(last)||!String(start).endsWith('-01'))return 'not connected';
+    while(cursor<=last){
+      months.push(cursor);
+      const [y,m]=cursor.split('-').map(Number);
+      cursor=m===12?(y+1)+'-01':y+'-'+String(m+1).padStart(2,'0');
+    }
+    const series=(spend&&spend.channelMonths||[]).find(c=>String(c.channel||'').toLowerCase()===String(channel||'').toLowerCase());
+    if(!series)return 'not connected';
+    let sum=0;
+    for(const month of months){
+      const row=(series.months||[]).find(x=>x.month===month);
+      if(!row||row.actual==null||row.actual==='')return 'not connected';
+      const n=Number(row.actual);
+      if(!Number.isFinite(n))return 'not connected';
+      sum+=n;
+    }
+    if(!leads)return '—';
+    return '$'+Math.round(sum/leads).toLocaleString('en-US');
+  },
+  marketingView(leads,records,spend,today) {
+    today=today||this.phoenixToday();
+    const weekStart=this.weekStart(today);
+    const quarter=this.periodBounds('quarter',null,null,today);
+    const windows=[
+      {key:'week',label:'This week',start:weekStart,end:today,average:false,weeks:1},
+      {key:'six',label:'6-week average',start:this.addDays(weekStart,-35),end:today,average:true,weeks:6},
+      {key:'quarter',label:'Quarter to date',start:quarter.start,end:quarter.end,average:false,weeks:1}
+    ];
+    const blocks=windows.map(w=>{
+      const fun=this.funnel(leads,records,w.start,w.end);
+      const channels=this.channels(leads,records,w.start,w.end);
+      const div=w.average?w.weeks:1;
+      return {...w,range:this.formatDate(w.start)+' – '+this.formatDate(w.end),leads:fun.leads/div,mql:fun.mql/div,sql:fun.sql/div,leadsTotal:fun.leads,channels};
+    });
+    const names=[];
+    for(const block of blocks)for(const c of block.channels)if(c.leads&&!names.includes(c.channel))names.push(c.channel);
+    const quarterBlock=blocks[2];
+    const sources=names.map(name=>{
+      const raw=block=>{
+        const row=block.channels.find(c=>c.channel===name);
+        return row?row.leads:0;
+      };
+      const quarterLeads=raw(quarterBlock);
+      return {
+        channel:name,
+        week:this.formatMetric(raw(blocks[0]),false),
+        six:this.formatMetric(raw(blocks[1])/blocks[1].weeks,true),
+        quarter:this.formatMetric(quarterLeads,false),
+        cpl:this.costPerLead(name,quarterLeads,spend,quarter.start,quarter.end)
+      };
+    });
+    return {
+      intervals:blocks.map(b=>({
+        key:b.key,label:b.label,range:b.range,
+        leads:this.formatMetric(b.leads,b.average),
+        mql:this.formatMetric(b.mql,b.average),
+        sql:this.formatMetric(b.sql,b.average),
+        note:b.average?'Per week across the last 6 weeks. Not the six-week total.':b.key==='week'?'Monday through today, America/Phoenix.':'Calendar quarter through today.',
+        cpl:b.key==='quarter'?'See each source':'not connected',
+        cplNote:b.key==='quarter'?'Quarter cost per lead is on the source table. A missing month is not connected, not zero.':'Spend is recorded by month, so a weekly cost per lead is not connected.'
+      })),
+      sources
+    };
+  },
   channels(leads,records,start,end) {
     const inR=v=>this.inRange(v,start,end);
     const by=new Map();

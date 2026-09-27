@@ -111,6 +111,11 @@ Component.prototype.renderVals = function () {
   while(at<=end){const next=monthly?new Date(Date.UTC(+at.slice(0,4),+at.slice(5,7),1,12)).toISOString().slice(0,10):f.add(at,7);const last=f.add(next,-1);const leads=d.leads.filter(r=>inRange(r.lead)&&r.lead>=at&&r.lead<=last).length;bars.push({date:at,label:monthly?new Date(at+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',timeZone:'UTC'}):f.date(at),leads});at=next;}
   const max=Math.max(1,...bars.map(b=>b.leads));v.weeks=bars.map(b=>({...b,title:(monthly?'':'Week of ')+b.label+': '+b.leads+' new leads',leadH:Math.round(b.leads/max*100)+'%'}));v.barCols=bars.length;v.barsTitle=monthly?'New leads by month':'New leads by week';
   v.channels=workspaceModel.channels(d.leads,s.records,start,end).map(r=>({...r,rate:r.leads?Math.round(r.sql/r.leads*100)+'%':'—'}));
+  const marketing=workspaceModel.marketingView(d.leads,s.records,d.report&&d.report.spend,workspaceModel.phoenixToday());
+  v.marketingIntervals=marketing.intervals;
+  v.marketingSources=marketing.sources;
+  v.marketingEmpty=marketing.sources.length===0;
+  if(s.period==='six'){for(const m of v.demandMetrics.slice(0,3))m.note=(m.note?m.note+' · ':'')+'Six-week total. The weekly average is in the marketing table.';}
   v.quickNumbers[0].value=f.number(funnelCounts.leads);v.quickNumbers[1].value=f.number(funnelCounts.mql);v.quickNumbers[2].value=f.number(funnelCounts.sql);
   v.quickNumbers[0].delta=period;v.quickNumbers[1].delta=period;v.quickNumbers[2].delta=period;
   v.quickNumbers[1].label='Marketing qualified';v.quickNumbers[2].label='Sales qualified';
@@ -160,7 +165,7 @@ Component.prototype.renderVals = function () {
   v.exportLabel=s.accounts==='leads'?'Export '+leadRows.length+' leads':s.accounts==='follow'?'Export follow-ups':'Export '+selected.length+' opportunities';
   if(s.accounts==='leads')v.exportAccounts=()=>this.csv('leads.csv',['Company','Source','Owner','Lead date','Notes','MQL date','SQL date'],leadRows.map(r=>[r.name,r.source,r.owner,r.lead,r.note,r.mql,r.sql]));
   else if(s.accounts==='deals')v.exportAccounts=()=>this.csv('opportunities.csv',['Company','Owner','Stage','ARR','Probability','Weighted ARR','Close','Days in stage','Last note'],selected.map(o=>[o.name,o.owner,o.stage,o.amount,o.probability,workspaceModel.weighted(o),workspaceModel.closeLabel(o.close),o.days,o.note]));
-  v.exportSources=()=>this.csv('leads-by-source.csv',['Source','Leads','MQL','SQL','Period'],v.channels.map(r=>[r.channel,r.leads,r.mql,r.sql,period]));
+  v.exportSources=()=>this.csv('leads-by-source.csv',['Source','This week','6-week average','Quarter to date','Quarter cost per lead'],(v.marketingSources||[]).map(r=>[r.channel,r.week,r.six,r.quarter,r.cpl]));
   v.exportSpend=()=>this.csv('spend-2026.csv',['Month','Planned','Recorded','Note'],d.report.spend.months.map(m=>[m.month,m.planned,m.actual,m.partial?'Partly entered':m.actual==null?'Not entered':'']));
   v.movements=v.movements.map(shown=>{const o=d.opportunities.find(o=>o.name===shown.name);return o?{name:o.name,meta:o.owner+' · '+o.stage,change:o.note,go:()=>this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name)}:shown;});
   v.checkUpdates=()=>{this.setState({checking:true});return this._loadVerified();};v.checkNote=s.verifiedError||('Verified collection · '+v.collectedShort+(s.checkedAt?' · last checked '+s.checkedAt:''));
