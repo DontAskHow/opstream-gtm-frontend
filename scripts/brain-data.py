@@ -17,7 +17,7 @@ import sqlite3, json, os, re, sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gtm_metrics import date_only, is_open_pipeline, phoenix_today, probability_fraction, stage_display
+from gtm_metrics import apply_sheet_owner_names, date_only, is_open_pipeline, phoenix_today, probability_fraction, stage_display
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.environ.get('BRAIN_DB') or os.path.expanduser('~/workspace/brain/brain.db')
@@ -273,11 +273,7 @@ def main():
         if not oid:
             continue
         owner_votes.setdefault(oid, set()).add(owner_name)
-    mapped_owners = 0
-    for oid, nameset in owner_votes.items():
-        if len(nameset) == 1 and oid not in OWNER_NAMES:
-            OWNER_NAMES[oid] = next(iter(nameset))
-            mapped_owners += 1
+    mapped_owners = apply_sheet_owner_names(OWNER_NAMES, owner_votes)
     print(f'sheet owner names: {mapped_owners} hubspot owner ids', flush=True)
 
     def contact_display_name(op):
@@ -713,13 +709,16 @@ def main():
     for did in sorted(open_deal_ids):
         dp, _ = deals.get(did, ({}, None))
         cid = deal_company.get(did)
-        cname = None
+        cname = ''
         if cid:
             cp, _ = objects['companies'].get(cid, ({}, None))
-            cname = cp.get('name')
+            cname = clean_company_name(cp.get('name'))
+        if re.fullmatch(r'renewal|current agreement', cname or '', flags=re.I):
+            cname = ''
         if not cname:
-            cname = (dp.get('dealname') or 'Untitled deal')
-        cname = clean_company_name(cname)
+            fallback = clean_company_name(dp.get('dealname'))
+            if fallback and not re.fullmatch(r'renewal|current agreement', fallback, flags=re.I):
+                cname = fallback
         prob = probability_fraction(num(dp.get('hs_deal_stage_probability')))
         label = stage_label(did, dp.get('dealstage'))
         candidate = {

@@ -167,9 +167,68 @@ def refresh_associations(client, con, otype: str, hs_id: str, log) -> int:
     return written
 
 
+def _query_value(value):
+    return "".join(ch if ch.isalnum() or ch in "-._~" else "%%%02X" % ord(ch) for ch in str(value))
+
+
+def sync_owners(client, log):
+    """Read the owners catalog. Active rows win over archived rows with the same id."""
+    collected = {}
+    for archived in (False, True):
+        after = None
+        seen_after = set()
+        for _page in range(50):
+            params = ["limit=100"]
+            if archived:
+                params.append("archived=true")
+            if after:
+                params.append("after=" + _query_value(after))
+            url = client.api_base + "/crm/v3/owners?" + "&".join(params)
+            pace.wait()
+            status, payload = client.request("GET", url)
+            if status != 200 or not isinstance(payload, dict):
+                raise RuntimeError("HubSpot owners returned HTTP %s" % status)
+            for row in payload.get("results") or []:
+                oid = str(row.get("id") or "").strip()
+                if not oid or (archived and oid in collected):
+                    continue
+                collected[oid] = (
+                    oid,
+                    str(row.get("firstName") or "").strip(),
+                    str(row.get("lastName") or "").strip(),
+                    str(row.get("email") or "").strip(),
+                )
+            after = ((payload.get("paging") or {}).get("next") or {}).get("after")
+            if not after or after in seen_after:
+                break
+            seen_after.add(after)
+    con = db_connect()
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS hubspot_owners ("
+            "id TEXT PRIMARY KEY, first_name TEXT, last_name TEXT, email TEXT)"
+        )
+        try:
+            con.execute("BEGIN")
+            con.execute("DELETE FROM hubspot_owners")
+            con.executemany(
+                "INSERT INTO hubspot_owners(id, first_name, last_name, email) VALUES(?,?,?,?)",
+                list(collected.values()),
+            )
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+    finally:
+        con.close()
+    log.info("owners: %d catalog rows", len(collected))
+    return len(collected)
+
+
 def main_sync(log):
     client = HubSpotClient(log=log)
     client.prepare()
+    owner_rows = sync_owners(client, log)
     watermark_raw, last_run, _note = get_sync_state(SOURCE)
     try:
         watermarks = json.loads(watermark_raw) if watermark_raw else {}
@@ -223,8 +282,9 @@ def main_sync(log):
     finally:
         con.close()
 
-    note = (f"{total_upserted} objects upserted, {total_assoc} association rows refreshed; "
-            f"tickets excluded (outside registered scope); long text truncated at 8000 chars")
+    note = (f"{total_upserted} objects upserted, {total_assoc} association rows refreshed, "
+            f"{owner_rows} owners; tickets excluded (outside registered scope); "
+            f"long text truncated at 8000 chars")
     set_sync_state(SOURCE, json.dumps(watermarks), note)
     return note
 

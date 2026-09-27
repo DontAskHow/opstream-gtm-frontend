@@ -49,8 +49,7 @@ Component.prototype._verifiedOpportunityRows = function () {
   const opportunities=workspaceModel.annotateOpportunities(this.state.verified?.opportunities,this.state.records).map(o=>workspaceModel.applySheetDeal(o,overrides));
   return opportunities.filter(o=>workspaceModel.isOpenPipeline(o,today)&&!workspaceModel.isJunkName(o.name)&&!workspaceModel.isJunkName(o.dealName)).map(o=>{
     const company=workspaceModel.companyForOpportunity(o,this.state.records);
-    const name=workspaceModel.accountName(company&&company.name,o.dealName||o.name)||workspaceModel.companyName(company&&company.name)||workspaceModel.companyName(o.name);
-    if(!name||/^(renewal|current agreement)$/i.test(name))return null;
+    const name=workspaceModel.pipelineCompanyName(company&&company.name,o.dealName,o.name);
     return [name,o.owner||'—',workspaceModel.stageDisplay(o.stage),o.amount,o.probability==null?null:Math.round(workspaceModel.probabilityFraction(o.probability)*100),workspaceModel.dateOnly(o.close),o.days,o.note||''];
   }).filter(Boolean);
 };
@@ -244,8 +243,7 @@ Component.prototype.renderVals = function () {
   v.showLastNote=selected.some(o=>String(o.note||'').trim()||(o.hubspotDiffers&&o.hubspotDiffers.length));
   v.lastNoteDisplay=v.showLastNote?'table-cell':'none';
   v.deals=selected.map(o=>{
-    const companyName=workspaceModel.accountName(o.companyRecord&&o.companyRecord.name,o.dealName||o.name)||workspaceModel.accountName(o.name,o.dealName);
-    if(!companyName)return null;
+    const companyName=workspaceModel.pipelineCompanyName(o.companyRecord&&o.companyRecord.name,o.dealName||o.name,o.name);
     const flag=o.hubspotDiffers&&o.hubspotDiffers.length?'HubSpot differs':'';
     const note=[flag,String(o.note||'').trim()].filter(Boolean).join(' · ');
     return {company:companyName,owner:o.owner,ownerTitle:o.ownerTitle||'',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement)+(o.quietDays!=null?' · '+workspaceModel.relativeLabel(o.lastEngagement,workspaceModel.phoenixToday()):''):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}};

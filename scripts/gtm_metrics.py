@@ -121,9 +121,35 @@ def is_test_record(deal):
     return "mozilla firefox" in low or "system verification test" in low
 
 
+def apply_sheet_owner_names(owner_names, votes):
+    """A unanimous sheet Deal Owner replaces the HubSpot catalog name.
+
+    A split vote does not. The catalog name stays when the sheet has no
+    single name for that id.
+    """
+    applied = 0
+    for oid, nameset in (votes or {}).items():
+        if len(nameset) != 1:
+            continue
+        owner_names[str(oid)] = next(iter(nameset))
+        applied += 1
+    return applied
+
+
+def is_placeholder_name(value):
+    """A deal or company titled only Renewal or Current agreement has no real name.
+
+    That label must not take the deal out of the open book. A longer title
+    such as "Renewal Agreement" is still a renewal.
+    """
+    return re.fullmatch(r"renewal|current agreement", str(value or "").strip(), flags=re.I) is not None
+
+
 def _stage_blob(deal):
     stage = str((deal or {}).get("stage") or (deal or {}).get("stageLabel") or "")
     deal_name = str((deal or {}).get("dealName") or "")
+    if is_placeholder_name(deal_name):
+        deal_name = ""
     return (stage + " " + deal_name).lower()
 
 

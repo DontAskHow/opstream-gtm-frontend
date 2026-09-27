@@ -212,13 +212,29 @@ const workspaceModel = {
     const d=this.dateOnly(value);
     return !!d&&d>=start&&d<=end;
   },
+  // A title that is only "Renewal" or "Current agreement" is a missing name.
+  // It does not take the deal out of the open book. A longer title such as
+  // "Renewal Agreement" still does.
+  isPlaceholderName(value) {
+    return /^(renewal|current agreement)$/i.test(String(value||'').trim());
+  },
+  // Company shown on a pipeline row. Associations win. A placeholder title is
+  // not a company, and hiding it does not drop the deal.
+  pipelineCompanyName(companyName, dealName, fallbackName) {
+    const fromCompany=this.accountName(companyName, dealName);
+    if(fromCompany)return fromCompany;
+    const raw=this.companyName(companyName)||this.companyName(fallbackName);
+    if(raw&&!this.isPlaceholderName(raw))return raw;
+    return 'No company linked';
+  },
   // Open pipeline: future (or unset) close, not a renewal / current agreement,
   // not Disqualified, not On Hold, not closed. A missing stage stays in and is labeled.
   isOpenPipeline(deal,today) {
     if(!deal||deal.closed===true)return false;
     if(this.isTestRecord(deal))return false;
     const stage=String(deal.stage||deal.stageLabel||'');
-    const dealName=String(deal.dealName||'');
+    let dealName=String(deal.dealName||'');
+    if(this.isPlaceholderName(dealName))dealName='';
     const blob=(stage+' '+dealName).toLowerCase();
     if(/closed\s*won|closed\s*lost|closedwon|closedlost/.test(blob))return false;
     if(/disqualif/.test(blob))return false;

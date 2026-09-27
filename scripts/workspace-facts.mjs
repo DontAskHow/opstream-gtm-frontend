@@ -185,7 +185,7 @@ export function computeFacts(verified, records, today, sheetReview) {
     const quiet = quietFor(company);
     return {
       id: o.id,
-      company: model.companyName(company?.name || o.name),
+      company: model.pipelineCompanyName(company?.name, o.dealName, o.name),
       opportunityName: model.companyName(o.name),
       dealName: o.dealName || '',
       amount: roundAmount(o.amount),
