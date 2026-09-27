@@ -737,9 +737,11 @@ def main():
             'refs': [f'hubspot:deals:{did}'],
             'closed': False,
         }
-        if is_open_pipeline(candidate, phoenix_today()):
-            candidate['stage'] = stage_display(label)
-            opportunities.append(candidate)
+        # Renewals, current agreements, and other excluded deals stay in the
+        # list so a lookup can say they are not in the open book. The open
+        # book itself still drops them.
+        candidate['stage'] = stage_display(label)
+        opportunities.append(candidate)
     print(f'opportunities: {len(opportunities)}', flush=True)
 
     # ---------- leads ----------

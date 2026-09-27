@@ -75,7 +75,18 @@ Component.prototype.renderVals=function(){
     const company=findCompany(item);
     const saved=localNotes[item.id]||{};
     const last=company?workspaceModel.lastEngagement(company):null;
-    item.owner=workspaceModel.displayOwner(company&&company.owner);
+    const companyOwner=workspaceModel.displayOwner(company&&company.owner);
+    const unnamed=!companyOwner||companyOwner==='Unassigned'||/^Owner #/.test(companyOwner);
+    let dealOwner='';
+    if(unnamed&&company&&Array.isArray(company.deals)){
+      const closed=d=>/closed/i.test(String(d.stageLabel||d.stage||''))?1:0;
+      const ranked=company.deals.slice().sort((a,b)=>closed(a)-closed(b));
+      for(const d of ranked){
+        const who=workspaceModel.displayOwner(d.owner);
+        if(who&&who!=='Unassigned'&&!/^Owner #/.test(who)){dealOwner=who;break;}
+      }
+    }
+    item.owner=unnamed?(dealOwner||companyOwner||'—'):companyOwner;
     item.lastInteraction=last?workspaceModel.formatDate(last)+' · '+workspaceModel.relativeLabel(last, workspaceModel.phoenixToday()):'—';
     item.important=!!saved.important;
     item.importantLabel=saved.important?'Important':'Mark important';
