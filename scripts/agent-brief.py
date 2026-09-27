@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gtm_metrics import greeting
+from gtm_metrics import greeting, snapshot_metrics
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(REPO, "out", "data")
@@ -100,8 +100,27 @@ def main():
     brief = hop.get("brief") or {}
     stats = hop.get("stats") or {}
 
+    verified = load_json(os.path.join(DATA, "verified.json"))
+    records = load_json(os.path.join(DATA, "records.json"))
+    book = snapshot_metrics(verified, records) if verified and records else None
+    open_book = None
+    if book:
+        open_book = {
+            "definition": book.get("definition"),
+            "asOf": book.get("today"),
+            "quarter": [book.get("quarterStart"), book.get("quarterEnd")],
+            "openCount": book.get("openCount"),
+            "openAmount": book.get("openAmount"),
+            "weighted": book.get("weighted"),
+            "largestOpenDeal": book.get("largest"),
+            "leads": book.get("leads"),
+            "mql": book.get("mql"),
+            "sql": book.get("sql"),
+        }
+
     data_dump = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "openBook": open_book,
         "briefCounts": stats.get("briefCounts"),
         "goals": hop.get("goals") or [],
         "queue": [qline(q) for q in queue],
@@ -119,7 +138,9 @@ def main():
         "you turn it into a short, sharp, human briefing she reads first thing.\n\n"
         "RULES:\n"
         "- Ground EVERY claim in the data below. Never invent companies, people, dates, amounts, or meetings.\n"
-        "- Numbers in briefCounts and goal status lines are already computed. Repeat them exactly. Do not call a larger commit 'short' of a smaller forecast.\n"
+        "- Numbers in briefCounts, openBook, and goal status lines are already computed. Repeat them exactly. Do not call a larger commit 'short' of a smaller forecast.\n"
+        "- openBook is the page's open pipeline. It excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Repeat the largest open deal and the open totals. A larger renewal or current agreement is not the largest open deal; if you mention one, say it is not in the open book.\n"
+        "- Owner labels in openBook are already resolved. A label like Owner #… means the name is not connected. Do not invent a person's name.\n"
         "- The greeting must start with \"" + greeting() + "\" because that is the time of day in America/Phoenix. Do not say a different time of day.\n"
         "- If something is unknown, say so or omit it — never fill gaps with guesses.\n"
         "- Be concrete: names, numbers, days. No corporate fluff, no hype.\n"

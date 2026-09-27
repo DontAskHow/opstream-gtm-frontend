@@ -17,6 +17,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
+import { DATA_TOOL_SCHEMAS, loadWorkspace, runAssistantTool } from './workspace-facts.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
@@ -130,22 +131,14 @@ const MODEL = process.env.OPENAI_MODEL || 'gpt-6-sol';
 const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 
 let CTX = '';
+let FACTS = null;
 function buildContext() {
   try {
     const verified = readJson(path.join(dataDir, 'verified.json'));
     const records = readJson(path.join(dataDir, 'records.json'));
     const trunc = (s, n) => String(s || '').replace(/\s+/g, ' ').slice(0, n);
-    const lines = [];
-    lines.push('WORKSPACE DATA (real records from the company brain: HubSpot, Fathom, Sheets; generated ' + (records.generatedAt || 'unknown') + '). Never invent records; say when something is not in the data.');
-    for (const c of records.companies || []) {
-      const deals = (c.deals || []).filter(d => !d.closed).slice(0, 10)
-        .map(d => `${d.name} [${d.stageLabel}, $${d.amount}, ${d.probability || 0}%, close ${d.close}]`).join('; ');
-      const contacts = (c.contacts || []).slice(0, 8).map(x => `${x.name}${x.title ? ' — ' + x.title : ''}${x.email ? ' <' + x.email + '>' : ''}`).join('; ');
-      lines.push(`- ACCOUNT ${c.name} (id ${c.id}): owner ${c.owner}; ${[c.industry, c.domain].filter(Boolean).join(', ')}. Open deals: ${deals || 'none'}. Contacts: ${contacts || 'none'}. Last contact: ${c.lastContact || 'n/a'}.`);
-    }
-    for (const o of verified.opportunities || []) {
-      lines.push(`- OPPORTUNITY ${o.name}: ${o.stage}, $${o.amount}, owner ${o.owner}, ${o.days == null ? 'stage age n/a' : o.days + ' days in stage'}.`);
-    }
+    FACTS = loadWorkspace(dataDir);
+    const lines = [FACTS.context];
     // Call summaries + action items (NOT full transcripts: too large for per-question context).
     for (const c of records.companies || []) {
       for (const r of c.recordings || []) {
@@ -157,11 +150,6 @@ function buildContext() {
     for (const p of verified.presentation?.priorities || []) {
       lines.push(`- PRIORITY: ${p.title}. Why: ${p.why} Next: ${p.next}`);
     }
-    const q = verified.quick || {};
-    const w = verified.report?.pipeline?.weighted?.value;
-    lines.push(`- METRICS: ${(verified.opportunities || []).length} open deals, weighted pipeline $${w}, ${q.leads} leads, ${q.mql} MQL, ${q.sql} SQL.`);
-    const stages = (verified.report?.pipeline?.stages || []).map(s => `${s.stage}: ${s.count} deals, $${s.amount}`).join('; ');
-    if (stages) lines.push(`- PIPELINE STAGES: ${stages}.`);
     for (const d of verified.drafts || []) {
       lines.push(`- DRAFT: "${d.draft.title}" (${d.draft.purpose}, ${d.draft.status}) for ${d.draft.company}.`);
     }
@@ -218,9 +206,12 @@ AUTONOMY (hard rules — never break these):
 - Say "drafted" or "proposed" — never "sent".
 
 Answer using only the workspace data. Be concise and concrete: names, numbers, dates.
+The open book is already computed in the OPEN BOOK METRICS lines and in get_pipeline_metrics. It excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Repeat those figures. A larger renewal, current agreement, on-hold, disqualified, or past-close amount is not the largest open deal. If you mention one, name that reason and say it is not in the open book. Owner labels that start with "Owner #…" mean the name is not connected; do not invent a person's name. Quiet-day figures in the data are already computed; repeat them.
 Format your answer as a compact HTML fragment using only <p>, <ul>, <ol>, <li>, <strong>, <em>, <br>. Output raw HTML only, never markdown — markdown is displayed to the user as literal asterisks and dashes. No code fences, no <h1>.
 
 You can also take actions with tools:
+- get_pipeline_metrics: read the computed open-book totals, the largest open deal, and quarter leads, MQL, and SQL.
+- lookup_deals: look up a company or deal. Results label renewals and other deals that are not in the open book.
 - create_draft: write a follow-up email draft into the workspace (the app opens it in Drafts). Use it when the user asks to draft/write/email/follow up. The "company" argument must be an account name from the data. Write a real, specific email using the account's context (owner, contacts, deal stage, last interaction). Keep it under 180 words.
 - propose_crm_update: propose a CRM field change for Hollie's review. It is stored as a proposal inside the workspace — nothing is written to HubSpot. Use when data looks stale or wrong (e.g. a deal sitting in a stage too long, a missing close date). Always include the current value (or "unknown") and your rationale.
 - mark_queue_item: mark one of Hollie's operator queue items done or dismissed by its item id (ids look like q:<kind>:<id> and appear in the HOLLIE QUEUE context lines). Use when she says something is handled.
@@ -230,6 +221,7 @@ You can also take actions with tools:
 Always include a brief text reply summarizing what you found or did, alongside any tool calls. Never claim to have sent an email — sending is disabled; drafts are only created.`;
 
 const TOOLS = [
+  ...DATA_TOOL_SCHEMAS,
   {
     type: 'function',
     function: {
@@ -404,6 +396,29 @@ function readAgentBrief() {
   catch { return null; }
 }
 
+function describeActions(actions) {
+  const describe = a => a.type === 'create_draft'
+    ? 'created the draft <strong>' + escapeHtml(a.title || (a.company || '') + ' follow-up') + '</strong>'
+    : a.type === 'propose_crm_update'
+      ? (a.ok ? 'queued a CRM proposal for <strong>' + escapeHtml(a.company || '') + '</strong> (' + escapeHtml(a.field || '') + ' → ' + escapeHtml(a.proposedValue || '') + ') — nothing was written to HubSpot' : 'could not save the CRM proposal')
+      : a.type === 'mark_queue_item'
+        ? (a.ok ? 'marked queue item <strong>' + escapeHtml(a.itemId || '') + '</strong> as ' + escapeHtml(a.action || '') : 'could not update that queue item')
+        : 'opened <strong>' + escapeHtml(a.view) + '</strong>';
+  return '<p>Done — ' + actions.map(describe).join(', ') + '.</p>';
+}
+
+function briefingToolContent() {
+  const brief = readAgentBrief();
+  if (!brief) return { content: 'No morning brief has been generated yet.', missing: true };
+  const parts = [];
+  if (brief.greeting) parts.push(brief.greeting);
+  for (const p of brief.paragraphs || []) parts.push(p);
+  return {
+    missing: false,
+    content: 'MORNING BRIEF (written ' + (brief.generatedAt || 'unknown') + '):\n' + parts.join('\n') + '\nNEW: ' + (brief.whatsNew || []).join(' | ') + '\nWATCH: ' + (brief.watchOuts || []).join(' | '),
+  };
+}
+
 async function askOpenAI(message, history) {
   const messages = [
     { role: 'system', content: SYSTEM + '\n\n' + CTX },
@@ -414,12 +429,28 @@ async function askOpenAI(message, history) {
   const choice = data.choices?.[0]?.message;
   const actions = [];
   const notes = [];
-  for (const tc of choice?.tool_calls || []) {
+  const toolCalls = choice?.tool_calls || [];
+  const toolMessages = [];
+  let needsFollowUp = false;
+  for (const tc of toolCalls) {
     let args = {};
     try { args = JSON.parse(tc.function.arguments || '{}'); } catch {}
-    if (tc.function.name === 'create_draft') actions.push({ type: 'create_draft', ...args });
-    else if (tc.function.name === 'navigate') actions.push({ type: 'navigate', ...args });
-    else if (tc.function.name === 'propose_crm_update') {
+    const name = tc.function.name;
+    if (name === 'get_pipeline_metrics' || name === 'lookup_deals') {
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: runAssistantTool(name, args, FACTS) });
+      needsFollowUp = true;
+    } else if (name === 'read_briefing') {
+      const brief = briefingToolContent();
+      if (brief.missing) notes.push('No morning brief has been generated yet.');
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: brief.content });
+      needsFollowUp = true;
+    } else if (name === 'create_draft') {
+      actions.push({ type: 'create_draft', ...args });
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Draft queued in the workspace. It was not sent.' });
+    } else if (name === 'navigate') {
+      actions.push({ type: 'navigate', ...args });
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Navigation queued in the workspace.' });
+    } else if (name === 'propose_crm_update') {
       const ok = appendJsonArray(path.join(dataDir, 'crm-proposals.json'), {
         company: String(args.company || ''), deal: String(args.deal || ''),
         field: String(args.field || ''), currentValue: String(args.currentValue || 'unknown'),
@@ -428,44 +459,36 @@ async function askOpenAI(message, history) {
       }, 500);
       actions.push({ type: 'propose_crm_update', ok, ...args });
       if (!ok) notes.push('Could not save the CRM proposal.');
-    }
-    else if (tc.function.name === 'mark_queue_item') {
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: ok ? 'Proposal stored in the workspace. Nothing was written to HubSpot.' : 'Could not save the CRM proposal.' });
+    } else if (name === 'mark_queue_item') {
       const itemId = String(args.itemId || '');
       const action = String(args.action || '');
       const valid = /^q:[a-z_]+:[A-Za-z0-9_-]+$/.test(itemId) && (action === 'done' || action === 'dismiss');
       const ok = valid && appendJsonArray(path.join(dataDir, 'hollie-feedback.json'), { itemId, action, at: new Date().toISOString(), by: 'assistant' }, 500);
       actions.push({ type: 'mark_queue_item', itemId, action, ok });
       if (!ok) notes.push('Could not update that queue item — check the item id.');
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: ok ? 'Queue item updated in the workspace.' : 'Could not update that queue item.' });
+    } else {
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: runAssistantTool(name, args, FACTS) });
+      needsFollowUp = true;
     }
-    else if (tc.function.name === 'read_briefing') {
-      const brief = readAgentBrief();
-      if (brief) {
-        const parts = [];
-        if (brief.greeting) parts.push(brief.greeting);
-        for (const p of brief.paragraphs || []) parts.push(p);
-        // Feed the brief back into this turn as context so the reply can use it.
-        messages.push({ role: 'assistant', content: null, tool_calls: [tc] });
-        messages.push({ role: 'tool', tool_call_id: tc.id, content: 'MORNING BRIEF (written ' + (brief.generatedAt || 'unknown') + '):\n' + parts.join('\n') + '\nNEW: ' + (brief.whatsNew || []).join(' | ') + '\nWATCH: ' + (brief.watchOuts || []).join(' | ') });
-        const follow = await callChatApi({ model: MODEL, messages, max_completion_tokens: 800 });
-        const fmsg = follow.choices?.[0]?.message?.content || '';
-        // Replace the pending tool call handling: answer from the follow-up.
-        const fanswer = htmlify(fmsg);
-        return { answer: fanswer || '<p>Could not read the briefing.</p>', answerText: fanswer.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(), actions };
-      }
-      notes.push('No morning brief has been generated yet.');
+  }
+  if (needsFollowUp && toolCalls.length) {
+    messages.push({ role: 'assistant', content: choice?.content || null, tool_calls: toolCalls });
+    messages.push(...toolMessages);
+    const follow = await callChatApi({ model: MODEL, messages, max_completion_tokens: 800 });
+    let answer = htmlify((follow.choices?.[0]?.message?.content || '').trim());
+    if (!answer && FACTS?.metrics?.largest) {
+      const g = FACTS.metrics.largest;
+      answer = '<p>Largest open deal: <strong>' + escapeHtml(g.company) + '</strong> — ' + escapeHtml(g.dealName || g.company) + ', ' + escapeHtml(g.amountLabel) + '. Open pipeline: ' + FACTS.metrics.openCount + ' deals, ' + escapeHtml(FACTS.metrics.openAmountLabel) + '.</p>';
     }
+    if (actions.length) answer += describeActions(actions);
+    for (const n of notes) answer += '<p><em>' + escapeHtml(n) + '</em></p>';
+    const answerText = answer.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return { answer: answer || '<p>I could not produce an answer.</p>', answerText, actions };
   }
   let answer = htmlify((choice?.content || '').trim());
-  if (!answer && actions.length) {
-    const describe = a => a.type === 'create_draft'
-      ? 'created the draft <strong>' + escapeHtml(a.title || (a.company || '') + ' follow-up') + '</strong>'
-      : a.type === 'propose_crm_update'
-        ? (a.ok ? 'queued a CRM proposal for <strong>' + escapeHtml(a.company || '') + '</strong> (' + escapeHtml(a.field || '') + ' → ' + escapeHtml(a.proposedValue || '') + ') — nothing was written to HubSpot' : 'could not save the CRM proposal')
-        : a.type === 'mark_queue_item'
-          ? (a.ok ? 'marked queue item <strong>' + escapeHtml(a.itemId || '') + '</strong> as ' + escapeHtml(a.action || '') : 'could not update that queue item')
-          : 'opened <strong>' + escapeHtml(a.view) + '</strong>';
-    answer = '<p>Done — ' + actions.map(describe).join(', ') + '.</p>';
-  }
+  if (!answer && actions.length) answer = describeActions(actions);
   for (const n of notes) answer += '<p><em>' + escapeHtml(n) + '</em></p>';
   const answerText = answer.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   return { answer: answer || '<p>I could not produce an answer.</p>', answerText, actions };

@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gtm_metrics import days_quiet, greeting, is_open_pipeline, phoenix_today
+from gtm_metrics import greeting, phoenix_today, snapshot_metrics
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(REPO, "out", "data")
@@ -222,8 +222,10 @@ def build_fixes(missing_amount_deals, quiet_deals):
             for o in (missing_amount_deals or [])[:12]
         ],
         "quietBigDeals": [
-            {"name": o.get("name"), "stage": o.get("stage"), "amount": o.get("amount"),
-             "days": o.get("days"), "close": o.get("close"),
+            {"name": o.get("companyName") or o.get("name"), "dealName": o.get("dealName") or "",
+             "stage": o.get("stage"), "amount": o.get("amount"),
+             "owner": o.get("ownerLabel"),
+             "days": o.get("days"), "daysQuiet": o.get("daysQuiet"), "close": o.get("close"),
              "note": (o.get("note") or "")[:200]}
             for o in (quiet_deals or [])[:4]
         ],
@@ -236,8 +238,9 @@ def build_fixes(missing_amount_deals, quiet_deals):
         "Standing rules: never invent amounts, dates, contacts, or email addresses.\n\n"
         "For each problem, produce exactly one fix:\n"
         "- quiet big deal: type 'draft'. Write the actual follow-up email — draftSubject "
-        "and draftText (under 180 words), grounded in the deal's stage and how long it "
-        "has been quiet. Maximum 3 drafts; pick the biggest amounts.\n"
+        "and draftText (under 180 words), grounded in the deal's stage and daysQuiet. "
+        "daysQuiet is already computed; repeat it. These deals are in the open book. "
+        "Maximum 3 drafts; pick the biggest amounts.\n"
         "- deals missing amounts: a SINGLE type 'ask' fix listing the deals by name, "
         "asking who owns backfilling them. Never guess an amount.\n"
         "Reply with strict JSON only: {\"fixes\": [{\"type\": \"draft|ask\", "
@@ -327,23 +330,25 @@ def main():
     mmkeys = [mmkey(m) for m in mismatches]
     new_mm = [m for m in mismatches if mmkey(m) not in prev_mmkeys][:6]
 
-    opps = ver.get("opportunities") or []
     today = phoenix_today()
     rec = load_json(os.path.join(DATA, "records.json")) or {}
-    companies = {c.get("id"): c for c in (rec.get("companies") or [])}
-    def quiet_days_for(o):
-        cid = str(o.get("companyId") or "").replace("company:", "")
-        company = companies.get(cid) or next((c for c in companies.values() if c.get("name") == o.get("name")), None)
-        return days_quiet(company, today) if company else None
+    book = snapshot_metrics(ver, rec, today)
+    open_deals = book.get("openDeals") or []
+
     def opline(o):
         return {
-            "name": o.get("name"), "company": o.get("company") or o.get("name"),
+            "name": o.get("companyName") or o.get("name"),
+            "dealName": o.get("dealName") or "",
+            "company": o.get("companyName") or o.get("name"),
             "stage": o.get("stage"), "amount": o.get("amount"),
-            "daysQuiet": quiet_days_for(o), "close": o.get("close"),
+            "owner": o.get("ownerLabel"),
+            "daysQuiet": o.get("daysQuiet"), "close": o.get("close"),
+            "inOpenBook": True,
         }
-    # Quiet days come from the shared engagement calculation, not days-in-stage.
+    # Quiet days and the open book come from the shared computation, not days-in-stage.
+    # No recorded engagement counts as quiet, matching the page.
     quiet_commit = sorted(
-        [o for o in opps if is_open_pipeline(o, today) and (quiet_days_for(o) or 0) >= 14],
+        [o for o in open_deals if o.get("daysQuiet") is None or (o.get("daysQuiet") or 0) >= 14],
         key=lambda o: (o.get("amount") or 0), reverse=True,
     )[:6]
 
@@ -363,6 +368,18 @@ def main():
         ],
         "mismatchCount": len(mismatches),
         "quietBigDeals": [opline(o) for o in quiet_commit],
+        "openBook": {
+            "definition": book.get("definition"),
+            "asOf": book.get("today"),
+            "quarter": [book.get("quarterStart"), book.get("quarterEnd")],
+            "openCount": book.get("openCount"),
+            "openAmount": book.get("openAmount"),
+            "weighted": book.get("weighted"),
+            "largestOpenDeal": book.get("largest"),
+            "leads": book.get("leads"),
+            "mql": book.get("mql"),
+            "sql": book.get("sql"),
+        },
         "firstBeat": not bool(prev_state),
     }
 
@@ -373,6 +390,8 @@ def main():
         "RULES:\n"
         "- Ground EVERY claim in the data below. Never invent companies, people, dates, or amounts.\n"
         "- Quiet-day figures are already computed (daysQuiet). Repeat those numbers; do not calculate another.\n"
+        "- openBook is the page's open pipeline. It excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Repeat openBook counts, amounts, and largestOpenDeal. A renewal is not an open deal and is not the largest open deal.\n"
+        "- Owner labels are already resolved. A label like Owner #… means the name is not connected. Do not invent a person's name.\n"
         "- It is " + greeting() + " in America/Phoenix. Match that time of day if you greet anyone.\n"
         "- Be specific and actionable: name the deal/company, the number, the implication.\n"
         "- Prefer new/changed things (newQueueItems, newMismatches, resolved items) over restating the standing queue.\n"
@@ -446,7 +465,7 @@ def main():
     # and go straight to the CRM proposal queue for human approve/decline —
     # nothing is ever written to HubSpot. Drafts and open questions go to
     # heartbeat-fixes.json for one-tap action in the dashboard.
-    missing_amt = [o for o in opps if not o.get("amount")][:12]
+    missing_amt = [o for o in open_deals if not o.get("amount")][:12]
     proposals = mismatch_proposals(mismatches)
     n_proposed = append_heartbeat_proposals(proposals) if proposals else 0
     fixes = build_fixes(missing_amt, quiet_commit)
