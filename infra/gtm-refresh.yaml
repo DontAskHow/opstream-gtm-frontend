@@ -5,6 +5,10 @@ Parameters:
   ImageTag:
     Type: String
     Default: latest
+  SourceKey:
+    Type: String
+    Default: code/refresh-src/v9.zip
+    Description: Key in opstream-gtm-data-080403790510 of the refresh source zip
   VpcId:
     Type: AWS::EC2::VPC::Id
     Description: Default VPC id
@@ -223,6 +227,80 @@ Resources:
               - secretsmanager:PutSecretValue
             Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/google-sheets-refresh-token-*
 
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: opstream-gtm-refresh-codebuild
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: build-refresh-image
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/opstream-gtm-refresh*
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: arn:aws:s3:::opstream-gtm-data-080403790510/code/refresh-src/*
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt Repository.Arn
+
+  RefreshBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: opstream-gtm-refresh
+      Description: Build the refresh image from the source zip and push it to ECR
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: IMAGE_REPO
+            Value: !GetAtt Repository.RepositoryUri
+          - Name: IMAGE_TAG
+            Value: !Ref ImageTag
+      Source:
+        Type: S3
+        Location: !Sub opstream-gtm-data-080403790510/${SourceKey}
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${IMAGE_REPO%%/*}
+            build:
+              commands:
+                - docker build -f refresh/Dockerfile -t $IMAGE_REPO:$IMAGE_TAG .
+            post_build:
+              commands:
+                - docker push $IMAGE_REPO:$IMAGE_TAG
+      TimeoutInMinutes: 30
+
 Outputs:
   RepositoryUri:
     Value: !GetAtt Repository.RepositoryUri
@@ -230,3 +308,9 @@ Outputs:
     Value: !Ref FailureTopic
   EbPolicyArn:
     Value: !Ref BeanstalkReadPolicy
+  CodeBuildProject:
+    Value: !Ref RefreshBuild
+  TaskSecurityGroupId:
+    Value: !Ref TaskSecurityGroup
+  ClusterName:
+    Value: !Ref Cluster

@@ -41,7 +41,7 @@ The OAuth client is already in Secrets Manager, the same client the dashboard's 
 - `opstream-gtm/google-oauth-client-id`
 - `opstream-gtm/google-oauth-client-secret`
 
-One-time connect, after the dashboard is deployed and the Beanstalk role has the policy from step 4. Open:
+One-time connect, after the dashboard is deployed and the Beanstalk role has the policy from step 5. Open:
 
 `https://<dashboard-host>/admin/connect-sheets`
 
@@ -65,56 +65,77 @@ Create the other secrets only when you have the credential (Console → Secrets 
 
 Leave the encryption key as the default `aws/secretsmanager` key.
 
-### 2. CloudShell: deploy the stack
+CloudShell cannot build this image reliably, and there is no local Docker. The stack includes a CodeBuild project that builds `refresh/Dockerfile` from a source zip in S3 and pushes it to the ECR repository the stack creates. The task uses the default VPC, public subnets, and a public IP for egress. There is no NAT gateway.
 
-This creates the ECR repository. The first task run waits until step 3 has pushed an image.
+### 2. CloudShell: upload the source zip
+
+In CloudShell, Actions → Upload file, and choose `refresh-src-v9.zip` from `opstream-gtm-v9-refresh-infra.zip`. Then:
 
 ```bash
-git clone https://github.com/DontAskHow/opstream-gtm-frontend.git
-cd opstream-gtm-frontend
-git checkout v6-live-source
+aws s3 cp refresh-src-v9.zip s3://opstream-gtm-data-080403790510/code/refresh-src/v9.zip --region us-east-2
+```
+
+The object key must match the `SourceKey` parameter (`code/refresh-src/v9.zip` unless you change it). The zip root must contain `refresh/Dockerfile`, not a parent folder.
+
+### 3. CloudShell: deploy the stack
+
+Upload `gtm-refresh.yaml` the same way (it is in the infra zip).
+
+```bash
 VPC=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true --query 'Vpcs[0].VpcId' --output text --region us-east-2)
 SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC Name=default-for-az,Values=true --query 'Subnets[].SubnetId' --output text --region us-east-2 | tr '\t' ',')
 aws cloudformation deploy \
   --region us-east-2 \
   --stack-name opstream-gtm-refresh \
-  --template-file infra/gtm-refresh.yaml \
+  --template-file gtm-refresh.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides ImageTag=latest VpcId=$VPC PublicSubnetIds=$SUBNETS
+  --parameter-overrides ImageTag=latest SourceKey=code/refresh-src/v9.zip VpcId=$VPC PublicSubnetIds=$SUBNETS
 ```
 
 `PublicSubnetIds` is a comma-separated list. `aws cloudformation deploy` accepts that for `List<AWS::EC2::Subnet::Id>`.
 
-### 3. CloudShell: build and push the image
-
-Stay in the clone from step 2.
+### 4. CloudShell: build the image in CodeBuild and wait
 
 ```bash
-aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin 080403790510.dkr.ecr.us-east-2.amazonaws.com
-docker build -f refresh/Dockerfile -t opstream-gtm-refresh .
-docker tag opstream-gtm-refresh:latest 080403790510.dkr.ecr.us-east-2.amazonaws.com/opstream-gtm-refresh:latest
-docker push 080403790510.dkr.ecr.us-east-2.amazonaws.com/opstream-gtm-refresh:latest
+BUILD_ID=$(aws codebuild start-build --region us-east-2 --project-name opstream-gtm-refresh --query 'build.id' --output text)
+echo "$BUILD_ID"
+while true; do
+  STATUS=$(aws codebuild batch-get-builds --region us-east-2 --ids "$BUILD_ID" --query 'builds[0].buildStatus' --output text)
+  echo "$STATUS"
+  case "$STATUS" in
+    SUCCEEDED) break ;;
+    FAILED|FAULT|STOPPED|TIMED_OUT) echo "build failed"; exit 1 ;;
+  esac
+  sleep 20
+done
 ```
 
-CloudShell's Docker disk is small. If the build fails for space, use the CloudShell Actions menu to increase storage, or build on a laptop and push with the same commands.
+Logs: CloudWatch → Log groups → `/aws/codebuild/opstream-gtm-refresh`. The project reads `s3://opstream-gtm-data-080403790510/code/refresh-src/v9.zip`, runs `docker build -f refresh/Dockerfile`, and pushes `latest` to the ECR repository the stack created. CodeBuild is not placed in the VPC, so it can reach Docker Hub and ECR.
 
-### 4. Attach the dashboard policy
+### 5. Attach the dashboard policy
 
-The stack output `EbPolicyArn` is a managed policy. Console → IAM → Roles → `aws-elasticbeanstalk-ec2-role` → Add permissions → Attach policies → `opstream-gtm-eb-published-read`.
+The stack output `EbPolicyArn` is the managed policy. Look up the instance role from the Elastic Beanstalk environment `opstream-gtm-prod` and attach it:
+
+```bash
+APP=$(aws elasticbeanstalk describe-environments --region us-east-2 --environment-names opstream-gtm-prod --query 'Environments[0].ApplicationName' --output text)
+PROFILE=$(aws elasticbeanstalk describe-configuration-settings --region us-east-2 --application-name "$APP" --environment-name opstream-gtm-prod --query "ConfigurationSettings[0].OptionSettings[?Namespace=='aws:autoscaling:launchconfiguration' && OptionName=='IamInstanceProfile'].Value | [0]" --output text)
+ROLE=$(aws iam get-instance-profile --instance-profile-name "$PROFILE" --query 'InstanceProfile.Roles[0].RoleName' --output text)
+POLICY=$(aws cloudformation describe-stacks --region us-east-2 --stack-name opstream-gtm-refresh --query "Stacks[0].Outputs[?OutputKey=='EbPolicyArn'].OutputValue" --output text)
+echo "role $ROLE"
+echo "policy $POLICY"
+aws iam attach-role-policy --role-name "$ROLE" --policy-arn "$POLICY"
+```
 
 That role can then read `published/*`, read and write `state/*`, read `opstream-gtm/google-oauth-client-id` and `opstream-gtm/google-oauth-client-secret`, and create or update `opstream-gtm/google-sheets-refresh-token`. The Fargate task role has `secretsmanager:GetSecretValue` and `DescribeSecret` on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*`. `PutSecretValue` is only on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/hubspot-oauth-*`, so a rotated HubSpot refresh token is written back to that secret. Do not add environment properties on the Beanstalk environment. The bucket name is already in `refresh-config.json` inside the application zip.
 
-### 5. Run it once
-
-Console → ECS → Clusters → `opstream-gtm-refresh` → Run new task → Launch type Fargate → Task definition `opstream-gtm-refresh` → the public subnets → turn on Public IP → the security group the stack created.
-
-Or CloudShell:
+### 6. Run the task once
 
 ```bash
 VPC=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true --query 'Vpcs[0].VpcId' --output text --region us-east-2)
 SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC Name=default-for-az,Values=true --query 'Subnets[].SubnetId' --output text --region us-east-2 | tr '\t' ',')
-SG=$(aws cloudformation describe-stack-resources --stack-name opstream-gtm-refresh --region us-east-2 --query "StackResources[?ResourceType=='AWS::EC2::SecurityGroup'].PhysicalResourceId" --output text)
-aws ecs run-task --region us-east-2 --cluster opstream-gtm-refresh --launch-type FARGATE \
+SG=$(aws cloudformation describe-stacks --region us-east-2 --stack-name opstream-gtm-refresh --query "Stacks[0].Outputs[?OutputKey=='TaskSecurityGroupId'].OutputValue" --output text)
+CLUSTER=$(aws cloudformation describe-stacks --region us-east-2 --stack-name opstream-gtm-refresh --query "Stacks[0].Outputs[?OutputKey=='ClusterName'].OutputValue" --output text)
+aws ecs run-task --region us-east-2 --cluster "$CLUSTER" --launch-type FARGATE \
   --task-definition opstream-gtm-refresh \
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=ENABLED}"
 ```
@@ -123,7 +144,7 @@ Logs: CloudWatch → Log groups → `/opstream/gtm-refresh`.
 
 A failed task publishes a message to the SNS topic `opstream-gtm-refresh-failures`. No email is subscribed. Add an email subscription later in the SNS console if you want one.
 
-### 6. Confirm the pointer
+### 7. Confirm the pointer
 
 ```bash
 aws s3 cp s3://opstream-gtm-data-080403790510/published/LATEST.json -

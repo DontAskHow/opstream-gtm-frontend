@@ -89,7 +89,7 @@ check('associated renewal company', certified.context.includes('NOT IN THE OPEN 
 check('marketing brief in context', certified.context.includes('MARKETING BRIEF'), 'missing marketing brief');
 check('context funnel', certified.context.includes('383 leads / 280 MQL / 118 SQL'), 'missing funnel line');
 const mozilla = certified.deals.find(d => /Mozilla Firefox/.test(d.dealName || '') && d.amount === 105000);
-check('mozilla in the book', !!mozilla && mozilla.inOpenBook && mozilla.stage === 'Wider stakeholders' && mozilla.owner === 'Tim' && mozilla.closePassed === false, mozilla ? [mozilla.stage, mozilla.owner, mozilla.inOpenBook].join('/') : 'missing');
+check('mozilla in the book', !!mozilla && mozilla.inOpenBook && mozilla.company === 'Mozilla' && mozilla.stage === 'Wider stakeholders' && mozilla.owner === 'Tim' && mozilla.closePassed === false, mozilla ? [mozilla.company, mozilla.stage, mozilla.owner, mozilla.inOpenBook].join('/') : 'missing');
 const passed = ['CrossCountry', 'Taboola', 'ImPact Biotech', 'UVeye'].map(name => certified.deals.find(d => (d.dealName || '').includes(name) && d.inOpenBook));
 check('past close sheet rows stay open', passed.every(d => d && d.closePassed) && passed.map(d => d.amount).join(',') === '50000,50000,35000,50000', passed.map(d => d ? d.dealName + ':' + d.closePassed : 'missing').join('; '));
 check('past close flagged in context', ['CrossCountry', 'Taboola', 'ImPact Biotech', 'UVeye'].every(name => certified.context.includes(name) && certified.context.includes('close date passed')), 'missing close date passed');

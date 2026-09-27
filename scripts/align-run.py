@@ -183,8 +183,31 @@ def main():
         "commitDeals": [d.get("companyName") or d.get("name") for d in commit["deals"]],
         "collectedAt": collected,
     }, indent=1), encoding="utf-8")
+    stamp_run_id(DATA, run_id)
     print("align-run %s open %s %s" % (run_id, book["openCount"], book["openAmount"]))
     return 0
+
+
+def stamp_run_id(data_dir, run_id):
+    """Every JSON object in the snapshot carries this run. Arrays stay arrays."""
+    for path in sorted(Path(data_dir).glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            if data.get("runId") == run_id:
+                continue
+            data["runId"] = run_id
+            path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        elif isinstance(data, list):
+            changed = False
+            for row in data:
+                if isinstance(row, dict) and row.get("runId") != run_id:
+                    row["runId"] = run_id
+                    changed = True
+            if changed:
+                path.write_text(json.dumps(data, indent=1), encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,8 @@ import sqlite3, json, os, re, sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gtm_metrics import apply_sheet_owner_names, date_only, is_open_pipeline, phoenix_today, probability_fraction, stage_display
+from gtm_metrics import (apply_sheet_owner_names, date_only, is_browser_label, is_open_pipeline,
+                         phoenix_today, probability_fraction, stage_display)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.environ.get('BRAIN_DB') or os.path.expanduser('~/workspace/brain/brain.db')
@@ -369,8 +370,23 @@ def main():
         recording titles linked to the company (e.g. 'Allied World - Demo'
         reveals the real name behind 'awacservices.com')."""
         raw = clean_company_name(p.get('name'))
-        if raw and not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', raw, re.I):
+        domainish = bool(raw and re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', raw, re.I))
+        browser = is_browser_label(raw)
+        if raw and not domainish and not browser:
             return raw
+        # A browser user-agent string is not the company. Associated contacts
+        # sometimes store the real name on their company property.
+        if browser:
+            votes = []
+            for oid in links.get('contacts', []):
+                op, _ = objects['contacts'].get(oid, (None, None))
+                if not op:
+                    continue
+                cn = clean_company_name(op.get('company'))
+                if cn and not is_browser_label(cn) and not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', cn, re.I):
+                    votes.append(cn)
+            if votes and len(set(votes)) == 1:
+                return votes[0]
         # Name is a bare domain (or missing) — look at linked titles.
         candidates = []
         for oid in links.get('meetings', []):
@@ -726,13 +742,15 @@ def main():
 
     # ---------- opportunities (one per OPEN deal) ----------
     opportunities = []
+    company_name_by_id = {c['id']: c['name'] for c in companies}
     for did in sorted(open_deal_ids):
         dp, _ = deals.get(did, ({}, None))
         cid = deal_company.get(did)
         cname = ''
         if cid:
-            cp, _ = objects['companies'].get(cid, ({}, None))
-            cname = clean_company_name(cp.get('name'))
+            cname = company_name_by_id.get(cid) or ''
+            if is_browser_label(cname):
+                cname = ''
         if re.fullmatch(r'renewal|current agreement', cname or '', flags=re.I):
             cname = ''
         if not cname:

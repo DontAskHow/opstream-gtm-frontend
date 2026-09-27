@@ -134,9 +134,12 @@ const workspaceModel = {
     return s;
   },
   // A verification fixture is not a customer deal.
+  isBrowserLabel(value) {
+    return /mozilla firefox\b/i.test(String(value||''));
+  },
   isTestRecord(deal) {
     const blob=[deal?.name,deal?.dealName,deal?.company,deal?.title,deal?.rationale].filter(Boolean).join(' ');
-    return /mozilla firefox|system verification test/i.test(blob);
+    return /system verification test/i.test(blob);
   },
   // The extract sometimes files one deal on two companies. Prefer the company whose name is the opportunity name.
   companyForOpportunity(opportunity,records) {
@@ -316,8 +319,10 @@ const workspaceModel = {
   pipelineCompanyName(companyName, dealName, fallbackName) {
     const fromCompany=this.accountName(companyName, dealName);
     if(fromCompany)return fromCompany;
-    const raw=this.companyName(companyName)||this.companyName(fallbackName);
-    if(raw&&!this.isPlaceholderName(raw))return raw;
+    const raw=this.companyName(companyName);
+    if(raw&&!this.isPlaceholderName(raw)&&!this.isBrowserLabel(raw))return raw;
+    const other=this.companyName(fallbackName);
+    if(other&&!this.isPlaceholderName(other)&&!this.isBrowserLabel(other))return other;
     return 'No company linked';
   },
   renewalStage(deal) {
@@ -737,7 +742,7 @@ const workspaceModel = {
       next.stage=ov.stage; next.stageLabel=ov.stage;
     }
     if(ov.owner&&next.owner!==ov.owner){next.hubspotOwner=next.owner; next.owner=ov.owner; diffs.push('owner');}
-    if(ov.company&&next.name!==ov.company)next.name=ov.company;
+    if(ov.company&&!this.isBrowserLabel(ov.company)&&next.name!==ov.company)next.name=ov.company;
     next.sheetClass=this.sheetClassName(ov.stage||next.stage);
     if(diffs.length)next.hubspotDiffers=diffs;
     return next;
@@ -776,8 +781,7 @@ const workspaceModel = {
     return out;
   },
   isJunkName(value) {
-    const low=String(value||'').toLowerCase();
-    return low.includes('mozilla firefox')||low.includes('system verification test');
+    return String(value||'').toLowerCase().includes('system verification test');
   },
   accountName(companyName, dealName) {
     const name=this.companyName(companyName);

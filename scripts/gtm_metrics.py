@@ -115,10 +115,14 @@ def probability_fraction(value):
     return min(n, 100) / 100 if n > 1 else n
 
 
+def is_browser_label(value):
+    """A browser user-agent string stored as a company name, not the company."""
+    return re.search(r"mozilla firefox\b", str(value or ""), flags=re.I) is not None
+
+
 def is_test_record(deal):
     blob = " ".join(str((deal or {}).get(k) or "") for k in ("name", "dealName", "company", "title", "rationale"))
-    low = blob.lower()
-    return "mozilla firefox" in low or "system verification test" in low
+    return "system verification test" in blob.lower()
 
 
 def apply_sheet_owner_names(owner_names, votes):
@@ -881,8 +885,9 @@ def apply_sheet_deal(deal, overrides):
         nxt["hubspotOwner"] = nxt.get("owner")
         nxt["owner"] = ov["owner"]
         diffs.append("owner")
-    if ov.get("company") and nxt.get("name") != ov["company"]:
-        nxt["name"] = ov["company"]
+    sheet_company = ov.get("company")
+    if sheet_company and not is_browser_label(sheet_company) and nxt.get("name") != sheet_company:
+        nxt["name"] = sheet_company
     nxt["sheetClass"] = sheet_class_name(ov.get("stage") or nxt.get("stage"))
     if diffs:
         nxt["hubspotDiffers"] = diffs
@@ -975,14 +980,15 @@ def snapshot_age_hours(generated_at, now=None):
 
 
 def is_junk_name(value):
-    low = str(value or "").lower()
-    return "mozilla firefox" in low or "system verification test" in low
+    return "system verification test" in str(value or "").lower()
 
 
 def account_name(company_name_value, deal_name=None):
     name = company_name(company_name_value)
     deal = company_name(deal_name)
     if is_junk_name(name) or is_junk_name(deal):
+        return None
+    if is_browser_label(name):
         return None
     if re.fullmatch(r"renewal|current agreement", name or "", flags=re.I):
         return None
