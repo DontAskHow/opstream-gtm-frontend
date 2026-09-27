@@ -27,7 +27,8 @@ OUT = os.environ.get('OUT_DATA') or os.path.join(ROOT, 'out', 'data')
 # file is generated, not a date frozen into the script.
 TODAY = phoenix_today()
 SNAPSHOT = 'brain-' + TODAY
-NOW_ISO = datetime.now(timezone.utc).isoformat()
+# GTM_GENERATED_AT rebuilds an existing collection with its original stamp.
+NOW_ISO = os.environ.get('GTM_GENERATED_AT') or datetime.now(timezone.utc).isoformat()
 
 CLOSED_STAGES = {'closedwon', 'closedlost'}
 NAMED_STAGES = {
@@ -407,7 +408,7 @@ def main():
             if head and len(head) > 2 and not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', head, re.I) \
                and head.lower() not in ('sync', 'stand-up', 'standup', 'weekly', 'check-in', 'checkin', 'intro', 'demo', 'call', 'meeting'):
                 return clean_company_name(head)
-        return raw or ('Company ' + cid)
+        return raw or 'Company not named in HubSpot'
 
     for cid in sorted(scoped_company_ids):
         p, fetched = objects['companies'].get(cid, ({}, None))
@@ -989,7 +990,7 @@ def main():
         # No per-person login. The name is not shown. owner stays true because
         # the connections panel only offers Slack setup when the shared user is the owner.
         'user': {'id': 'team', 'name': 'Opstream team', 'email': '', 'owner': True},
-        'preferences': {'mode': 'cs', 'ratings': {}, 'draftModes': {}, 'priorityContext': {}},
+        'preferences': {'mode': 'marketing', 'ratings': {}, 'draftModes': {}, 'priorityContext': {}},
         'preferencesRevision': 0,
         'drafts': [],
         'comments': [],

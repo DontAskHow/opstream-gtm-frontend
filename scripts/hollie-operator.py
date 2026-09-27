@@ -30,6 +30,7 @@ from gtm_metrics import (QUIET_DAYS as SHARED_QUIET_DAYS, account_name,
                          customer_facing_action, date_only, days_quiet, is_internal_meeting,
                          deals_with_sheet, is_junk_name, is_open_pipeline, last_engagement,
                          person_name, sheet_overrides, unworked_count)
+from marketing_priorities import build as build_marketing_priorities
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("OUT_DATA") or (ROOT / "out" / "data"))
@@ -109,10 +110,12 @@ def newest_key(iso):
     return "".join(str(9 - int(ch)) if ch.isdigit() else ch for ch in raw)
 
 
-def non_english(text):
-    if re.search(r"[\u0590-\u05FF\u0600-\u06FF]", text or ""):
-        return "[Summary is not in English] " + text
-    return text
+def collected_label(iso):
+    d = date_only(iso)
+    if not d:
+        return "on an unrecorded date"
+    parsed = date.fromisoformat(d)
+    return "%s %d" % (parsed.strftime("%b"), parsed.day)
 
 
 def real_owner_name(owner):
@@ -316,7 +319,7 @@ def main():
                         summ_bits.append(bit)
                     if len(summ_bits) >= 2:
                         break
-                summ = non_english(" ".join(summ_bits)[:420])
+                summ = " ".join(summ_bits)[:420]
                 body_lines = [greeting, "",
                               "Following our call on %s, here are the action items we captured:" % d,
                               ""]
@@ -418,56 +421,6 @@ def main():
             "_sort": str(9999 - (dq or 9999)),
         })
 
-    # 3) unworked_lead — sheet tracker when it has rows, otherwise HubSpot
-    # contacts the sheet does not list. Newsletter subscribers are not leads.
-    if autonomy.get("draft_followups") in ("queue", "auto", "propose"):
-        sheet_leads = review.get("leads") or []
-        if sheet_leads:
-            # The Accounts lead list carries every sheet row. The marketing
-            # queue gets one item that cites the count, so it does not become
-            # one card per company.
-            usable = []
-            seen_lead = set()
-            for l in sheet_leads:
-                if l.get("mql") or subscriber_lead(l):
-                    continue
-                label = l.get("company") or l.get("name") or ""
-                if not label or "@" in str(label) or is_junk_name(label):
-                    continue
-                key = str(label).strip().lower()
-                if key in seen_lead:
-                    continue
-                seen_lead.add(key)
-                usable.append(l)
-            usable.sort(key=lambda l: l.get("lead") or l.get("leadDate") or "", reverse=True)
-            if usable:
-                sample = ", ".join(str(l.get("company") or l.get("name")) for l in usable[:5])
-                candidates.append({
-                    "id": "q:unworked_lead:tracker", "kind": "unworked_lead", "audience": "marketing",
-                    "title": "%d unworked leads on the Lead Tracker" % len(usable),
-                    "company": None, "companyId": None,
-                    "why": ("The Lead Tracker lists %d companies with no MQL date, including %s. The full list, with source and owner, is on Accounts. Newsletter subscribers are not included." % (len(usable), sample)),
-                    "confidence": "high",
-                    "confidenceNote": "From the Lead Tracker rows in this collection.",
-                    "evidence": [], "drawerKeys": [],
-                    "_hash": short_hash("lead", "tracker", len(usable)),
-                    "_sort": newest_key(usable[0].get("lead") or usable[0].get("leadDate")),
-                })
-        else:
-            tracker_n = unworked_count(verified.get("leads") or [], review)
-            if tracker_n:
-                candidates.append({
-                    "id": "q:unworked_lead:tracker", "kind": "unworked_lead", "audience": "marketing",
-                    "title": "%d unworked leads on the Lead Tracker" % tracker_n,
-                    "company": None, "companyId": None,
-                    "why": ("The Lead Tracker counts %d unworked leads. The full tracker rows are not in this collection, so they are not listed one by one. Newsletter subscribers are excluded from the contact list." % tracker_n),
-                    "confidence": "high",
-                    "confidenceNote": "Count from the Lead Tracker. Individual sheet rows were not in the extract.",
-                    "evidence": [], "drawerKeys": [],
-                    "_hash": short_hash("lead", "tracker", tracker_n),
-                    "_sort": "",
-                })
-
     # 4) crm_update proposals (aggregate hygiene items)
     if autonomy.get("crm_updates") == "propose":
         no_amt = [(c, d_) for (c, d_, _, _) in open_deals if d_.get("amount") is None]
@@ -519,7 +472,7 @@ def main():
             lines = []
             def _hs_value(m):
                 raw = str(m.get("hubspot") or "").strip()
-                if m.get("field") == "stage" and (not raw or "probability" in raw.lower() or raw.isdigit()):
+                if m.get("field") == "stage" and (not raw or raw.isdigit()):
                     return "not available"
                 return raw or "not available"
             for m in ms:
@@ -584,18 +537,13 @@ def main():
         k = it["kind"]
         if k in ("sheet_review", "crm_update"):
             it["goal"] = "forecast"
-        elif k == "unworked_lead":
-            it["goal"] = "pipeline"
-            it["audience"] = "marketing"
         elif k == "stale_deal":
             it["goal"] = bucket_of(it.get("stage")) or "pipeline"
         elif k in ("followup_draft", "meeting_prep"):
             it["goal"] = co_bucket.get(it.get("companyId")) or "pipeline"
         else:
             it["goal"] = "pipeline"
-        if not it.get("audience"):
-            blob = (str(it.get("title") or "") + " " + str(it.get("why") or "")).lower()
-            it["audience"] = "marketing" if any(w in blob for w in ("newsletter", "webinar", "campaign", "ad spend")) else "sales"
+        it.setdefault("audience", "sales")
 
     # meeting_prep is "auto": prep briefs are generated silently, not queued.
     # (If autonomy ever sets it to "queue", prep meetings become queue items too.)
@@ -734,7 +682,7 @@ def main():
 
     # rank: new/changed items first within each kind, then followups, stale deals, leads, crm updates
     kind_rank = {"followup_draft": 0, "meeting_prep": 1, "stale_deal": 2,
-                 "sheet_review": 3, "unworked_lead": 4, "crm_update": 5}
+                 "sheet_review": 3, "crm_update": 5}
     queue.sort(key=lambda it: (kind_rank.get(it["kind"], 9), not it["isNew"], it.pop("_sort", "")))
     # One customer action per company. Follow-ups sort ahead of quiet nudges.
     # Sheet mismatches are a different decision and stay even when the company
@@ -795,7 +743,7 @@ def main():
                 "companyId": company.get("id"),
                 "why": "Pinned by hand. %s." % (pin.get("note") or "No note on the pin."),
                 "confidence": "high",
-                "confidenceNote": "From scripts/priority-pins.json. Edit that file, or a Lead Tracker-style sheet tab later, to change the order.",
+                "confidenceNote": "Pinned by the team.",
                 "evidence": ok_refs(company.get("refs")),
                 "drawerKeys": drawer_keys(ok_refs(company.get("refs")), company.get("id")),
                 "pinned": pin.get("note") or True,
@@ -1033,13 +981,8 @@ def main():
     collapsed, seen_prep = [], set()
     for pr in prep:
         if pr.get("lastCall"):
-            lines = [clean_md(s) for s in (pr["lastCall"].get("summary") or [])]
-            if any(re.search(r"[\u0590-\u05FF\u0600-\u06FF]", s or "") for s in lines):
-                lines = ["[Summary is not in English]"] + [s for s in lines if s]
-            pr["lastCall"]["summary"] = lines
+            pr["lastCall"]["summary"] = [line for line in (clean_md(s) for s in (pr["lastCall"].get("summary") or [])) if line]
             purpose = clean_md(pr["lastCall"].get("purpose") or "")
-            if purpose and re.search(r"[\u0590-\u05FF\u0600-\u06FF]", purpose):
-                purpose = "[Summary is not in English] " + purpose
             pr["lastCall"]["purpose"] = purpose or None
         key = (str(pr.get("company") or "").lower(), str(pr.get("callGoal") or "").lower())
         if key in seen_prep:
@@ -1140,9 +1083,14 @@ def main():
              "meetings": brief_meetings, "quietDeals": brief_quiet,
              "followupsOwed": brief_followups, "newLeads": brief_leads}
 
+    marketing = load_json(DATA / "marketing.json", {})
+    marketing_priorities = build_marketing_priorities(
+        marketing, review, today.isoformat(), collected_label(records.get("generatedAt")))
+
     out = {
         "generatedAt": now_iso,
         "runId": run_id,
+        "marketingPriorities": marketing_priorities,
         "snapshotId": records.get("verifiedSnapshotId") or verified.get("snapshotId"),
         "autonomy": autonomy,
         "autonomyText": {
@@ -1162,7 +1110,7 @@ def main():
         "stats": {
             "queueByKind": {k: sum(1 for it in queue if it["kind"] == k)
                             for k in ("followup_draft", "meeting_prep", "stale_deal",
-                                      "sheet_review", "unworked_lead", "crm_update")},
+                                      "sheet_review", "crm_update")},
             "queueByGoal": {g["id"]: sum(1 for it in queue if it.get("goal") == g["id"])
                             for g in goals},
             "briefCounts": {"meetingsToday": len(soon), "quietDeals": brief_quiet["total"],

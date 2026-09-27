@@ -30,6 +30,18 @@ def phoenix_stamp(iso):
     return date_only(iso) or ""
 
 
+def phoenix_clock(iso):
+    try:
+        t = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return ""
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    t = t.astimezone(timezone(timedelta(hours=-7)))
+    hour = t.hour % 12 or 12
+    return "%s %d, %d · %d:%02d %s Phoenix" % (t.strftime("%b"), t.day, t.year, hour, t.minute, "AM" if t.hour < 12 else "PM")
+
+
 def money(n):
     try:
         return "$%s" % f"{round(float(n)):,}"
@@ -77,11 +89,19 @@ def main():
     env = os.environ.copy()
     env["OUT_DATA"] = str(DATA)
     env["GTM_RUN_ID"] = run_id
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "marketing-data.py")], env=env)
+    if proc.returncode != 0:
+        return proc.returncode
     proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "hollie-operator.py")], env=env)
     if proc.returncode != 0:
         return proc.returncode
     hollie = load("hollie.json", {})
     run_id = hollie.get("runId") or run_id
+    marketing = load("marketing.json", {})
+    verified = load("verified.json", {})
+    verified.setdefault("presentation", {})["priorities"] = hollie.get("marketingPriorities") or []
+    verified.setdefault("meta", {})["owners"] = marketing.get("team") or []
+    write("verified.json", verified)
 
     book = snapshot_metrics(verified, records, today=day, sheet_review=review)
     month = day[:7]
@@ -146,8 +166,8 @@ def main():
         "health": {"snapshotAgeHours": age_h, "asOf": day, "collectedAt": collected},
         "insights": [{
             "title": "Snapshot age",
-            "detail": ("Collected %s. Age is computed when the page renders, in America/Phoenix."
-                       % (collected or "not available")),
+            "detail": ("Collected %s. The age is worked out when the page opens."
+                       % (phoenix_clock(collected) or "at an unrecorded time")),
         }],
         "state": {},
     }
