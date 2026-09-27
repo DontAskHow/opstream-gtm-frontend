@@ -7,7 +7,7 @@ Parameters:
     Default: latest
   SourceKey:
     Type: String
-    Default: code/refresh-src/v10.zip
+    Default: code/refresh-src/v11.zip
     Description: Key in opstream-gtm-data-080403790510 of the refresh source zip
   VpcId:
     Type: AWS::EC2::VPC::Id

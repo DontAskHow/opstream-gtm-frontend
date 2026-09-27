@@ -69,13 +69,13 @@ CloudShell cannot build this image reliably, and there is no local Docker. The s
 
 ### 2. CloudShell: upload the source zip
 
-In CloudShell, Actions → Upload file, and choose `refresh-src-v10.zip`. Then:
+In CloudShell, Actions → Upload file, and choose `refresh-src-v11.zip`. Then:
 
 ```bash
-aws s3 cp refresh-src-v10.zip s3://opstream-gtm-data-080403790510/code/refresh-src/v10.zip --region us-east-2
+aws s3 cp refresh-src-v11.zip s3://opstream-gtm-data-080403790510/code/refresh-src/v11.zip --region us-east-2
 ```
 
-The object key must match the `SourceKey` parameter (`code/refresh-src/v10.zip` unless you change it). The zip root must contain `refresh/Dockerfile`, not a parent folder.
+The object key must match the `SourceKey` parameter (`code/refresh-src/v11.zip` unless you change it). The zip root must contain `refresh/Dockerfile`, not a parent folder.
 
 ### 3. CloudShell: deploy the stack
 
@@ -89,7 +89,7 @@ aws cloudformation deploy \
   --stack-name opstream-gtm-refresh \
   --template-file gtm-refresh.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides ImageTag=latest SourceKey=code/refresh-src/v10.zip VpcId=$VPC PublicSubnetIds=$SUBNETS
+  --parameter-overrides ImageTag=latest SourceKey=code/refresh-src/v11.zip VpcId=$VPC PublicSubnetIds=$SUBNETS
 ```
 
 `PublicSubnetIds` is a comma-separated list. `aws cloudformation deploy` accepts that for `List<AWS::EC2::Subnet::Id>`.
@@ -110,7 +110,7 @@ while true; do
 done
 ```
 
-Logs: CloudWatch → Log groups → `/aws/codebuild/opstream-gtm-refresh`. The project reads `s3://opstream-gtm-data-080403790510/code/refresh-src/v10.zip`, runs `docker build -f refresh/Dockerfile`, and pushes `latest` to the ECR repository the stack created. CodeBuild is not placed in the VPC, so it can reach Docker Hub and ECR.
+Logs: CloudWatch → Log groups → `/aws/codebuild/opstream-gtm-refresh`. The project reads `s3://opstream-gtm-data-080403790510/code/refresh-src/v11.zip`, runs `docker build -f refresh/Dockerfile`, and pushes `latest` to the ECR repository the stack created. CodeBuild is not placed in the VPC, so it can reach Docker Hub and ECR.
 
 ### 5. Attach the dashboard policy
 
@@ -136,7 +136,7 @@ aws cloudformation deploy \
   --stack-name opstream-gtm-refresh \
   --template-file gtm-refresh.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides SourceKey=code/refresh-src/v10.zip
+  --parameter-overrides SourceKey=code/refresh-src/v11.zip
 ```
 
 ### 6. Run the task once

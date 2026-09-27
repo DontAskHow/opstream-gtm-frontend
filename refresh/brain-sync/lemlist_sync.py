@@ -13,6 +13,7 @@ A missing secret exits 3 and does not move the watermark.
 import json
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 from common import (
     NeedsConnection,
@@ -68,13 +69,21 @@ def main_sync(log):
                 continue
             raw = dict(c)
             # Per-campaign stats: cheap, one call each; tolerate absence.
-            try:
-                s_status, s_payload = _get(f"/api/campaigns/{cid}/stats")
+            start = str(c.get("createdAt") or "2024-01-01T00:00:00.000Z")
+            for path in (f"/api/v2/campaigns/{cid}/stats?startDate={quote(start)}&endDate={quote(fetched_at)}",
+                         f"/api/campaigns/{cid}/stats"):
+                try:
+                    s_status, s_payload = _get(path)
+                except NeedsConnection:
+                    raise
+                except Exception as e:
+                    log.info("campaign %s: stats unavailable (%s)", cid, type(e).__name__)
+                    continue
                 if s_status == 200 and isinstance(s_payload, dict):
                     raw["stats"] = s_payload
                     stats_filled += 1
-            except Exception as e:
-                log.info("campaign %s: stats unavailable (%s)", cid, type(e).__name__)
+                    break
+                log.info("campaign %s: stats HTTP %s", cid, s_status)
             con.execute(
                 "INSERT INTO lemlist_campaigns(campaign_id, name, status, raw_json, fetched_at)"
                 " VALUES(?,?,?,?,?)"

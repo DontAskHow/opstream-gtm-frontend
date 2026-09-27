@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gtm_metrics import date_only, phoenix_today
+from gtm_metrics import date_only, first_touch, phoenix_today, tracker_rows
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("OUT_DATA") or (ROOT / "out" / "data"))
@@ -199,6 +199,7 @@ def shows(db, spend, leads, today, year):
             "location": col(r, "location") or None,
             "quarter": cell(r, 3) or None,
             "status": col(r, "status") or None,
+            "approved": (col(r, "status") or "").strip().lower() in ("signed", "approved", "confirmed"),
             "package": col(r, "details", "sponsorship") or None,
             "attendees": attendees,
             "organizer": col(r, "organizer") or None,
@@ -226,7 +227,7 @@ def shows(db, spend, leads, today, year):
         from_show, requests = [], []
         for l in leads:
             note = norm(l.get("note"))
-            lead_day = l.get("lead") or l.get("leadDate")
+            lead_day = first_touch(l)
             named = [n for n in names if n and n in note]
             mentions = name_key in named
             in_window = False
@@ -244,13 +245,13 @@ def shows(db, spend, leads, today, year):
             if end < today:
                 show["phase"] = "past"
             elif start <= (date.fromisoformat(today) + timedelta(days=7)).isoformat():
-                show["phase"] = "this-week"
+                show["phase"] = "soon"
             else:
                 show["phase"] = "upcoming"
         else:
             show["phase"] = "undated"
         show["checklist"] = checklist(show)
-    order = {"this-week": 0, "upcoming": 1, "undated": 2}
+    order = {"soon": 0, "upcoming": 1, "undated": 2}
     ahead = sorted((s for s in items if s["phase"] != "past"),
                    key=lambda s: (order[s["phase"]], s["start"] or "9999", s["name"]))
     past = sorted((s for s in items if s["phase"] == "past"), key=lambda s: s["end"], reverse=True)
@@ -266,8 +267,8 @@ def summarize_leads(rows):
         "mql": sum(1 for l in rows if l.get("mql")),
         "sql": sum(1 for l in rows if l.get("sql")),
         "unowned": sum(1 for l in rows if not real_owner(l.get("owner"))),
-        "companies": [l.get("company") or l.get("name") for l in rows if (l.get("company") or l.get("name"))][:8],
-        "newest": max((l.get("lead") or l.get("leadDate") or "" for l in rows), default="") or None,
+        "companies": [l.get("name") for l in rows if l.get("name")][:8],
+        "newest": max((first_touch(l) or "" for l in rows), default="") or None,
         "owners": sorted({real_owner(l.get("owner")) for l in rows if real_owner(l.get("owner"))}),
     }
 
@@ -281,7 +282,7 @@ def real_owner(value):
 
 def checklist(show):
     items = []
-    before = show["phase"] in ("this-week", "upcoming", "undated")
+    before = show["phase"] in ("soon", "upcoming", "undated")
     items.append({"stage": "prep", "label": "Sponsorship signed",
                   "done": (show["status"] or "").lower() == "signed",
                   "detail": show["status"] or "No status on the show calendar"})
@@ -324,7 +325,24 @@ def outbound(db):
         rows = []
     if not rows:
         return {"connected": False, "reason": "LemList is not in this collection."}
-    has_stats = any(any(k in r for k in ("stats", "sent", "messagesSent", "replied")) for r in rows)
+    def stat(r, *keys):
+        src = r.get("stats") if isinstance(r.get("stats"), dict) else {}
+        for k in keys:
+            v = src.get(k)
+            if isinstance(v, (int, float)):
+                return int(v)
+        return None
+
+    with_stats = []
+    for r in rows:
+        sent = stat(r, "messagesSent", "emailsSent", "sent", "nbMessagesSent")
+        replied = stat(r, "messagesReplied", "replied", "emailsReplied", "nbReplied")
+        bounced = stat(r, "messagesBounced", "bounced", "emailsBounced", "nbBounced")
+        if sent is None and replied is None:
+            continue
+        with_stats.append({"name": str(r.get("name") or ""), "status": r.get("status"),
+                           "sent": sent, "replied": replied, "bounced": bounced})
+    has_stats = bool(with_stats)
     status = {}
     for r in rows:
         key = str(r.get("status") or "unknown")
@@ -335,6 +353,7 @@ def outbound(db):
         "names": sorted(str(r.get("name") or "") for r in rows if r.get("status") == "running"),
         "statsConnected": has_stats,
         "connected": has_stats,
+        "campaignStats": sorted(with_stats, key=lambda c: -(c["sent"] or 0)),
     }
     if not has_stats:
         out["reason"] = ("LemList campaign names and status are collected. Sent and reply counts are not "
@@ -377,6 +396,73 @@ def ai_mentions(db):
     return {"connected": True, "source": "Otterly", **main}
 
 
+def _grand_total(rows):
+    header = next((r for r in rows if r and cell(r, 0).lower().startswith("day of week")), None)
+    total = next((r for r in rows if r and cell(r, 0).lower().startswith(("grand total", "total"))), None)
+    if not header or not total:
+        return None
+    return {norm(h): cell(total, i) for i, h in enumerate(header)}
+
+
+def ads(db):
+    out = []
+    sources = [
+        ("Google Ads", "Google - Day-of-Week & Hour-of-Day - Opstream.AI", "Summary - Day Of Week", "Report"),
+        ("Reddit Ads", "Reddit - Account Performance - Opstream", "Summary - Day Of Week", "Report"),
+        ("OpenAI ads", "OpenAI - Day-of-Week & Hour-of-Day - Opstream", "Day Of Week", None),
+    ]
+    for label, title, tab, report_tab in sources:
+        rows = tab_rows(db, title, tab)
+        total = _grand_total(rows)
+        if not total:
+            continue
+        window = ""
+        for r in rows[:3]:
+            m = re.search(r"Window:\s*(\d{4}-\d\d-\d\d) to (\d{4}-\d\d-\d\d)", " ".join(str(c) for c in r))
+            if m:
+                window = m.group(1) + " to " + m.group(2)
+        if not window and report_tab:
+            days = sorted(cell(r, 0) for r in tab_rows(db, title, report_tab) if re.match(r"^\d{4}-\d\d-\d\d$", cell(r, 0)))
+            if days:
+                window = days[0] + " to " + days[-1]
+        out.append({
+            "name": label, "source": title,
+            "spend": money(total.get("spend")),
+            "impressions": money(total.get("impressions")),
+            "clicks": money(total.get("clicks")),
+            "conversions": money(total.get("conversions")),
+            "window": window or None,
+        })
+    return out
+
+
+def web(db):
+    if db is None:
+        return {"connected": False}
+    try:
+        rows = {k: (json.loads(v or "{}"), f) for k, v, f in db.execute("select report_key, result_json, fetched_at from ga4_reports")}
+    except sqlite3.Error:
+        return {"connected": False}
+
+    def table(key, dim):
+        payload = (rows.get(key) or ({}, None))[0]
+        heads = [h.get("name") for h in payload.get("metricHeaders") or []] if isinstance(payload, dict) else []
+        out = []
+        for r in (payload.get("rows") or []) if isinstance(payload, dict) else []:
+            vals = {heads[i]: money((m or {}).get("value")) for i, m in enumerate(r.get("metricValues") or []) if i < len(heads)}
+            name = ((r.get("dimensionValues") or [{}])[0] or {}).get("value")
+            out.append({dim: name, "sessions": vals.get("sessions"), "engagedSessions": vals.get("engagedSessions"),
+                        "keyEvents": vals.get("keyEvents")})
+        return out
+
+    channels = table("channels_90d", "name")
+    pages = table("landing_90d", "name")
+    fetched = max((f for _p, f in rows.values() if f), default=None)
+    return {"connected": bool(channels or pages), "channels": channels, "pages": pages[:10], "fetchedAt": fetched,
+            "reason": None if (channels or pages) else
+            "GA4 channel and landing-page reports have not been collected yet. They are added on the next refresh."}
+
+
 def team(db):
     """People who can be @mentioned. Names come from HubSpot owners, then Fathom recorders."""
     people = {}
@@ -415,7 +501,7 @@ def main():
             db = sqlite3.connect("file:%s?mode=ro" % BRAIN, uri=True)
         except sqlite3.Error:
             db = None
-    leads = review.get("leads") or []
+    leads = tracker_rows(review)
     spend = budget(db, year)
     result = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -424,6 +510,8 @@ def main():
         "shows": shows(db, spend, leads, today, year),
         "outbound": outbound(db),
         "ai": ai_mentions(db),
+        "ads": ads(db),
+        "web": web(db),
         "team": team(db),
     }
     (DATA / "marketing.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
