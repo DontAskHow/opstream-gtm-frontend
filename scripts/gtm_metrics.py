@@ -136,21 +136,123 @@ def apply_sheet_owner_names(owner_names, votes):
     return applied
 
 
-def is_placeholder_name(value):
-    """A deal or company titled only Renewal or Current agreement has no real name.
+# Customer-success pipelines. New business is every other pipeline.
+# 855205465 is the renewal-agreement pipeline. 686463412 is the legacy
+# renewal pipeline (titles are often just "Renewal"). Title text is only a
+# fallback for a deal whose pipeline id was not stored.
+RENEWAL_PIPELINE_IDS = frozenset({"855205465", "686463412"})
 
-    That label must not take the deal out of the open book. A longer title
-    such as "Renewal Agreement" is still a renewal.
-    """
+
+def is_placeholder_name(value):
+    """A company titled only Renewal or Current agreement is not a company name."""
     return re.fullmatch(r"renewal|current agreement", str(value or "").strip(), flags=re.I) is not None
+
+
+def pipeline_id(deal):
+    return str((deal or {}).get("pipeline") or (deal or {}).get("pipelineId") or "").strip()
+
+
+def is_renewal_pipeline(deal):
+    return pipeline_id(deal) in RENEWAL_PIPELINE_IDS
 
 
 def _stage_blob(deal):
     stage = str((deal or {}).get("stage") or (deal or {}).get("stageLabel") or "")
     deal_name = str((deal or {}).get("dealName") or "")
-    if is_placeholder_name(deal_name):
-        deal_name = ""
     return (stage + " " + deal_name).lower()
+
+
+def _title_is_renewal(deal):
+    """Fallback when the pipeline id is missing. A renewal pipeline does not need this."""
+    blob = _stage_blob(deal)
+    if "current agreement" in blob:
+        return True
+    return re.search(r"\brenewal\b", blob) is not None
+
+
+def is_renewal_record(deal):
+    return is_renewal_pipeline(deal) or _title_is_renewal(deal)
+
+
+def _company_key(deal):
+    cid = str((deal or {}).get("companyId") or "").strip()
+    if cid in ("", "company:", "company:unknown"):
+        return ""
+    return cid
+
+
+def _is_legacy_placeholder(deal):
+    if pipeline_id(deal) != "686463412":
+        return False
+    return re.fullmatch(r"renewal", str((deal or {}).get("dealName") or "").strip(), flags=re.I) is not None
+
+
+def _is_renewal_agreement(deal):
+    if pipeline_id(deal) != "855205465":
+        return False
+    return re.search(r"renewal agreement", str((deal or {}).get("dealName") or ""), flags=re.I) is not None
+
+
+def _closed_blob(blob):
+    return re.search(r"closed\s*won|closed\s*lost|closedwon|closedlost", blob) is not None
+
+
+def _renewal_current(deal, today):
+    """A renewal that is still in play: not closed, not past its close date."""
+    if not deal or deal.get("closed") is True or is_test_record(deal):
+        return False
+    blob = _stage_blob(deal)
+    if _closed_blob(blob) or "disqualif" in blob or re.search(r"\bon hold\b", blob):
+        return False
+    close = date_only(deal.get("close"))
+    if close and today and close < today:
+        return False
+    return True
+
+
+def renewal_book(deals, today):
+    """Current renewal/CS deals.
+
+    A legacy deal titled only Renewal in pipeline 686463412 is not added when
+    that company already has a current Renewal Agreement in pipeline 855205465.
+    The placeholder stays in `duplicates` so it is not dropped silently.
+    """
+    rows = [d for d in (deals or []) if is_renewal_record(d)]
+    current = [d for d in rows if _renewal_current(d, today)]
+    agreement_companies = {_company_key(d) for d in current if _is_renewal_agreement(d) and _company_key(d)}
+    counted = []
+    duplicates = []
+    for deal in current:
+        key = _company_key(deal)
+        if _is_legacy_placeholder(deal) and key and key in agreement_companies:
+            duplicates.append(deal)
+        else:
+            counted.append(deal)
+    amount = 0.0
+    for deal in counted:
+        try:
+            amt = float(deal.get("amount"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(amt):
+            amount += amt
+    past_close = 0
+    for deal in rows:
+        if deal.get("closed") is True or is_test_record(deal):
+            continue
+        blob = _stage_blob(deal)
+        if _closed_blob(blob) or "disqualif" in blob or re.search(r"\bon hold\b", blob):
+            continue
+        close = date_only(deal.get("close"))
+        if close and today and close < today:
+            past_close += 1
+    return {
+        "count": len(counted),
+        "amount": amount,
+        "deals": counted,
+        "duplicates": duplicates,
+        "pastClose": past_close,
+    }
 
 
 def is_open_pipeline(deal, today):
@@ -160,11 +262,13 @@ def is_open_pipeline(deal, today):
     if is_test_record(deal):
         return False
     blob = _stage_blob(deal)
-    if re.search(r"closed\s*won|closed\s*lost|closedwon|closedlost", blob):
+    if _closed_blob(blob):
         return False
     if "disqualif" in blob:
         return False
     if re.search(r"\bon hold\b", blob):
+        return False
+    if is_renewal_pipeline(deal):
         return False
     if "current agreement" in blob:
         return False
@@ -185,16 +289,16 @@ def exclusion_reason(deal, today):
     if is_test_record(deal):
         return "verification fixture"
     blob = _stage_blob(deal)
-    if re.search(r"closed\s*won|closed\s*lost|closedwon|closedlost", blob):
+    if _closed_blob(blob):
         return "closed won or lost"
     if "disqualif" in blob:
         return "Disqualified"
     if re.search(r"\bon hold\b", blob):
         return "On Hold"
+    if is_renewal_pipeline(deal) or re.search(r"\brenewal\b", blob):
+        return "renewal"
     if "current agreement" in blob:
         return "current agreement"
-    if re.search(r"\brenewal\b", blob):
-        return "renewal"
     close = date_only(deal.get("close"))
     if close and today and close < today:
         return "past close date"
@@ -512,6 +616,7 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
     overrides = sheet_overrides(sheet_review)
     annotated = [apply_sheet_deal(o, overrides) for o in annotated]
     pipe = pipeline_totals(annotated, today)
+    renewals = renewal_book(annotated, today)
     start, end = quarter_bounds(today)
     counts = funnel(verified.get("leads") or [], records, start, end)
     prelim_owners = []
@@ -544,6 +649,7 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
             "name": opp.get("name"),
             "companyName": account_name((company or {}).get("name"), opp.get("dealName") or opp.get("name")) or company_name((company or {}).get("name") or opp.get("name")),
             "dealName": opp.get("dealName") or "",
+            "pipeline": opp.get("pipeline") or "",
             "amount": opp.get("amount"),
             "stage": stage_display(opp.get("stage")),
             "close": date_only(opp.get("close")),
@@ -580,6 +686,10 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
         "openCount": pipe["count"],
         "openAmount": round_half_up(pipe["openAmount"]),
         "weighted": weighted,
+        "renewalCount": renewals["count"],
+        "renewalAmount": round_half_up(renewals["amount"]),
+        "renewalDuplicates": len(renewals["duplicates"]),
+        "renewalPastClose": renewals["pastClose"],
         "largest": largest_out,
         "leads": counts["leads"],
         "mql": counts["mql"],
@@ -693,6 +803,7 @@ def commit_for_close_month(deals, month, today):
             "close": deal.get("close"),
             "closed": deal.get("closed") is True,
             "name": deal.get("companyName") or deal.get("name") or "",
+            "pipeline": deal.get("pipeline") or "",
         }
         if not is_open_pipeline(shaped, today):
             continue

@@ -20,7 +20,7 @@ exits non-zero **without touching watermarks**.
 
 | Script | Source | Incremental key | Notes |
 |---|---|---|---|
-| `hubspot_sync.py` | HubSpot portal 21303277 | per-object-type `hs_lastmodifieddate` / `lastmodifieddate` watermark | OAuth refresh of the existing Marketing Dashboard app; GET and CRM search only; 10 object types; **tickets excluded**; owners catalog (`GET /crm/v3/owners`, including archived) into `hubspot_owners`; associations refreshed for changed objects only; 100 req/10s pacing; long text truncated at 8000 chars |
+| `hubspot_sync.py` | HubSpot portal 21303277 | per-object-type `hs_lastmodifieddate` / `lastmodifieddate` watermark | OAuth refresh of the existing Marketing Dashboard app; GET and CRM search only; 10 object types; **tickets excluded**; owners catalog (`GET /crm/v3/owners`, including archived) into `hubspot_owners`; deal pipelines (`GET /crm/v3/pipelines/deals`) into `hubspot_pipelines`; associations refreshed for changed objects only; 100 req/10s pacing; long text truncated at 8000 chars |
 | `fathom_sync.py` | Fathom | `recording_start_time` watermark | New meetings get detail + transcript + summary + action items; `meetings`, `transcripts`, `transcript_fts` updated |
 | `sheets_sync.py` | Google Sheets | n/a (full re-pull) | Re-pulls the tracked spreadsheets, all tabs, with the owner's refresh token; read-only `spreadsheets.get` and `values.batchGet`; per-spreadsheet replace |
 | `lemlist_sync.py` | Lemlist | n/a (full campaign refresh, 20 campaigns) | Fills per-campaign stats where the API exposes them; leaves null otherwise |

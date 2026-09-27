@@ -549,7 +549,17 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;padding-top:14px">
                 <sc-for list="{{ scorecard }}" as="k" hint-placeholder-count="4"><div><span class="money" style="display:block;font-family:var(--font-heading);font-weight:800;font-size:22px;line-height:1.1">{{ k.value }}</span><span style="font-size:12px;color:var(--color-neutral-700)">{{ k.label }}</span></div></sc-for>
               </div>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Company scorecard. All pipeline values are owner estimates, not buyer commitments.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Company scorecard. All pipeline values are owner estimates, not buyer commitments. Open pipeline is new business.</p>
+              <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-divider)">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><h6 style="margin:0">Renewals</h6><span class="money" style="font-size:14px;font-weight:700">{{ renewalsValue }}</span></div>
+                <p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">{{ renewalsNote }}</p>
+                <sc-for list="{{ renewals }}" as="r" hint-placeholder-count="4">
+                  <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:8px 0;border-bottom:1px solid var(--color-divider);font-size:13px">
+                    <span style="font-weight:600">{{ r.company }}</span><span class="money">{{ r.amount }}</span>
+                    <span style="grid-column:1/-1;color:var(--color-neutral-700)">{{ r.dealName }}{{ r.note ? ' · ' + r.note : '' }} · {{ r.stage }}</span>
+                  </div>
+                </sc-for>
+              </div>
             </section>
             <sc-if value="{{ showOwnerNotes }}"><section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Latest owner notes</h6><button onClick="{{ goDeals }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">All opportunities</button></div>

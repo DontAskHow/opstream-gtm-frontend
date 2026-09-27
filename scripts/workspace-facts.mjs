@@ -48,7 +48,7 @@ export const DATA_TOOL_SCHEMAS = [
     type: 'function',
     function: {
       name: 'get_pipeline_metrics',
-      description: 'Read the open-book metrics already computed for the page: largest open deal, open pipeline count and amount, weighted pipeline, and quarter leads, MQL, and SQL. Open pipeline excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Use this for pipeline size, the largest open deal, or lead counts. Repeat the result. Do not recompute it.',
+      description: 'Read the metrics already computed for the page: largest open deal, new-business pipeline count and amount, weighted pipeline, the separate renewals total, and quarter leads, MQL, and SQL. Open pipeline is new business. Renewals are not open deals. Use this for pipeline size, the largest open deal, renewals, or lead counts. Repeat the result. Do not recompute it.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
@@ -81,18 +81,7 @@ function roundAmount(value) {
 }
 
 export function exclusionReason(deal, today) {
-  if (model.isOpenPipeline(deal, today)) return null;
-  if (deal?.closed === true) return 'closed';
-  if (model.isTestRecord(deal)) return 'verification fixture';
-  const blob = (String(deal?.stage || deal?.stageLabel || '') + ' ' + String(deal?.dealName || '')).toLowerCase();
-  if (/closed\s*won|closed\s*lost|closedwon|closedlost/.test(blob)) return 'closed won or lost';
-  if (/disqualif/.test(blob)) return 'Disqualified';
-  if (/\bon hold\b/.test(blob)) return 'On Hold';
-  if (/current agreement/.test(blob)) return 'current agreement';
-  if (/\brenewal\b/.test(blob)) return 'renewal';
-  const close = model.dateOnly(deal?.close);
-  if (close && today && close < today) return 'past close date';
-  return 'excluded';
+  return model.exclusionReason(deal, today);
 }
 
 function statusTag(reason) {
@@ -155,6 +144,7 @@ export function computeFacts(verified, records, today, sheetReview) {
   const overrides = model.sheetOverrides(sheetReview);
   const annotated = model.annotateOpportunities(verified?.opportunities || [], records).map(o => model.applySheetDeal(o, overrides));
   const pipe = model.pipelineTotals(annotated, today);
+  const renewals = model.renewalBook(annotated, today);
   const bounds = model.periodBounds('quarter', null, null, today);
   const funnel = model.funnel(verified?.leads || [], records, bounds.start, bounds.end);
   const index = companyIndex(records);
@@ -190,7 +180,7 @@ export function computeFacts(verified, records, today, sheetReview) {
       dealName: o.dealName || '',
       amount: roundAmount(o.amount),
       amountLabel: money(o.amount) || 'amount not entered',
-      stage: model.stageDisplay(o.stage),
+      stage: model.renewalStage(o),
       close: model.dateOnly(o.close),
       owner: info.label,
       ownerTitle: info.title,
@@ -206,7 +196,12 @@ export function computeFacts(verified, records, today, sheetReview) {
   const metrics = {
     asOf: today,
     timezone: model.PHOENIX,
-    definition: 'Open pipeline excludes past close dates, renewals, current agreements, Disqualified, and On Hold.',
+    definition: 'Open pipeline is new business. It excludes the renewal pipelines, past close dates, renewal and current-agreement titles, Disqualified, and On Hold. Renewals are totaled on their own line.',
+    renewalCount: renewals.count,
+    renewalAmount: roundAmount(renewals.amount) ?? 0,
+    renewalAmountLabel: money(renewals.amount) || '$0',
+    renewalDuplicates: renewals.duplicates.length,
+    renewalPastClose: renewals.pastClose,
     quarter: { start: bounds.start, end: bounds.end, label: bounds.label },
     openCount: pipe.count,
     openAmount: roundAmount(pipe.openAmount) ?? 0,
@@ -243,6 +238,7 @@ export function computeFacts(verified, records, today, sheetReview) {
     lines.push('LARGEST OPEN DEAL: none.');
   }
   lines.push('OPEN PIPELINE: ' + metrics.openCount + ' deals, ' + metrics.openAmountLabel + ' open, ' + (metrics.weightedLabel || 'weighted n/a') + ' weighted.');
+  lines.push('RENEWALS: ' + metrics.renewalCount + ' current deals, ' + metrics.renewalAmountLabel + '. These are customer renewals, not new business. They are not in the open pipeline, the commit, or the largest open deal. ' + metrics.renewalDuplicates + ' legacy Renewal placeholders are not added because that company already has a current Renewal Agreement. ' + metrics.renewalPastClose + ' more are past their close date and are not in this total.');
   lines.push('QUARTER ' + bounds.start + ' – ' + bounds.end + ': ' + funnel.leads + ' leads / ' + funnel.mql + ' MQL / ' + funnel.sql + ' SQL.');
   const marketing = model.marketingView(verified?.leads || [], records, verified?.report?.spend, today);
   lines.push('MARKETING BRIEF (America/Phoenix ' + today + '). Repeat these figures. Do not invent another weekly count.');
@@ -292,6 +288,11 @@ function metricsPayload(facts) {
     openAmountLabel: m.openAmountLabel,
     weighted: m.weighted,
     weightedLabel: m.weightedLabel,
+    renewalCount: m.renewalCount,
+    renewalAmount: m.renewalAmount,
+    renewalAmountLabel: m.renewalAmountLabel,
+    renewalDuplicates: m.renewalDuplicates,
+    renewalPastClose: m.renewalPastClose,
     quarter: m.quarter,
     leads: m.leads,
     mql: m.mql,

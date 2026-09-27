@@ -164,6 +164,21 @@ Component.prototype.renderVals = function () {
     {label:'Weighted pipeline',value:moneyShort(pipe.weighted)},
     {label:'Active deals',value:f.number(pipe.count)}
   ];
+  const renewals=workspaceModel.renewalBook(opportunities,asOf);
+  const renewalCompany=o=>{
+    const company=workspaceModel.companyForOpportunity(o,s.records);
+    return workspaceModel.pipelineCompanyName(company&&company.name,o.dealName,o.name);
+  };
+  const renewalRow=(o,duplicate)=>({
+    company:renewalCompany(o),
+    dealName:o.dealName||o.name||'Untitled deal',
+    stage:workspaceModel.renewalStage(o),
+    amount:duplicate?'Not added':(o.amount==null?'—':moneyShort(o.amount)),
+    note:duplicate?'Same company as a current Renewal Agreement':''
+  });
+  v.renewals=[...renewals.deals.map(o=>renewalRow(o,false)),...renewals.duplicates.map(o=>renewalRow(o,true))];
+  v.renewalsValue=f.number(renewals.count)+' · '+moneyShort(renewals.amount);
+  v.renewalsNote='Customer renewals, not new business. '+f.number(renewals.duplicates.length)+' legacy Renewal placeholders are not added because that company already has a current Renewal Agreement. '+f.number(renewals.pastClose)+' more are past their close date and are not in this total. A missing stage name has not been synced from the pipeline catalog yet.';
   const moneyCell=n=>n==null?'—':'$'+f.number(n);
   v.spendMonths=(d.report.spend.months||[]).map(m=>({month:new Date(m.month+'-15T12:00:00Z').toLocaleDateString('en-US',{month:'long',timeZone:'UTC'}),budget:moneyCell(m.planned),actual:moneyCell(m.actual),diff:m.actual==null||m.partial?'Not comparable':(m.actual>=m.planned?'+':'−')+moneyCell(Math.abs(m.actual-m.planned)),tag:m.actual==null?'Not entered':m.partial?'Partly entered':'',tagDisplay:m.actual==null||m.partial?'inline-flex':'none'}));
   const spendMax=Math.max(1,...d.report.spend.channels.map(c=>c.amount));v.spendChannels=d.report.spend.channels.map(c=>({name:c.name,amount:moneyCell(c.amount),w:Math.round(c.amount/spendMax*100)+'%'}));

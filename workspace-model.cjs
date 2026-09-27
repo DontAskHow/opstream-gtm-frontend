@@ -212,14 +212,78 @@ const workspaceModel = {
     const d=this.dateOnly(value);
     return !!d&&d>=start&&d<=end;
   },
-  // A title that is only "Renewal" or "Current agreement" is a missing name.
-  // It does not take the deal out of the open book. A longer title such as
-  // "Renewal Agreement" still does.
+  // Customer-success pipelines. Title text is only a fallback.
+  RENEWAL_PIPELINE_IDS: {'855205465':true,'686463412':true},
+  // A company titled only Renewal or Current agreement is not a company name.
   isPlaceholderName(value) {
     return /^(renewal|current agreement)$/i.test(String(value||'').trim());
   },
-  // Company shown on a pipeline row. Associations win. A placeholder title is
-  // not a company, and hiding it does not drop the deal.
+  pipelineId(deal) {
+    return String((deal&&(deal.pipeline||deal.pipelineId))||'').trim();
+  },
+  isRenewalPipeline(deal) {
+    return !!this.RENEWAL_PIPELINE_IDS[this.pipelineId(deal)];
+  },
+  stageBlob(deal) {
+    return (String(deal&&(deal.stage||deal.stageLabel)||'')+' '+String(deal&&deal.dealName||'')).toLowerCase();
+  },
+  titleIsRenewal(deal) {
+    const blob=this.stageBlob(deal);
+    return /current agreement/.test(blob)||/\brenewal\b/.test(blob);
+  },
+  isRenewalRecord(deal) {
+    return this.isRenewalPipeline(deal)||this.titleIsRenewal(deal);
+  },
+  companyKey(deal) {
+    const cid=String(deal&&deal.companyId||'').trim();
+    if(!cid||cid==='company:'||cid==='company:unknown')return '';
+    return cid;
+  },
+  isLegacyPlaceholder(deal) {
+    return this.pipelineId(deal)==='686463412'&&/^(renewal)$/i.test(String(deal&&deal.dealName||'').trim());
+  },
+  isRenewalAgreement(deal) {
+    return this.pipelineId(deal)==='855205465'&&/renewal agreement/i.test(String(deal&&deal.dealName||''));
+  },
+  renewalCurrent(deal,today) {
+    if(!deal||deal.closed===true||this.isTestRecord(deal))return false;
+    const blob=this.stageBlob(deal);
+    if(/closed\s*won|closed\s*lost|closedwon|closedlost/.test(blob))return false;
+    if(/disqualif/.test(blob)||/\bon hold\b/.test(blob))return false;
+    const close=this.dateOnly(deal.close);
+    if(close&&today&&close<today)return false;
+    return true;
+  },
+  // Current renewal/CS book. A legacy "Renewal" placeholder is not added when
+  // that company already has a current Renewal Agreement. The placeholder
+  // stays in duplicates.
+  renewalBook(deals,today) {
+    today=today||this.phoenixToday();
+    const rows=(deals||[]).filter(d=>this.isRenewalRecord(d));
+    const current=rows.filter(d=>this.renewalCurrent(d,today));
+    const agreements=new Set(current.filter(d=>this.isRenewalAgreement(d)&&this.companyKey(d)).map(d=>this.companyKey(d)));
+    const counted=[], duplicates=[];
+    for(const deal of current){
+      const key=this.companyKey(deal);
+      if(this.isLegacyPlaceholder(deal)&&key&&agreements.has(key))duplicates.push(deal);
+      else counted.push(deal);
+    }
+    let amount=0;
+    for(const deal of counted){
+      const amt=Number(deal.amount);
+      if(Number.isFinite(amt))amount+=amt;
+    }
+    let pastClose=0;
+    for(const deal of rows){
+      if(deal.closed===true||this.isTestRecord(deal))continue;
+      const blob=this.stageBlob(deal);
+      if(/closed\s*won|closed\s*lost|closedwon|closedlost/.test(blob)||/disqualif/.test(blob)||/\bon hold\b/.test(blob))continue;
+      const close=this.dateOnly(deal.close);
+      if(close&&today&&close<today)pastClose+=1;
+    }
+    return {count:counted.length,amount,deals:counted,duplicates,pastClose};
+  },
+  // Company shown on a pipeline row. Associations win. A placeholder title is not a company.
   pipelineCompanyName(companyName, dealName, fallbackName) {
     const fromCompany=this.accountName(companyName, dealName);
     if(fromCompany)return fromCompany;
@@ -227,23 +291,42 @@ const workspaceModel = {
     if(raw&&!this.isPlaceholderName(raw))return raw;
     return 'No company linked';
   },
-  // Open pipeline: future (or unset) close, not a renewal / current agreement,
-  // not Disqualified, not On Hold, not closed. A missing stage stays in and is labeled.
+  renewalStage(deal) {
+    const raw=String((deal&&(deal.stageLabel||deal.stage))||'').trim();
+    const shown=this.stageDisplay(raw);
+    if(this.isRenewalPipeline(deal)&&(!raw||raw==='No stage'||/^\d+$/.test(raw)||shown==='No stage'))return 'Stage name not synced';
+    return shown;
+  },
+  // Open pipeline is new business: future (or unset) close, not a renewal
+  // pipeline, not a renewal/current-agreement title, not Disqualified, not On
+  // Hold, not closed. A missing stage stays in and is labeled.
   isOpenPipeline(deal,today) {
     if(!deal||deal.closed===true)return false;
     if(this.isTestRecord(deal))return false;
-    const stage=String(deal.stage||deal.stageLabel||'');
-    let dealName=String(deal.dealName||'');
-    if(this.isPlaceholderName(dealName))dealName='';
-    const blob=(stage+' '+dealName).toLowerCase();
+    const blob=this.stageBlob(deal);
     if(/closed\s*won|closed\s*lost|closedwon|closedlost/.test(blob))return false;
     if(/disqualif/.test(blob))return false;
     if(/\bon hold\b/.test(blob))return false;
+    if(this.isRenewalPipeline(deal))return false;
     if(/current agreement/.test(blob))return false;
     if(/\brenewal\b/.test(blob))return false;
     const close=this.dateOnly(deal.close);
     if(close&&today&&close<today)return false;
     return true;
+  },
+  exclusionReason(deal,today) {
+    if(this.isOpenPipeline(deal,today))return null;
+    if(deal&&deal.closed===true)return 'closed';
+    if(this.isTestRecord(deal))return 'verification fixture';
+    const blob=this.stageBlob(deal||{});
+    if(/closed\s*won|closed\s*lost|closedwon|closedlost/.test(blob))return 'closed won or lost';
+    if(/disqualif/.test(blob))return 'Disqualified';
+    if(/\bon hold\b/.test(blob))return 'On Hold';
+    if(this.isRenewalPipeline(deal)||/\brenewal\b/.test(blob))return 'renewal';
+    if(/current agreement/.test(blob))return 'current agreement';
+    const close=this.dateOnly(deal&&deal.close);
+    if(close&&today&&close<today)return 'past close date';
+    return 'excluded';
   },
   stageDisplay(stage) {
     const s=String(stage||'').trim().replace(/ \(Deal\)$/,'');

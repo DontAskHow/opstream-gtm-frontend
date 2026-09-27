@@ -20,6 +20,7 @@ token, or a portal other than 21303277 exits 3 and does not move watermarks.
 """
 
 import json
+import re
 from datetime import datetime, timezone
 
 from common import (
@@ -225,10 +226,70 @@ def sync_owners(client, log):
     return len(collected)
 
 
+def sync_pipelines(client, log):
+    """Read deal pipeline and stage names. Classification does not guess from the label."""
+    url = client.api_base + "/crm/v3/pipelines/deals"
+    pace.wait()
+    status, payload = client.request("GET", url)
+    if status != 200 or not isinstance(payload, dict):
+        raise RuntimeError("HubSpot pipelines returned HTTP %s" % status)
+    rows = []
+    labels = {}
+    for pipe in payload.get("results") or []:
+        pid = str(pipe.get("id") or "").strip()
+        plabel = str(pipe.get("label") or "").strip()
+        if not pid:
+            continue
+        labels[pid] = plabel
+        for stage in pipe.get("stages") or []:
+            sid = str(stage.get("id") or "").strip()
+            if not sid:
+                continue
+            order = stage.get("displayOrder")
+            try:
+                order = int(order)
+            except (TypeError, ValueError):
+                order = None
+            rows.append((pid, plabel, sid, str(stage.get("label") or "").strip(), order))
+    for pid in ("686463412", "855205465"):
+        label = labels.get(pid)
+        if label and not re.search(r"renew|customer|success", label, flags=re.I):
+            log.warning(
+                "pipeline %s is labeled %r, which is not a renewal/CS name. "
+                "Deals in that pipeline stay out of new business because the pipeline id is the renewal list. "
+                "The label was not used to guess a different class.",
+                pid, label,
+            )
+    con = db_connect()
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS hubspot_pipelines ("
+            "pipeline_id TEXT, pipeline_label TEXT, stage_id TEXT, stage_label TEXT, "
+            "display_order INTEGER, PRIMARY KEY (pipeline_id, stage_id))"
+        )
+        try:
+            con.execute("BEGIN")
+            con.execute("DELETE FROM hubspot_pipelines")
+            con.executemany(
+                "INSERT INTO hubspot_pipelines(pipeline_id, pipeline_label, stage_id, stage_label, display_order) "
+                "VALUES(?,?,?,?,?)",
+                rows,
+            )
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+    finally:
+        con.close()
+    log.info("pipelines: %d stages across %d pipelines", len(rows), len(labels))
+    return len(rows), labels
+
+
 def main_sync(log):
     client = HubSpotClient(log=log)
     client.prepare()
     owner_rows = sync_owners(client, log)
+    pipeline_rows, _pipeline_labels = sync_pipelines(client, log)
     watermark_raw, last_run, _note = get_sync_state(SOURCE)
     try:
         watermarks = json.loads(watermark_raw) if watermark_raw else {}
@@ -283,7 +344,7 @@ def main_sync(log):
         con.close()
 
     note = (f"{total_upserted} objects upserted, {total_assoc} association rows refreshed, "
-            f"{owner_rows} owners; tickets excluded (outside registered scope); "
+            f"{owner_rows} owners, {pipeline_rows} pipeline stages; tickets excluded (outside registered scope); "
             f"long text truncated at 8000 chars")
     set_sync_state(SOURCE, json.dumps(watermarks), note)
     return note

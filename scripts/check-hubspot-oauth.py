@@ -288,6 +288,7 @@ def test_guard():
             posts.append(window)
     check("only search post in source", len(posts) == 1 and "/search" in posts[0] and "POST" in methods)
     check("owners catalog is a get", "/crm/v3/owners" in src and "archived=true" in src)
+    check("pipelines catalog is a get", "/crm/v3/pipelines/deals" in src)
     owner_windows = []
     for i, line in enumerate(lines):
         if "/crm/v3/owners" not in line and "owners" not in line:
@@ -310,17 +311,26 @@ def test_json_is_not_a_bearer():
 
 def test_placeholder_name_stays_in_the_open_book():
     sys.path.insert(0, str(ROOT / "scripts"))
-    from gtm_metrics import apply_sheet_owner_names, exclusion_reason, is_open_pipeline
+    from gtm_metrics import apply_sheet_owner_names, exclusion_reason, is_open_pipeline, renewal_book
 
     today = "2026-09-27"
-    renewal = {"dealName": "Renewal", "stage": "No stage", "close": None, "closed": False, "amount": 50000}
-    check("placeholder renewal stays open", is_open_pipeline(renewal, today))
-    closed = {"dealName": "Renewal", "stage": "No stage", "close": None, "closed": True}
+    legacy = {"id": "deal-52905159943", "dealName": "Renewal", "stage": "No stage", "close": None, "closed": False, "amount": 50000, "pipeline": "686463412", "companyId": "company:unknown"}
+    check("legacy renewal pipeline stays out", not is_open_pipeline(legacy, today) and exclusion_reason(legacy, today) == "renewal")
+    expansion = {"dealName": "Acme - Budget Module", "stage": "No stage", "close": "2026-12-01", "closed": False, "amount": 10000, "pipeline": "855205465", "companyId": "company:1"}
+    check("cs pipeline expansion stays out", not is_open_pipeline(expansion, today) and exclusion_reason(expansion, today) == "renewal")
+    new_business = {"dealName": "Acme - New Deal", "stage": "Discovery", "close": "2026-12-01", "closed": False, "amount": 10000, "pipeline": "default"}
+    check("default pipeline stays open", is_open_pipeline(new_business, today))
+    title_only = {"dealName": "Renewal", "stage": "No stage", "close": None, "closed": False, "pipeline": ""}
+    check("title fallback still excludes", not is_open_pipeline(title_only, today) and exclusion_reason(title_only, today) == "renewal")
+    closed = {"dealName": "Renewal", "stage": "No stage", "close": None, "closed": True, "pipeline": "686463412"}
     check("closed placeholder stays out", not is_open_pipeline(closed, today))
-    past = {"dealName": "Renewal", "stage": "No stage", "close": "2020-01-01", "closed": False}
+    past = {"dealName": "Acme", "stage": "Discovery", "close": "2020-01-01", "closed": False, "pipeline": "default"}
     check("past close stays out", not is_open_pipeline(past, today) and exclusion_reason(past, today) == "past close date")
-    kidde = {"dealName": "Kidde - Renewal Agreement - 2027", "stage": "No stage", "close": "2027-10-01", "closed": False}
+    kidde = {"dealName": "Kidde - Renewal Agreement - 2027", "stage": "No stage", "close": "2027-10-01", "closed": False, "pipeline": "855205465", "companyId": "company:kidde", "amount": 514800}
     check("renewal agreement stays out", not is_open_pipeline(kidde, today) and exclusion_reason(kidde, today) == "renewal")
+    placeholder = {"dealName": "Renewal", "pipeline": "686463412", "companyId": "company:kidde", "amount": 115000, "close": None, "closed": False, "stage": "No stage"}
+    book = renewal_book([placeholder, kidde, legacy], today)
+    check("placeholder not double counted", book["count"] == 2 and book["amount"] == 564800 and len(book["duplicates"]) == 1)
     names = {"1": "Catalog Person"}
     apply_sheet_owner_names(names, {"1": {"Sheet Person"}, "2": {"Tim"}, "3": {"A", "B"}})
     check("sheet owner wins", names.get("1") == "Sheet Person" and names.get("2") == "Tim" and "3" not in names)

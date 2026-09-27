@@ -292,15 +292,35 @@ def main():
             return em
         return 'Unknown'
 
-    def stage_label(deal_id, raw):
+    stage_catalog = {}
+    pipeline_labels = {}
+    if 'hubspot_pipelines' in tables:
+        cols = {r[1] for r in q(cur, 'PRAGMA table_info(hubspot_pipelines)')}
+        if {'pipeline_id', 'stage_id', 'stage_label'} <= cols:
+            has_pipe_label = 'pipeline_label' in cols
+            selected = 'pipeline_id, stage_id, stage_label' + (', pipeline_label' if has_pipe_label else '')
+            for row in q(cur, 'SELECT %s FROM hubspot_pipelines' % selected):
+                pid, sid, slabel = str(row[0] or ''), str(row[1] or ''), row[2]
+                if pid and sid and slabel:
+                    stage_catalog[(pid, sid)] = str(slabel).strip()
+                if has_pipe_label and pid and row[3]:
+                    pipeline_labels[pid] = str(row[3]).strip()
+    for pid, expected in (('686463412', 'renewal/CS'), ('855205465', 'renewal/CS')):
+        label = pipeline_labels.get(pid)
+        if label and not re.search(r'renew|customer|success', label, flags=re.I):
+            print('pipeline %s is labeled %r, which is not a %s name. It stays out of new business because that pipeline id is the renewal list. The label was not used to guess a different class.' % (pid, label, expected), flush=True)
+
+    def stage_label(deal_id, raw, pipeline=None):
         if deal_id in sheet_stage:
             return sheet_stage[deal_id]
+        catalog = stage_catalog.get((str(pipeline or ''), str(raw or '')))
+        if catalog:
+            return catalog
         if raw in NAMED_STAGES:
             return NAMED_STAGES[raw]
         if raw in CLOSED_STAGES:
             return raw
-        # Never show a raw HubSpot stage ID — it's meaningless to a human.
-        # Return None so callers use describe_deal() instead.
+        # Never show a raw HubSpot stage ID. Callers label it as unsynced.
         return None
 
     def describe_deal(deal_name, stage_label_val, amount, close):
@@ -397,7 +417,7 @@ def main():
             if dp is None:
                 continue
             raw_stage = dp.get('dealstage')
-            dlabel = stage_label(did, raw_stage)
+            dlabel = stage_label(did, raw_stage, dp.get('pipeline'))
             prob = probability_fraction(num(dp.get('hs_deal_stage_probability')))
             close_day = date_only(dp.get('closedate'))
             dref = f'hubspot:deals:{did}'
@@ -677,7 +697,7 @@ def main():
             continue
         dp, dfetched = deals.get(did, ({}, None))
         raw_stage = dp.get('dealstage')
-        dlabel = stage_label(did, raw_stage)
+        dlabel = stage_label(did, raw_stage, dp.get('pipeline'))
         prob = num(dp.get('hs_deal_stage_probability'))
         add_evidence(dref, did, 'HubSpot', dfetched, f'HubSpot deal {did}',
                      f"{dp.get('dealname') or 'Untitled deal'} — stage {dlabel}, "
@@ -720,12 +740,15 @@ def main():
             if fallback and not re.fullmatch(r'renewal|current agreement', fallback, flags=re.I):
                 cname = fallback
         prob = probability_fraction(num(dp.get('hs_deal_stage_probability')))
-        label = stage_label(did, dp.get('dealstage'))
+        pipe = str(dp.get('pipeline') or '')
+        label = stage_label(did, dp.get('dealstage'), pipe)
         candidate = {
             'id': 'deal-' + did,
             'companyId': 'company:' + cid if cid else 'company:unknown',
             'name': cname,
             'dealName': dp.get('dealname') or '',
+            'pipeline': pipe,
+            'pipelineLabel': pipeline_labels.get(pipe) or '',
             'owner': owner_label(dp.get('hubspot_owner_id')),
             'stage': label,
             'amount': num(dp.get('amount')),

@@ -48,13 +48,14 @@ check('largest company', certifiedLargest.company === 'NXP', JSON.stringify(cert
 check('largest deal', certifiedLargest.dealName === 'NXP - New Deal', JSON.stringify(certifiedLargest.dealName));
 check('largest amount', certifiedLargest.amount === 500000 && certifiedLargest.amountLabel === '$500,000', JSON.stringify(certifiedLargest.amount) + ' ' + certifiedLargest.amountLabel);
 check('largest in open book', certifiedLargest.inOpenBook === true, String(certifiedLargest.inOpenBook));
-check('open count', certifiedMetrics.openCount === 93, String(certifiedMetrics.openCount));
-check('open amount', certifiedMetrics.openAmount === 5734805 && certifiedMetrics.openAmountLabel === '$5,734,805', certifiedMetrics.openAmount + ' ' + certifiedMetrics.openAmountLabel);
-check('weighted', certifiedMetrics.weighted === 1730113 && certifiedMetrics.weightedLabel === '$1,730,113', certifiedMetrics.weighted + ' ' + certifiedMetrics.weightedLabel);
+check('open count', certifiedMetrics.openCount === 28, String(certifiedMetrics.openCount));
+check('open amount', certifiedMetrics.openAmount === 3670000 && certifiedMetrics.openAmountLabel === '$3,670,000', certifiedMetrics.openAmount + ' ' + certifiedMetrics.openAmountLabel);
+check('weighted', certifiedMetrics.weighted === 811500 && certifiedMetrics.weightedLabel === '$811,500', certifiedMetrics.weighted + ' ' + certifiedMetrics.weightedLabel);
+check('renewals', certifiedMetrics.renewalCount === 74 && certifiedMetrics.renewalAmount === 3433665 && certifiedMetrics.renewalAmountLabel === '$3,433,665' && certifiedMetrics.renewalDuplicates === 3, [certifiedMetrics.renewalCount, certifiedMetrics.renewalAmount, certifiedMetrics.renewalDuplicates].join('/'));
 check('funnel', certifiedMetrics.leads === 383 && certifiedMetrics.mql === 280 && certifiedMetrics.sql === 118, [certifiedMetrics.leads, certifiedMetrics.mql, certifiedMetrics.sql].join('/'));
 check('nxp owner', certifiedLargest.owner === 'Tim', JSON.stringify(certifiedLargest.owner));
 check('live largest still NXP', largest.company === 'NXP' && largest.amount === 500000 && largest.owner === 'Tim', JSON.stringify(largest));
-check('live open book sheet-authoritative', metrics.openCount === 93 && metrics.openAmount === 5734805 && metrics.weighted === 1730113, [metrics.openCount, metrics.openAmount, metrics.weighted].join('/'));
+check('live open book sheet-authoritative', metrics.openCount === 28 && metrics.openAmount === 3670000 && metrics.weighted === 811500, [metrics.openCount, metrics.openAmount, metrics.weighted].join('/'));
 check('collected timestamp', !!metrics.collectedAt && facts.context.includes('DATA COLLECTED:') && facts.context.includes(metrics.collectedAt) && String(metrics.collectedLabel).includes('Phoenix'), metrics.collectedLabel || 'missing');
 const revA = dataRevision(dataDir);
 const revB = dataRevision(dataDir);
@@ -77,9 +78,10 @@ const largestLine = lines.find(l => l.startsWith('LARGEST OPEN DEAL:'));
 check('context largest line', !!largestLine && largestLine.includes('NXP') && largestLine.includes('$500,000') && !/kidde/i.test(largestLine), largestLine || 'missing');
 const renewalLine = lines.find(l => l.includes('Renewal Agreement - 2027') && l.includes('$514,800'));
 check('context renewal label', !!renewalLine && renewalLine.includes('NOT IN THE OPEN BOOK (renewal)'), renewalLine || 'missing');
-check('context open total', certified.context.includes('OPEN PIPELINE: 93 deals, $5,734,805 open, $1,730,113 weighted.'), 'missing open pipeline line');
-check('placeholder renewal counted', certified.context.includes('OPEN DEAL: No company linked — Renewal, $50,000'), 'missing $50,000 renewal');
-check('associated renewal company', certified.context.includes('OPEN DEAL: Intuitive — Renewal, $350,000'), 'missing associated company');
+check('context open total', certified.context.includes('OPEN PIPELINE: 28 deals, $3,670,000 open, $811,500 weighted.'), 'missing open pipeline line');
+check('context renewals', certified.context.includes('RENEWALS: 74 current deals, $3,433,665.'), 'missing renewals line');
+check('legacy renewal not open', certified.context.includes('NOT IN THE OPEN BOOK (renewal): No company linked — Renewal, $50,000'), 'missing $50,000 renewal');
+check('associated renewal company', certified.context.includes('NOT IN THE OPEN BOOK (renewal): Intuitive — Renewal, $350,000'), 'missing associated company');
 check('marketing brief in context', certified.context.includes('MARKETING BRIEF'), 'missing marketing brief');
 check('context funnel', certified.context.includes('383 leads / 280 MQL / 118 SQL'), 'missing funnel line');
 check('live funnel line', facts.context.includes(metrics.leads + ' leads / ' + metrics.mql + ' MQL / ' + metrics.sql + ' SQL'), 'missing live funnel line');
@@ -106,6 +108,8 @@ print(json.dumps({
   "leads": book["leads"],
   "mql": book["mql"],
   "sql": book["sql"],
+  "renewalCount": book["renewalCount"],
+  "renewalAmount": book["renewalAmount"],
   "largest": book["largest"],
   "kidde": [{"dealName": d["dealName"], "amount": d["amount"], "inOpenBook": d["inOpenBook"], "reason": d["reason"], "owner": d["ownerLabel"]} for d in kidde],
 }))
@@ -114,6 +118,7 @@ const pyBook = JSON.parse(py);
 check('python count', pyBook.openCount === metrics.openCount, String(pyBook.openCount));
 check('python amount', pyBook.openAmount === metrics.openAmount, String(pyBook.openAmount));
 check('python weighted', pyBook.weighted === metrics.weighted, String(pyBook.weighted));
+check('python renewals', pyBook.renewalCount === metrics.renewalCount && pyBook.renewalAmount === metrics.renewalAmount, [pyBook.renewalCount, pyBook.renewalAmount].join('/'));
 check('python funnel', pyBook.leads === metrics.leads && pyBook.mql === metrics.mql && pyBook.sql === metrics.sql, [pyBook.leads, pyBook.mql, pyBook.sql].join('/') + ' vs ' + [metrics.leads, metrics.mql, metrics.sql].join('/'));
 check('certified day', certified.today === CERTIFIED_DAY, certified.today);
 check('python largest', pyBook.largest && pyBook.largest.company === 'NXP' && pyBook.largest.amount === 500000 && pyBook.largest.owner === largest.owner, JSON.stringify(pyBook.largest));
