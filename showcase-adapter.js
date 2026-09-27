@@ -7,7 +7,7 @@ Component.prototype.componentDidMount = function () {
   this._showcaseRestore=()=>{
     const p=new URL(location.href).searchParams;
     const views=['briefing','pipeline','accounts','account','meetings','meeting','drafts','data'];
-    const patch={screen:views.includes(p.get('view'))?p.get('view'):'briefing',evidence:false,perf:'demand',accounts:'deals',meetings:'upcoming',period:'quarter',search:'',owner:'Everyone',sort:'weighted',meetingSearch:'',meetingOwner:'Everyone',start:'',end:'',draft:0,contributor:null};
+    const patch={screen:views.includes(p.get('view'))?p.get('view'):'briefing',evidence:false,perf:'demand',accounts:'deals',meetings:'upcoming',period:'quarter',search:'',owner:'Everyone',sort:'amount',meetingSearch:'',meetingOwner:'Everyone',start:'',end:'',draft:0,contributor:null};
     for(const k of showcaseRouteKeys) if(p.has(k)) patch[k]=k==='draft'?Number(p.get(k)):p.get(k);
     for(const [key,values] of Object.entries({perf:['demand','spend','web'],accounts:['deals','follow','leads'],meetings:['upcoming','past'],period:['six','quarter','year','custom'],sort:['weighted','close','days','name']}))if(!values.includes(patch[key]))patch[key]=values[0];
     if(!Number.isInteger(patch.draft)||patch.draft<0)patch.draft=0;

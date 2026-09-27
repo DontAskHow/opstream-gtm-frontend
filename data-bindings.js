@@ -140,6 +140,14 @@ Component.prototype.renderVals = function () {
   const webMax=Math.max(1,...webVisits.map(w=>w.value));v.webWeeks=webVisits.map(w=>({label:f.date(w.date),title:'Week of '+f.date(w.date)+': '+f.number(w.value)+' visits',h:Math.round(w.value/webMax*100)+'%'}));
   v.webCols=v.webWeeks.length;
   v.webSources=webChannels.map(c=>({name:c.name,visits:f.number(c.sessions),engaged:f.percent(c.sessions?c.engagedSessions/c.sessions:null),ke:c.keyEvents}));
+  v.spendConnected=(d.report.spend.months||[]).some(m=>m.planned!=null||m.actual!=null)||(d.report.spend.channels||[]).length>0;
+  v.adsConnected=(v.ads||[]).length>0;
+  v.webConnected=web.sessions!=null||webChannels.length>0||webPages.length>0;
+  v.connectionLines=[
+    {name:'Spend',line:v.spendConnected?'Spend is connected for the months with actuals.':'Spend: not connected'},
+    {name:'Ads',line:v.adsConnected?'Ads are connected.':'Ads: not connected'},
+    {name:'Website & AI',line:v.webConnected?'Website & AI is connected.':'Website & AI: not connected'}
+  ];
   v.landing=webPages.slice(0,10).map(p=>({page:p.name,visits:f.number(p.sessions),engaged:f.number(p.engagedSessions),ke:p.keyEvents}));
   // The Data view's source table: describe what is actually in this extract.
   v.sources=[

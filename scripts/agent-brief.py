@@ -78,8 +78,7 @@ def main():
             "goal": q.get("goal"),
             "title": q.get("title"),
             "why": q.get("why"),
-            "isNew": bool(q.get("isNew")),
-            "newSinceLastBrief": q.get("id") in (set(cur_ids) - prev_ids),
+            "isNew": bool(q.get("isNew") or q.get("id") in (set(cur_ids) - prev_ids)),
         }
 
     def items_of(section):
@@ -106,7 +105,7 @@ def main():
         "briefCounts": stats.get("briefCounts"),
         "goals": hop.get("goals") or [],
         "queue": [qline(q) for q in queue],
-        "newSinceLastBrief": [qline(q) for q in new_items],
+        "newItems": [qline(q) for q in new_items],
         "upcomingPrep": preplines,
         "briefMeetings": [
             {"title": m.get("title"), "start": m.get("start")}
@@ -126,7 +125,7 @@ def main():
         "- Be concrete: names, numbers, days. No corporate fluff, no hype.\n"
         "- Keep it skimmable: short paragraphs, tight bullets.\n"
         "- Frame the briefing around her goals (the 'goals' list): lead with the commit goal, then pipeline, then forecast honesty.\n"
-        "- 'newSinceLastBrief' items deserve a callout — she hasn't seen them before.\n"
+        "- Items with isNew true are new. Mention them in whatsNew. Never print internal field names.\n"
         "- End with genuine uncertainty where it exists (e.g. ambiguous meeting ownership, missing stage labels).\n"
         "- Reply with strict JSON only, matching the requested schema."
     )

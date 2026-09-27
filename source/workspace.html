@@ -192,10 +192,36 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           <h6 style="margin:0 0 8px;color:var(--color-accent)">Proactive briefing</h6>
           <h1 style="font-size:36px;margin:0 0 8px">What needs you today</h1>
           <p style="margin:0;font-size:15px;color:var(--color-neutral-700);max-width:64ch;text-wrap:pretty">{{ briefingIntro }}</p>
+          <div class="seg" style="margin-top:16px">
+            <button onClick="{{ showMarketingBrief }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;background:{{ marketingBriefBg }};color:{{ marketingBriefFg }};cursor:pointer">Marketing</button>
+            <button onClick="{{ showSalesBrief }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ salesBriefBg }};color:{{ salesBriefFg }};cursor:pointer">Sales &amp; CS</button>
+          </div>
         </div>
+        <sc-if value="{{ briefMarketing }}" hint-placeholder-val="{{ true }}">
+          <section>
+            <div class="section-rule"><h6 style="margin:0">Marketing brief</h6><span style="font-size:12px;color:var(--color-neutral-700)">One screen · America/Phoenix</span></div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;padding:12px 0">
+              <sc-for list="{{ marketingIntervals }}" as="m" hint-placeholder-count="3">
+                <div>
+                  <div style="font-size:13px;color:var(--color-neutral-700)">{{ m.label }}</div>
+                  <div style="font-family:var(--font-heading);font-weight:800;font-size:28px">{{ m.leads }} <span style="font-size:14px;font-weight:500">leads</span></div>
+                  <div style="font-size:13px">MQL {{ m.mql }} · SQL {{ m.sql }}</div>
+                  <div style="font-size:12px;color:var(--color-neutral-700)">{{ m.note }}</div>
+                </div>
+              </sc-for>
+            </div>
+            <table class="table" style="font-size:14px">
+              <thead><tr><th>Source</th><th style="text-align:right">This week</th><th style="text-align:right">6-week average</th><th style="text-align:right">Quarter</th><th style="text-align:right">Cost / lead</th></tr></thead>
+              <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td style="text-align:right">{{ c.week }}</td><td style="text-align:right">{{ c.six }}</td><td style="text-align:right">{{ c.quarter }}</td><td style="text-align:right">{{ c.cpl }}</td></tr></sc-for></tbody>
+            </table>
+            <sc-if value="{{ marketingEmpty }}"><p class="muted-copy">No leads in this week, the last six weeks, or the quarter.</p></sc-if>
+            <sc-for list="{{ connectionLines }}" as="c"><p style="margin:8px 0 0;font-size:14px">{{ c.line }}</p></sc-for>
+          </section>
+        </sc-if>
         <sc-if value="{{ briefingEmpty }}">
           <p class="muted-copy">Loading the collection…</p>
         </sc-if>
+        <sc-if value="{{ briefSales }}">
         <sc-if value="{{ isHollie }}">
                   <sc-if value="{{ hasHollieOp }}">
                     <section>
@@ -326,9 +352,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                         </sc-for>
                       </sc-for>
                     </section>
+                    <sc-if value="{{ holliePrepEmpty }}"><p class="muted-copy">{{ holliePrepNote }}</p></sc-if>
+                    <sc-if value="{{ !holliePrepEmpty }}">
                     <section style="display:flex;flex-direction:column">
                       <div class="section-rule"><h6 style="margin:0">Meeting prep</h6><span style="font-size:12px;color:var(--color-neutral-700)">Auto-generated · next 7 days</span></div>
-                      <sc-if value="{{ holliePrepEmpty }}"><p class="muted-copy">{{ holliePrepNote }}</p></sc-if>
                       <sc-for list="{{ holliePrep }}" as="pr">
                         <article class="priority-card" aria-label="{{ pr.title }}">
                           <div class="priority-number">◷</div>
@@ -360,6 +387,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                         </article>
                       </sc-for>
                     </section>
+                    </sc-if>
                   </sc-if>
                     <section>
                       <div class="section-rule"><h6 style="margin:0">How the assistant works</h6><span style="font-size:12px;color:var(--color-neutral-700)">Your autonomy settings</span></div>
@@ -388,6 +416,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                     </section>
                   </sc-if>
                 </sc-if>
+        </sc-if>
 
       </div>
     </sc-if>
@@ -526,6 +555,8 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
         </sc-if>
 
         <sc-if value="{{ perfSpend }}" hint-placeholder-val="{{ false }}">
+          <sc-if value="{{ !spendConnected }}"><p style="margin:0;font-size:14px">Spend: not connected</p></sc-if>
+          <sc-if value="{{ spendConnected }}">
           <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
             <section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Plan vs recorded, 2026</h6><button onClick="{{ exportSpend }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
@@ -547,6 +578,9 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Marketing spend grouped by channel, from the collected record.</p>
             </section>
           </div>
+          </sc-if>
+          <sc-if value="{{ !adsConnected }}"><p style="margin:12px 0 0;font-size:14px">Ads: not connected</p></sc-if>
+          <sc-if value="{{ adsConnected }}">
           <section>
             <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Advertising and outbound</h6><span style="font-size:12px;color:var(--color-neutral-700)">Platform-reported · not qualified leads</span></div>
             <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:560px">
@@ -554,9 +588,12 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <tbody><sc-for list="{{ ads }}" as="a" hint-placeholder-count="4"><tr><td style="font-weight:600">{{ a.name }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ a.sent }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ a.replies }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ a.bounces }}</td><td style="font-size:13px;color:var(--color-neutral-800)">{{ a.note }}</td></tr></sc-for></tbody>
             </table></div>
           </section>
+          </sc-if>
         </sc-if>
 
         <sc-if value="{{ perfWeb }}" hint-placeholder-val="{{ false }}">
+          <sc-if value="{{ !webConnected }}"><p style="margin:0;font-size:14px">Website &amp; AI: not connected</p></sc-if>
+          <sc-if value="{{ webConnected }}">
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 24px;border-bottom:2px solid var(--color-divider)">
             <sc-for list="{{ webMetrics }}" as="m" hint-placeholder-count="5">
               <div style="display:flex;flex-direction:column;gap:4px;padding:16px 0 18px;min-width:0">
@@ -589,6 +626,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             <tbody><sc-for list="{{ landing }}" as="l" hint-placeholder-count="8"><tr><td style="font-variant-numeric:tabular-nums;overflow-wrap:anywhere">{{ l.page }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ l.visits }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ l.engaged }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ l.ke }}</td></tr></sc-for></tbody></table></div>
             <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">Sample landing pages illustrate engagement and key-event comparisons.</p>
           </section>
+          </sc-if>
         </sc-if>
       </div>
     </sc-if>
@@ -717,6 +755,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             </section>
             <section>
               <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Sources for this account</h6></div>
+              <sc-if value="{{ acct.sourcesMissing }}"><p style="margin:10px 0 0;font-size:14px">Sources for this account: not connected</p></sc-if>
               <sc-for list="{{ acct.sources }}" as="s" hint-placeholder-count="4"><button onClick="{{ s.go }}" style="display:flex;justify-content:space-between;gap:8px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:10px 0;font:inherit;font-size:14px;color:inherit;cursor:pointer"><span>{{ s.name }}</span><span style="font-size:12px;color:var(--color-neutral-700);white-space:nowrap">{{ s.updated }}</span></button></sc-for>
             </section>
           </aside>
@@ -1047,7 +1086,8 @@ class Component extends DCLogic {
       hasDealReview: !!(openDeal && openDeal.review), dealReview: openDeal && openDeal.review ? openDeal.review.flatMap(r => [...r.supporting.map(x => ({ kind: 'Supports', text: x })), ...r.concerns.map(x => ({ kind: 'Caveat', text: x }))]).filter((x, i, arr) => arr.findIndex(y => y.text === x.text) === i) : [], dealReviewNote: openDeal && openDeal.review ? 'The review cites ' + openDeal.review.reduce((n, r) => n + r.refs, 0) + ' evidence records by its own ids; those ids are not part of the collected snapshot, so they cannot be opened here.' : '',
       hasCriteria: !!(openDeal && (openDeal.successCriteria || openDeal.decisionMakers)), criteria: (openDeal || {}).successCriteria || 'Not recorded', decisionMakers: (openDeal || {}).decisionMakers || 'Not recorded', context: openDeal ? [openDeal.erp ? 'ERP: ' + openDeal.erp : null, openDeal.competitors ? 'Also considering: ' + openDeal.competitors : null, openDeal.champion ? 'Champion: ' + openDeal.champion : null, openDeal.segment].filter(Boolean).join(' · ') : '',
       peopleCount: co.contacts.length + ' in CRM', hasMorePeople: co.contacts.length > (st.peopleAll ? 0 : 8) && !st.peopleAll, morePeopleLabel: 'Show all ' + co.contacts.length, showAllPeople: () => this.setState({ peopleAll: true }), people: (st.peopleAll ? co.contacts : co.contacts.slice(0, 8)).map(c => ({ name: c.name, line: [c.title, c.email, c.lastContacted ? 'last contacted ' + fmtD(c.lastContacted) : null].filter(Boolean).join(' · '), go: ev('contact:' + co.id + ':' + (c.email || c.name)) })),
-      sources: []
+      sources: [(co.refs || []).length ? { name: 'CRM', updated: collectedShort, go: ev('company:' + co.id) } : null, (co.recordings || []).length ? { name: 'Fathom', updated: collectedShort, go: goMtg(co.recordings[0].id) } : null, (co.notes || []).length ? { name: 'CRM notes', updated: fmtD((co.notes[0] || {}).date), go: ev('note:' + co.id + ':' + co.notes[0].id) } : null].filter(Boolean),
+      sourcesMissing: !((co.refs || []).length || (co.recordings || []).length || (co.notes || []).length)
     };
     const recIndex = this.memo('recIndex', allRecs, () => Object.fromEntries(allRecs.map(r => [r.id, r])));
     const mrec = recIndex[st.meetingId] || allRecs.find(r => /Sample meeting/.test(r.title)) || allRecs[0] || { title: 'Loading…', summary: [], actions: [], invitees: [], date: '' };
@@ -1126,7 +1166,9 @@ class Component extends DCLogic {
     const nudgeDraft = (q) => () => { const existing = (st.newDrafts || []).findIndex(x => x.seedId === q.id); if (existing >= 0) { this.setState({ screen: 'drafts', draft: baseDrafts.length - (st.newDrafts || []).length + existing }); window.scrollTo(0, 0); return; } const cc = q.company ? findCo(q.company) : null; const contactName = cc && cc.contacts[0] ? cc.contacts[0].name.split(' ')[0] : 'there'; const nudgeText = 'Hi ' + contactName + ',\n\nWanted to check in on ' + (q.deal && q.deal !== q.company ? q.deal + ' at ' + q.company : q.company || 'our conversation') + '. ' + (q.daysQuiet ? "It's been " + q.daysQuiet + ' days since we last connected' : 'We haven\'t connected in a while') + ', and I wanted to see where things stand on your end.\n\n' + (q.stage ? 'Last we spoke, this was in ' + q.stage + '. ' : '') + 'Is this still a priority, or has something changed?\n\nHappy to jump on a quick call if helpful.\n\nBest,\nHollie'; const list = [...(st.newDrafts || []), { kind: 'Follow-up', seedId: q.id, title: 'Nudge ' + (q.company || 'account'), company: q.company || 'No company linked', text: nudgeText, rationale: (q.why || '') + ' Drafts are never sent automatically. Edit the generated nudge above to match your voice.', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: cc ? cc.contacts.slice(0, 2).map(x => x.name).join(', ') : '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts', draftFeedback: 'Draft created with a starting nudge — edit it to match your voice, then use Copy for Gmail to paste it into Gmail.', draftFeedbackClass: 'form-success' }); window.scrollTo(0, 0); };
     const kindLabel = { followup_draft: 'Follow-up draft', stale_deal: 'Stale deal', unworked_lead: 'Unworked lead', crm_update: 'CRM update', meeting_prep: 'Meeting prep', sheet_review: 'Sheet check' };
     const mdText = s => String(s == null ? '' : s).replace(/\[([^\]]+)\]\([^)\s]+\)/g, '$1');
-    const hollieQueue = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id]).map((q, i) => {
+    const isTestItem = text => /system verification test/i.test(String(text || ''));
+    const cleanCopy = text => String(text == null ? '' : text).replace(/\bnewSinceLastBrief\b/gi, 'new');
+    const hollieQueue = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id] && !isTestItem(q.title) && !isTestItem(q.why)).map((q, i) => {
       const confirmKey = st.confirmQueue;
       const pm = q.kind === 'followup_draft' ? ['Open draft', seedDraft(q)] : q.kind === 'stale_deal' ? ['Draft nudge', nudgeDraft(q)] : q.kind === 'unworked_lead' ? ['Review leads', goLeads] : q.kind === 'sheet_review' ? (q.companyId ? ['Review in account', goCo(q.companyId)] : ['Review deals', goDeals]) : q.kind === 'crm_update' ? ['Review deals', goDeals] : ['Open meetings', goMeetings];
       const confirmGo = (action, fn) => () => { const key = q.id + ':' + action; if (confirmKey === key) { this.setState({ confirmQueue: null }); fn(); } else { this.setState({ confirmQueue: key }); setTimeout(() => { if (this.state.confirmQueue === key) this.setState({ confirmQueue: null }); }, 6000); } };
@@ -1135,7 +1177,7 @@ class Component extends DCLogic {
         kind: kindLabel[q.kind] || q.kind,
         goal: q.goal || 'pipeline',
         context: [q.company, (q.deal && q.deal !== q.company ? q.deal : null), q.stage].filter(Boolean).join(' · '),
-        why: mdText(q.why),
+        why: cleanCopy(mdText(q.why)),
         confidenceText: mdText((q.confidence || '') + (q.confidenceNote ? ' · ' + q.confidenceNote : '')),
         primary: pm[0], primaryGo: pm[1],
         dismissLabel: confirmKey === q.id + ':dismiss' ? 'Confirm dismiss' : 'Dismiss',
@@ -1178,10 +1220,10 @@ class Component extends DCLogic {
     })) : [];
     // ---- Agent's proactive take: LLM-written morning brief (data/agent-brief.json) ----
     const ab = st.agentBrief || null;
-    const agentBriefParas = ab ? (ab.paragraphs || []) : [];
-    const agentBriefNew = ab ? (ab.whatsNew || []) : [];
-    const agentBriefWatch = ab ? (ab.watchOuts || []) : [];
-    const agentBriefTop = ab ? (ab.topActions || []) : [];
+    const agentBriefParas = ab ? (ab.paragraphs || []).map(cleanCopy).filter(t => t && !isTestItem(t)) : [];
+    const agentBriefNew = ab ? (ab.whatsNew || []).map(cleanCopy).filter(t => t && !isTestItem(t) && !/^new$/i.test(t)) : [];
+    const agentBriefWatch = ab ? (ab.watchOuts || []).map(cleanCopy).filter(t => t && !isTestItem(t)) : [];
+    const agentBriefTop = ab ? (ab.topActions || []).map(t => ({...t, title: cleanCopy(t.title), why: cleanCopy(t.why)})).filter(t => !isTestItem(t.title + t.why)) : [];
     const hasAgentBrief = agentBriefParas.length > 0;
     const hasAgentBriefNew = agentBriefNew.length > 0;
     const hasAgentBriefTop = agentBriefTop.length > 0;
@@ -1244,6 +1286,11 @@ class Component extends DCLogic {
       goBriefing: this.go('briefing'), goPipeline: this.go('pipeline'), goAccounts: this.go('accounts'), goAccount, goMeetings: this.go('meetings'), goMeeting, goDrafts, goData: this.go('data'), goDeals,
       toast: st.toast || null,
       isBriefing: s === 'briefing', isPipeline: s === 'pipeline', isAccounts: s === 'accounts', isAccount: s === 'account', isMeetings: s === 'meetings', isMeeting: s === 'meeting', isDrafts: s === 'drafts', isData: s === 'data',
+      briefMarketing: (st.briefAudience || 'marketing') === 'marketing', briefSales: st.briefAudience === 'sales',
+      showMarketingBrief: () => this.setState({ briefAudience: 'marketing' }), showSalesBrief: () => this.setState({ briefAudience: 'sales' }),
+      marketingBriefBg: (st.briefAudience || 'marketing') === 'marketing' ? 'var(--color-text)' : 'transparent', marketingBriefFg: (st.briefAudience || 'marketing') === 'marketing' ? 'var(--color-bg)' : 'var(--color-text)',
+      salesBriefBg: st.briefAudience === 'sales' ? 'var(--color-text)' : 'transparent', salesBriefFg: st.briefAudience === 'sales' ? 'var(--color-bg)' : 'var(--color-text)',
+      connectionLines: [], spendConnected: false, adsConnected: false, webConnected: false,
       acct, mtg, coverageNote: REC.coverage ? 'This prototype loads ' + REC.coverage.primary + ' accounts (' + REC.coverage.companiesInExtract + ' CRM company records, ' + REC.coverage.foldedRelated + ' duplicates folded), ' + REC.coverage.contacts.toLocaleString('en-US') + ' contacts, ' + REC.coverage.notes + ' notes, ' + REC.coverage.calls + ' calls, ' + REC.coverage.meetings + ' calendar entries, ' + REC.coverage.tasks + ' tasks and ' + REC.coverage.fathomTotal + ' recordings (' + REC.coverage.unmatchedRecordings + ' with companies outside the extract), full transcripts for ' + (REC.coverage.transcripts || 0) + ' of them. ' + (REC.coverage.ownersArchived || 0) + ' of 54 CRM owners are archived and shown as (former). Email bodies were excluded. Stage names for numeric CRM stage ids are inferred from the owner sheets; the connector does not export the stage catalog.' : '',
       meetingsNote: st.records ? (new Set(allRecs.map(r => r.id)).size) + ' recordings · ' + (REC.unmatchedRecordings || []).length + ' with companies outside the 31 extracted accounts · CRM calendar entries for upcoming' : 'Loading meeting records…',
       evidenceOpen: !!st.evidence, openEvidence: goEvidence, ev: evVal, evReviewSample: ev('review-sample'), evRecordingSample: ev('recording-sample'), evTim13: ev('tim-13'), evDraftRefs: ev('draft-refs'), closeEvidence: () => this.setState({ evidence: false }), stop: e => e.stopPropagation(),
@@ -1259,21 +1306,21 @@ class Component extends DCLogic {
       hollieNewCount: hollieQueue.filter(q => q.isNew).length,
       hollieNewNote: (() => { const n = hollieQueue.filter(q => q.isNew).length; return n > 0 ? n + ' new or updated since the last run — look for the · new tag.' : 'Nothing new since the last run.'; })(),
       hollieQueueGroups: (hop && hop.goals && hop.goals.length ? hop.goals.map(g => ({ label: g.title, status: g.status || '', items: hollieQueue.filter(q => q.goal === g.id) })).filter(g => g.items.length).map(g => ({ ...g, count: g.items.length })) : ['Follow-up draft', 'Stale deal', 'Unworked lead', 'Sheet check', 'CRM update', 'Meeting prep'].map(label => ({ label, status: '', items: hollieQueue.filter(q => q.kind === label) })).filter(g => g.items.length).map(g => ({ ...g, count: g.items.length }))),
-      aiProposals: (st.proposals || []).map((p, i) => ({
+      aiProposals: (st.proposals || []).map((p, i) => ({ p, i })).filter(({ p }) => !isTestItem([p.rationale, p.field, p.proposedValue, p.title, p.company].join(' '))).map(({ p, i }) => ({
         idx: i,
         title: (p.company || 'Account') + ' · ' + (p.field || 'field update'),
         changeLine: (p.currentValue && p.currentValue !== 'unknown' ? p.currentValue : 'no value on record') + ' → ' + (p.proposedValue || '—'),
-        rationale: p.rationale || '',
+        rationale: cleanCopy(p.rationale || ''),
         meta: (p.by === 'assistant' ? 'Proposed by the assistant' : 'Proposed') + (p.at ? ' · ' + fmtD(String(p.at).slice(0, 10)) : ''),
         decided: p.status === 'approved' || p.status === 'declined',
         statusLabel: p.status === 'approved' ? 'Approved' : p.status === 'declined' ? 'Declined' : 'Awaiting your decision',
         approveGo: () => this.decideProposal(i, 'approved'),
         declineGo: () => this.decideProposal(i, 'declined'),
       })),
-      aiProposalsPending: (st.proposals || []).filter(p => p.status === 'proposed').length,
-      aiProposalsWaitingNote: (() => { const n = (st.proposals || []).filter(p => p.status === 'proposed').length; return n + ' proposal' + (n === 1 ? '' : 's') + ' waiting on you.'; })(),
+      aiProposalsPending: (st.proposals || []).filter(p => p.status === 'proposed' && !isTestItem([p.rationale, p.field, p.proposedValue, p.title, p.company].join(' '))).length,
+      aiProposalsWaitingNote: (() => { const n = (st.proposals || []).filter(p => p.status === 'proposed' && !isTestItem([p.rationale, p.field, p.proposedValue, p.title, p.company].join(' '))).length; return n + ' proposal' + (n === 1 ? '' : 's') + ' waiting on you.'; })(),
       holliePrep, holliePrepEmpty: holliePrep.length === 0,
-      holliePrepNote: hop ? (hop.prepNote || '') : '',
+      holliePrepNote: holliePrep.length ? '' : ((hop && hop.prepNote) || 'Meeting prep: not connected'),
       hasAgentBrief, hasAgentBriefNew, hasAgentBriefWatch,
       agentBriefGreeting, agentBriefGenNote, agentBriefParas, agentBriefNew, agentBriefWatch, agentBriefTop, hasAgentBriefTop,
       hasHeartbeat, heartbeatSummary, heartbeatGenNote, heartbeatInsights,
