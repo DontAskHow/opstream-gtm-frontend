@@ -4,20 +4,25 @@
 Refreshes lemlist_campaigns (campaign list + per-campaign stats where the API
 exposes them). Read-only against the Lemlist API (api.lemlist.com).
 
-Auth: Lemlist accepts the API key as the ?access_token= query parameter
-(documented at developer.lemlist.com). The key is the secret
-opstream-gtm/lemlist-token and is sent only to api.lemlist.com.
+Auth: the campaign list accepts the API key as ?access_token=. The v2 stats
+route documents Basic auth with an empty login and the key as the password,
+so stats use that header first. The key is the secret opstream-gtm/lemlist-token
+and is sent only to api.lemlist.com. A stats refusal is recorded per campaign
+(route and HTTP status only) and does not stop the campaign refresh.
 A missing secret exits 3 and does not move the watermark.
 """
 
+import base64
 import json
 import urllib.error
 import urllib.request
 from urllib.parse import quote
+from datetime import datetime, timezone
 
 from common import (
     NeedsConnection,
     RateLimiter,
+    access_token_for,
     db_connect,
     run_main,
     set_sync_state,
@@ -40,18 +45,48 @@ def _authed_url(path: str) -> str:
     )
 
 
-def _get(path: str):
-    url = _authed_url(path)
+def _fetch(req):
     pace.wait()
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        if e.code in (401, 403):
-            raise NeedsConnection("Lemlist rejected the credential (HTTP %s); not touching watermarks" % e.code)
-        return e.code, body
+        return e.code, e.read().decode("utf-8", errors="replace")
+
+
+def _get(path: str):
+    status, payload = _fetch(urllib.request.Request(_authed_url(path), headers={"Accept": "application/json"}))
+    if status in (401, 403):
+        raise NeedsConnection("Lemlist rejected the credential (HTTP %s); not touching watermarks" % status)
+    return status, payload
+
+
+def _get_basic(path: str):
+    """Basic auth, empty login, API key as the password. Do not log the header."""
+    token = access_token_for(("custom.lemlist", "lemlist"), None)
+    auth = base64.b64encode((":" + token).encode("utf-8")).decode("ascii")
+    return _fetch(urllib.request.Request(f"https://{HOST}{path}",
+                                         headers={"Accept": "application/json", "Authorization": "Basic " + auth}))
+
+
+def _stats(cid, start, end):
+    """(stats dict or None, attempts). Attempts hold the route template and HTTP status only."""
+    route = "/api/v2/campaigns/{campaignId}/stats"
+    path = f"/api/v2/campaigns/{cid}/stats?startDate={quote(start)}&endDate={quote(end)}"
+    attempts = []
+    for how, call in (("basic", lambda: _get_basic(path)), ("query", lambda: _fetch(
+            urllib.request.Request(_authed_url(path), headers={"Accept": "application/json"})))):
+        try:
+            status, payload = call()
+        except NeedsConnection:
+            raise
+        except Exception as e:
+            attempts.append({"route": route, "auth": how, "error": type(e).__name__})
+            continue
+        attempts.append({"route": route, "auth": how, "http": status})
+        if status == 200 and isinstance(payload, dict):
+            return payload, attempts
+    return None, attempts
 
 
 def main_sync(log):
@@ -61,6 +96,7 @@ def main_sync(log):
 
     con = db_connect()
     fetched_at = now_iso()
+    end = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     stats_filled = 0
     try:
         for c in payload:
@@ -70,20 +106,14 @@ def main_sync(log):
             raw = dict(c)
             # Per-campaign stats: cheap, one call each; tolerate absence.
             start = str(c.get("createdAt") or "2024-01-01T00:00:00.000Z")
-            for path in (f"/api/v2/campaigns/{cid}/stats?startDate={quote(start)}&endDate={quote(fetched_at)}",
-                         f"/api/campaigns/{cid}/stats"):
-                try:
-                    s_status, s_payload = _get(path)
-                except NeedsConnection:
-                    raise
-                except Exception as e:
-                    log.info("campaign %s: stats unavailable (%s)", cid, type(e).__name__)
-                    continue
-                if s_status == 200 and isinstance(s_payload, dict):
-                    raw["stats"] = s_payload
-                    stats_filled += 1
-                    break
-                log.info("campaign %s: stats HTTP %s", cid, s_status)
+            stats, attempts = _stats(cid, start, end)
+            raw["statsAttempts"] = attempts
+            if stats is not None:
+                raw["stats"] = stats
+                stats_filled += 1
+            else:
+                log.info("campaign %s: stats unavailable %s", cid,
+                         ", ".join("%s %s" % (a["auth"], a.get("http", a.get("error"))) for a in attempts))
             con.execute(
                 "INSERT INTO lemlist_campaigns(campaign_id, name, status, raw_json, fetched_at)"
                 " VALUES(?,?,?,?,?)"

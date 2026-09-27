@@ -5,6 +5,7 @@ Reads the brain (read-only) and the Lead Tracker rows sheet-review.py already
 wrote. Writes OUT_DATA/marketing.json. A source that is not in the brain stays
 {"connected": false} with the reason; nothing is estimated.
 """
+import html
 import json
 import os
 import re
@@ -316,48 +317,71 @@ def checklist(show):
     return items
 
 
+STATS_ROUTE = "GET /api/v2/campaigns/{campaignId}/stats"
+
+
 def outbound(db):
     if db is None:
         return {"connected": False, "reason": "LemList is not in this collection."}
     try:
-        rows = [json.loads(r[0]) for r in db.execute("select raw_json from lemlist_campaigns")]
+        rows = [(json.loads(r[0]), r[1]) for r in db.execute("select raw_json, fetched_at from lemlist_campaigns")]
     except sqlite3.Error:
         rows = []
     if not rows:
         return {"connected": False, "reason": "LemList is not in this collection."}
-    def stat(r, *keys):
-        src = r.get("stats") if isinstance(r.get("stats"), dict) else {}
+
+    def stat(src, *keys):
         for k in keys:
             v = src.get(k)
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
                 return int(v)
         return None
 
-    with_stats = []
-    for r in rows:
-        sent = stat(r, "messagesSent", "emailsSent", "sent", "nbMessagesSent")
-        replied = stat(r, "messagesReplied", "replied", "emailsReplied", "nbReplied")
-        bounced = stat(r, "messagesBounced", "bounced", "emailsBounced", "nbBounced")
-        if sent is None and replied is None:
+    with_stats, codes = [], {}
+    for r, _f in rows:
+        src = r.get("stats") if isinstance(r.get("stats"), dict) else None
+        for attempt in r.get("statsAttempts") or []:
+            key = str(attempt.get("http") or attempt.get("error") or "no answer")
+            codes[key] = codes.get(key, 0) + 1
+        if src is None:
             continue
         with_stats.append({"name": str(r.get("name") or ""), "status": r.get("status"),
-                           "sent": sent, "replied": replied, "bounced": bounced})
-    has_stats = bool(with_stats)
+                           "sent": stat(src, "messagesSent", "emailsSent", "sent"),
+                           "delivered": stat(src, "delivered"),
+                           "opened": stat(src, "opened", "nbLeadsOpened"),
+                           "replied": stat(src, "replied", "nbLeadsAnswered", "messagesReplied"),
+                           "bounced": stat(src, "messagesBounced", "bounced"),
+                           "meetings": stat(src, "meetingBooked")})
     status = {}
-    for r in rows:
+    for r, _f in rows:
         key = str(r.get("status") or "unknown")
         status[key] = status.get(key, 0) + 1
+    fetched = max((f for _r, f in rows if f), default=None)
     out = {
         "campaigns": len(rows),
         "byStatus": status,
-        "names": sorted(str(r.get("name") or "") for r in rows if r.get("status") == "running"),
-        "statsConnected": has_stats,
-        "connected": has_stats,
+        "names": sorted(str(r.get("name") or "") for r, _f in rows if r.get("status") == "running"),
+        "fetchedAt": fetched,
+        "statsRoute": STATS_ROUTE,
+        "statsResponses": codes,
+        "statsConnected": bool(with_stats),
+        "connected": bool(with_stats),
         "campaignStats": sorted(with_stats, key=lambda c: -(c["sent"] or 0)),
     }
-    if not has_stats:
-        out["reason"] = ("LemList campaign names and status are collected. Sent and reply counts are not "
-                         "collected yet, so no sequence is judged here.")
+    if not with_stats:
+        refused = sum(n for k, n in codes.items() if k in ("401", "403"))
+        if refused:
+            out["reason"] = ("LemList stats not available on this API key: %s answered HTTP %s for every campaign. "
+                             "Campaign names and status are collected."
+                             % (STATS_ROUTE, "/".join(sorted(k for k in codes if k in ("401", "403")))))
+            out["statsBlocked"] = True
+        elif codes:
+            out["reason"] = ("LemList stats did not come back: %s answered %s. Campaign names and status are collected."
+                             % (STATS_ROUTE, ", ".join("%s (%d)" % (k, n) for k, n in sorted(codes.items()))))
+        else:
+            out["reason"] = ("LemList stats have not been requested with this collection yet. "
+                             "Campaign names and status are collected%s." % (
+                                 (", last on " + str(fetched)[:10]) if fetched else ""))
     return out
 
 
@@ -436,6 +460,15 @@ def ads(db):
     return out
 
 
+def readable_path(value):
+    """GA4 stores some paths with HTML entities; a few carry markup pasted into a link."""
+    text = html.unescape(str(value or ""))
+    stray = re.search(r"</?[a-z][^/]*$|<[/a-z]", text, re.I)
+    if not stray:
+        return {"display": text, "strayHtml": None}
+    return {"display": text[:stray.start()], "strayHtml": text[stray.start():]}
+
+
 def web(db):
     if db is None:
         return {"connected": False}
@@ -451,8 +484,10 @@ def web(db):
         for r in (payload.get("rows") or []) if isinstance(payload, dict) else []:
             vals = {heads[i]: money((m or {}).get("value")) for i, m in enumerate(r.get("metricValues") or []) if i < len(heads)}
             name = ((r.get("dimensionValues") or [{}])[0] or {}).get("value")
-            out.append({dim: name, "sessions": vals.get("sessions"), "engagedSessions": vals.get("engagedSessions"),
-                        "keyEvents": vals.get("keyEvents")})
+            row = {dim: name, "sessions": vals.get("sessions"), "engagedSessions": vals.get("engagedSessions"),
+                   "keyEvents": vals.get("keyEvents")}
+            row.update(readable_path(name))
+            out.append(row)
         return out
 
     channels = table("channels_90d", "name")

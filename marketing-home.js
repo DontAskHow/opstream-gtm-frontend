@@ -53,7 +53,7 @@ const showView=(component,s,today)=>{
   return {
     id:s.id,name:s.name,when:showWhen(s,today),meta:[s.location,s.status,s.package].filter(Boolean).join(' · '),
     attendees:(s.attendees||[]).length?'Opstream: '+s.attendees.join(', '):'Opstream attendees are not listed on the show calendar.',
-    campaign:(s.campaigns||[]).length?'LemList campaign “'+s.campaigns[0].name+'” · '+s.campaigns[0].status:'',hasCampaign:(s.campaigns||[]).length>0,
+    campaign:(s.campaigns||[]).length?'LemList campaign “'+s.campaigns[0].name+'” · '+s.campaigns[0].status+campaignStatsText(st.marketing,s.campaigns[0].name):'',hasCampaign:(s.campaigns||[]).length>0,
     onCalendar:onCal.map(e=>'On your calendar: '+e.title+' ('+workspaceModel.formatShort(e.start)+')').join(' · '),hasOnCalendar:onCal.length>0,
     figures,hasData,noDataLine:'No spend or attendees recorded yet.'+(s.planned!=null?' Planned: '+mk(s.planned)+'.':''),
     prep:check('prep'),followUp:check('follow-up'),hasFollowUp:check('follow-up').length>0,
@@ -63,6 +63,13 @@ const showView=(component,s,today)=>{
     line:[showWhen(s,today),s.location,s.status].filter(Boolean).join(' · '),
     pastLine:[s.dateLabel,'planned '+mk(s.planned),'recorded '+mk((s.recorded||{}).amount),verifiedFormat.number(leads.count||0)+' leads','MQL '+(leads.mql||0)].join(' · '),
   };
+};
+const campaignStatsText=(marketing,name)=>{
+  const out=(marketing&&marketing.outbound)||{};
+  const row=(out.campaignStats||[]).find(c=>c.name===name);
+  if(row)return ' · '+[row.sent!=null?verifiedFormat.number(row.sent)+' sent':'',row.opened!=null?verifiedFormat.number(row.opened)+' opened':'',row.replied!=null?verifiedFormat.number(row.replied)+' replied':''].filter(Boolean).join(' · ');
+  if(out.statsBlocked)return ' · LemList stats not available on this API key';
+  return out.connected?' · no stats for this campaign':' · sent and reply counts not collected yet';
 };
 const numberWord=n=>['No','One','Two','Three','Four','Five','Six'][n]||String(n);
 Component.prototype.renderVals=function(){
@@ -100,6 +107,9 @@ Component.prototype.renderVals=function(){
   v.homeComingUp=featured.slice(0,4).map(s=>({when:showWhen(s,today),title:s.name,note:[s.location,s.planned!=null?workspaceModel.moneyK(s.planned)+' planned':''].filter(Boolean).join(' · '),go:()=>this._verifiedTarget({kind:'section',id:'events-shows'})()}));
   v.hasHomeComingUp=v.homeComingUp.length>0;
   v.goEventsShows=this._verifiedTarget({kind:'section',id:'events-shows'});
+  const outbound=(m&&m.outbound)||{};
+  v.outboundHomeNote=outbound.connected?'':(outbound.reason||'');
+  v.hasOutboundHomeNote=!!v.outboundHomeNote;
   for(const p of [...(v.priorities||[]),...(v.lessPriorities||[])]){
     p.leadOwnersLine=(p.leadOwners||[]).map(o=>workspaceModel.displayOwner(o)).filter((o,i,a)=>a.indexOf(o)===i).join(', ');
     p.hasLeadOwners=!!p.leadOwnersLine;

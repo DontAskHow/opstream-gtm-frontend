@@ -226,12 +226,33 @@ def unworked_by_source(leads, collected):
     )
 
 
+def silent_sequences(marketing, collected):
+    stats = ((marketing.get("outbound") or {}).get("campaignStats")) or []
+    quiet = [c for c in stats if (c.get("sent") or 0) >= 50 and not (c.get("replied") or 0)]
+    if not quiet:
+        return None
+    quiet.sort(key=lambda c: -(c.get("sent") or 0))
+    parts = ", ".join("%s (%d sent%s)" % (c["name"], c["sent"], (", %d bounced" % c["bounced"]) if c.get("bounced") else "")
+                      for c in quiet[:3])
+    return card(
+        "mkt:silent-sequences",
+        "%d outbound %s have sends and no replies" % (len(quiet), "sequence" if len(quiet) == 1 else "sequences"),
+        "LemList counts no replies on %s." % parts,
+        "Pause the weakest sequence and review deliverability and copy before adding volume.",
+        "LemList campaign stats, collected %s. Replies are LemList's count, not qualified leads." % collected,
+        RESPONSIBLE, None, "LemList stats",
+        {"label": "See campaign numbers", "target": {"kind": "view", "view": "pipeline", "tab": "spend"}},
+        None, kind="outbound",
+    )
+
+
 def build(marketing, review, today, collected_label):
     leads = tracker_rows(review)
     marketing = marketing or {}
     items = [
         shows_this_week(marketing, collected_label),
         webinar_unowned(leads, collected_label),
+        silent_sequences(marketing, collected_label),
         spend_not_entered(marketing),
         show_followups(marketing, today),
         mql_without_sql(leads, collected_label),
