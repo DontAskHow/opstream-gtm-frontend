@@ -59,7 +59,7 @@ export function writeZip(zipPath) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const zipPath = path.resolve(process.argv[2] || '/opt/cursor/artifacts/opstream-gtm-v8.2.zip');
+  const zipPath = path.resolve(process.argv[2] || '/opt/cursor/artifacts/opstream-gtm-v8.3.zip');
   writeZip(zipPath);
   const listed = execFileSync('unzip', ['-l', zipPath], { encoding: 'utf8' });
   for (const rel of BUNDLE_REQUIRED) {

@@ -910,7 +910,9 @@ def main():
     }
 
     bootstrap = {
-        'user': {'id': 'workspace-user', 'name': 'Workspace user', 'email': '', 'owner': True},
+        # No per-person login. The name is not shown. owner stays true because
+        # the connections panel only offers Slack setup when the shared user is the owner.
+        'user': {'id': 'team', 'name': 'Opstream team', 'email': '', 'owner': True},
         'preferences': {'mode': 'cs', 'ratings': {}, 'draftModes': {}, 'priorityContext': {}},
         'preferencesRevision': 0,
         'drafts': [],

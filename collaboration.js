@@ -194,7 +194,7 @@ Component.prototype.renderVals = function() {
   };
   v.connectGmailAction=s.gmailOAuthConfigured?v.connectGmail:v.showConnections;
   v.gmailOAuthConfigured=!!s.gmailOAuthConfigured;
-  v.signedInName=s.user?.name||s.user?.email||'';v.canImportBrowser=ready&&!!this._legacyBrowserRaw&&!s.browserImported;
+  v.canImportBrowser=ready&&!!this._legacyBrowserRaw&&!s.browserImported;
   v.importLabel=s.importing?'Importing…':'Import my browser work';v.importBrowser=()=>this._importBrowser();
   v.downloadBrowserBackup=()=>this._workspaceDownload('opstream-browser-backup.json',this._legacyBrowserRaw,'application/json');
   const google=s.connections?.google||{},slack=s.connections?.slack||{};
@@ -244,7 +244,7 @@ Component.prototype.renderVals = function() {
     const draft=selectedDraft,id=draft.id,edit=patch=>this._editWorkspaceDraft(id,patch),receipt=(s.sends||[]).find(r=>r.draftId===id&&r.version===draft.version);
     v.draft={...draft,refs:draft.supportRefs.length,versionLabel:(draft.version?'Version '+draft.version:'Not saved')+(draft.dirty?' · unsaved changes':'')};
     v.isEmailDraft=draft.purpose==='email';v.isCampaignDraft=draft.purpose==='campaign';v.subjectLabel=draft.purpose==='internal-note'?'Title':'Subject';v.messageLabel=draft.purpose==='internal-note'?'Note':'Message';
-    v.senderLabel=s.gmailEmail||'Gmail not connected — connect your Gmail to send';v.senderActionLabel=s.gmailEmail?'Manage connection':'Connect Gmail';
+    v.senderLabel=s.gmailEmail||'Connect Gmail to send from your own account';v.senderActionLabel=s.gmailEmail?'Manage connection':'Connect Gmail';
     v.campaignSenders=s.campaignSenders||[];v.editCampaignSender=e=>edit({campaignSender:e.target.value});
     v.editSubject=e=>edit({subject:e.target.value,title:e.target.value});v.editText=e=>edit({text:e.target.value});v.editRecipients=e=>edit({recipients:e.target.value});v.editCc=e=>edit({cc:e.target.value});v.editBcc=e=>edit({bcc:e.target.value});v.editRationale=e=>edit({rationale:e.target.value});v.editInternalNotes=e=>edit({internalNotes:e.target.value});v.editStatus=e=>edit({status:e.target.value});
     const contacts=(s.records.companies||[]).filter(c=>draft.accountIds.includes('company:'+c.id)).flatMap(c=>c.contacts||[]).filter(c=>c.email);

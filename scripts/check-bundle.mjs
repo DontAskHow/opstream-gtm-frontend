@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { BUNDLE_REQUIRED } from './package-bundle.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const zipPath = path.resolve(process.argv[2] || '/opt/cursor/artifacts/opstream-gtm-v8.2.zip');
+const zipPath = path.resolve(process.argv[2] || '/opt/cursor/artifacts/opstream-gtm-v8.3.zip');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtm-unzip-'));
 const port = 4317;
 
