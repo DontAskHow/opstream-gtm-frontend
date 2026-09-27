@@ -168,14 +168,17 @@ class S3Store(Store):
         return resp.get("SecretString") or ""
 
 
+# Canonical scripts live in refresh/brain-sync. A Google OAuth secret under
+# another name is not treated as the Sheets credential.
 SYNC_SCRIPTS = [
-    ("sync-sheets.py", "google-sheets-credential"),
-    ("sync-hubspot.py", "hubspot-token"),
-    ("sync-fathom.py", "fathom-token"),
-    ("sync-lemlist.py", "lemlist-api-key"),
-    ("sync-otterly.py", "otterly-token"),
-    ("sync-ga4.py", "ga4-credential"),
+    ("sheets_sync.py", "google-sheets-credential"),
+    ("hubspot_sync.py", "hubspot-token"),
+    ("fathom_sync.py", "fathom-token"),
+    ("ga4_sync.py", "ga4-credential"),
+    ("lemlist_sync.py", "lemlist-api-key"),
+    ("otterly_sync.py", "otterly-token"),
 ]
+VENDORED_SYNC = ROOT / "refresh" / "brain-sync"
 
 
 def run_step(cmd, env, cwd):
@@ -185,11 +188,23 @@ def run_step(cmd, env, cwd):
         raise SystemExit(proc.returncode)
 
 
-def install_secret_shim(sync_dir):
-    shim = ROOT / "refresh" / "sync_common.py"
-    dest = Path(sync_dir) / "common.py"
-    if shim.is_file():
-        shutil.copyfile(shim, dest)
+def install_vendored_sync(dest):
+    """Copy the repo scripts into the work dir so logs stay out of the repo.
+
+    An S3 copy of code/brain-sync is not used. Those files still call the
+    vault CLI. The vendored copies are the ones this job runs.
+    """
+    dest = Path(dest)
+    if dest.exists():
+        shutil.rmtree(dest)
+    if not VENDORED_SYNC.is_dir():
+        dest.mkdir(parents=True, exist_ok=True)
+        return dest
+    shutil.copytree(
+        VENDORED_SYNC, dest,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "logs"),
+    )
+    return dest
 
 
 def publish_tree(store, src, prefix):
@@ -266,6 +281,7 @@ def main():
         log("brain.db is empty. Publishing nothing.")
         return 1
     db_path.write_bytes(db_bytes)
+    del db_bytes
 
     for name in ("hollie-feedback.json", "crm-proposals.json"):
         try:
@@ -281,46 +297,41 @@ def main():
     except FileNotFoundError:
         pass
 
-    sync_dir = os.environ.get("REFRESH_SYNC_DIR") or str(work / "brain-sync")
-    try:
-        listing = store.list_keys("code/brain-sync/")
-    except Exception:
-        listing = []
-    Path(sync_dir).mkdir(parents=True, exist_ok=True)
-    for key in listing:
-        if key.endswith(".py"):
-            dest = Path(sync_dir) / Path(key).name
-            dest.write_bytes(store.get_bytes(key))
-    ran_sync = False
-    sync_ok = True
-    if any(Path(sync_dir).glob("*.py")):
-        install_secret_shim(sync_dir)
-        for script, secret in SYNC_SCRIPTS:
-            path = Path(sync_dir) / script
-            if not path.is_file():
-                matches = list(Path(sync_dir).glob("*" + secret.split("-")[0] + "*.py"))
-                path = matches[0] if matches else None
-            if not path or not path.is_file():
-                continue
-            if not store.secret_exists(secret):
-                log("WARNING: skipping %s because secret opstream-gtm/%s is not provisioned" % (path.name, secret))
-                continue
-            env = os.environ.copy()
-            env["BRAIN_DB"] = str(db_path)
-            env["GTM_SECRET_" + secret.upper().replace("-", "_")] = store.secret_value(secret)
-            try:
-                run_step([sys.executable, str(path)], env, ROOT)
-                ran_sync = True
-            except SystemExit:
-                sync_ok = False
-                log("sync failed: " + path.name)
-                return 1
+    sync_dir = install_vendored_sync(os.environ.get("REFRESH_SYNC_DIR") or (work / "brain-sync"))
+    ran = []
+    skipped = []
+    for script, secret in SYNC_SCRIPTS:
+        path = Path(sync_dir) / script
+        secret_id = "opstream-gtm/" + secret
+        if not path.is_file():
+            log("WARNING: skipping %s because the vendored script is missing" % script)
+            skipped.append("%s (script missing)" % script)
+            continue
+        if not store.secret_exists(secret):
+            log("WARNING: skipping %s because secret %s is not present" % (script, secret_id))
+            skipped.append("%s (%s missing)" % (script, secret_id))
+            continue
+        env = os.environ.copy()
+        env["BRAIN_DB"] = str(db_path)
+        env["GTM_SECRET_" + secret.upper().replace("-", "_")] = store.secret_value(secret)
+        try:
+            run_step([sys.executable, str(path)], env, ROOT)
+            ran.append(script)
+        except SystemExit:
+            log("sync failed: " + script + ". Publishing nothing.")
+            return 1
+    if ran:
+        log("sync summary: ran " + ", ".join(ran))
     else:
-        log("WARNING: no sync scripts in code/brain-sync. Using the brain.db already in the bucket.")
-    if ran_sync and sync_ok:
+        log("sync summary: ran none")
+    if skipped:
+        log("sync summary: skipped " + "; ".join(skipped))
+    else:
+        log("sync summary: skipped none")
+    if ran:
         store.put_file(brain_key, db_path)
         log("uploaded brain.db")
-    elif not ran_sync:
+    else:
         log("no sync ran, brain.db left unchanged")
 
     env = os.environ.copy()

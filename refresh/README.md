@@ -7,9 +7,9 @@ Bucket: `opstream-gtm-data-080403790510` in `us-east-2`, account `080403790510`.
 ## What the container does
 
 1. Download `data/brain/brain.db` and operator state from `state/`.
-2. Run each sync script in `code/brain-sync/` whose secret exists. A missing secret is a logged warning and that script is skipped. `common.py` `get_surrogate` reads Secrets Manager (`opstream-gtm/<name>`), not a vault CLI.
-3. Upload `brain.db` back only when a sync actually succeeded.
-4. Run `brain-data.py`, `sheet-review.py`, `align-run.py` (which runs `hollie-operator.py` and writes one run id). If `openai-api-key` exists, `agent-brief.py` and `heartbeat.py` call OpenAI directly with `gpt-6-luna`. Then esbuild bundles `evidence-renderer.mjs`.
+2. Run the vendored scripts in `refresh/brain-sync/` (`sheets_sync.py`, `hubspot_sync.py`, `fathom_sync.py`, `ga4_sync.py`, `lemlist_sync.py`, `otterly_sync.py`). These are the canonical syncs. `common.py` reads Secrets Manager (`opstream-gtm/<name>`) instead of the vault CLI. A missing secret is a logged warning (`skipping <script> because secret opstream-gtm/<name> is not present`) and that script is skipped. The job then prints `sync summary: ran …` and `sync summary: skipped …`. A Google OAuth secret stored under a different name is not used as the Sheets credential. The container does not download `code/brain-sync/` from S3 over these copies.
+3. Upload `brain.db` back only when a sync actually succeeded. If every sync was skipped, the database already in the bucket is left unchanged and the build continues.
+4. Run the same chain the 6-hour dashboard job described: `brain-data.py`, then `sheet-review.py`, then `align-run.py` (which runs `hollie-operator.py` and writes one run id). If `openai-api-key` exists, `agent-brief.py` and `heartbeat.py` call OpenAI directly with `gpt-6-luna`. Then esbuild bundles `evidence-renderer.mjs`. The container does not restart Elastic Beanstalk and does not send a chat message. The Monday operator review stays a separate weekly pass; it is not a second scheduler here. The old schedules are copied in `refresh/crons/`.
 5. If `brain.db` is missing, or the snapshot id is synthetic, the process exits non-zero and does not write `published/LATEST.json`.
 6. On success, upload `out/data` to `published/<run-id>/` and then write `published/LATEST.json`. Older runs are deleted after 10.
 

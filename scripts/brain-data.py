@@ -149,6 +149,13 @@ def main():
 
     con = sqlite3.connect(DB)
     cur = con.cursor()
+    # The reverse association lookup filters on to_id. The primary key starts
+    # at from_type, so this index keeps the 500k-row table from being scanned
+    # once per batch. It is created on the job's copy of the database.
+    tables = {r[0] for r in q(cur, "SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'hubspot_associations' in tables:
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_hs_assoc_to ON hubspot_associations(to_type, to_id)")
+        con.commit()
     global OWNER_NAMES
     OWNER_NAMES = load_owner_names(cur)
 
@@ -230,7 +237,7 @@ def main():
         print(f'loaded {otype}: {len(objs)}', flush=True)
 
     # ---------- sheet: deal stage labels + days in stage ----------
-    sheet_stage, sheet_days = {}, {}
+    sheet_stage, sheet_days, sheet_owner_by_deal = {}, {}, {}
     for rn, rj in q(cur, "select row_num, row_json from sheets_data where spreadsheet_title='pipeline_meeting1_v2' and tab='HS_Data' order by row_num"):
         try:
             row = json.loads(rj)
@@ -247,10 +254,31 @@ def main():
         label = str(row[4]).strip() if len(row) > 4 and row[4] else None
         if label:
             sheet_stage[did] = label
+        owner_name = str(row[3]).strip() if len(row) > 3 and row[3] else ''
+        if owner_name and owner_name.lower() != 'deal owner':
+            sheet_owner_by_deal[did] = owner_name
         d = num(row[15]) if len(row) > 15 else None
         if d is not None:
             sheet_days[did] = int(d)
     print(f'sheet stage labels: {len(sheet_stage)}, days: {len(sheet_days)}', flush=True)
+    # Where a HubSpot deal id is on the sheet, the sheet's Deal Owner is that
+    # person's name. If every matched deal for one owner id agrees, use that
+    # name for the id. A disagreement leaves the id unnamed.
+    owner_votes = {}
+    for did, owner_name in sheet_owner_by_deal.items():
+        pair = deals.get(did)
+        if not pair:
+            continue
+        oid = str((pair[0] or {}).get('hubspot_owner_id') or '').strip()
+        if not oid:
+            continue
+        owner_votes.setdefault(oid, set()).add(owner_name)
+    mapped_owners = 0
+    for oid, nameset in owner_votes.items():
+        if len(nameset) == 1 and oid not in OWNER_NAMES:
+            OWNER_NAMES[oid] = next(iter(nameset))
+            mapped_owners += 1
+    print(f'sheet owner names: {mapped_owners} hubspot owner ids', flush=True)
 
     def contact_display_name(op):
         """Reconcile a display name from firstname/lastname, falling back to

@@ -428,9 +428,37 @@ def main():
     if autonomy.get("draft_followups") in ("queue", "auto", "propose"):
         sheet_leads = review.get("leads") or []
         if sheet_leads:
-            leads = [l for l in sheet_leads if not l.get("mql") and not subscriber_lead(l)]
+            # The Accounts lead list carries every sheet row. The marketing
+            # queue gets one item that cites the count, so it does not become
+            # one card per company.
+            usable = []
+            seen_lead = set()
+            for l in sheet_leads:
+                if l.get("mql") or subscriber_lead(l):
+                    continue
+                label = l.get("company") or l.get("name") or ""
+                if not label or "@" in str(label) or is_junk_name(label):
+                    continue
+                key = str(label).strip().lower()
+                if key in seen_lead:
+                    continue
+                seen_lead.add(key)
+                usable.append(l)
+            usable.sort(key=lambda l: l.get("lead") or l.get("leadDate") or "", reverse=True)
+            if usable:
+                sample = ", ".join(str(l.get("company") or l.get("name")) for l in usable[:5])
+                candidates.append({
+                    "id": "q:unworked_lead:tracker", "kind": "unworked_lead", "audience": "marketing",
+                    "title": "%d unworked leads on the Lead Tracker" % len(usable),
+                    "company": None, "companyId": None,
+                    "why": ("The Lead Tracker lists %d companies with no MQL date, including %s. The full list, with source and owner, is on Accounts. Newsletter subscribers are not included." % (len(usable), sample)),
+                    "confidence": "high",
+                    "confidenceNote": "From the Lead Tracker rows in this collection.",
+                    "evidence": [], "drawerKeys": [],
+                    "_hash": short_hash("lead", "tracker", len(usable)),
+                    "_sort": newest_key(usable[0].get("lead") or usable[0].get("leadDate")),
+                })
         else:
-            leads = []
             tracker_n = unworked_count(verified.get("leads") or [], review)
             if tracker_n:
                 candidates.append({
@@ -444,33 +472,6 @@ def main():
                     "_hash": short_hash("lead", "tracker", tracker_n),
                     "_sort": "",
                 })
-        leads.sort(key=lambda l: l.get("lead") or l.get("leadDate") or "", reverse=True)
-        seen_lead = set()
-        for l in leads:
-            label = l.get("company") or l.get("name") or ""
-            if not label or "@" in str(label) or is_junk_name(label):
-                continue
-            key = str(label).strip().lower()
-            if key in seen_lead:
-                continue
-            seen_lead.add(key)
-            lid = l.get("id") or ("lead-" + key.replace(" ", "-")[:40])
-            item_id = "q:unworked_lead:" + re.sub(r"[^A-Za-z0-9_-]", "", str(lid).replace("lead-", ""))[:48]
-            candidates.append({
-                "id": item_id, "kind": "unworked_lead", "audience": "marketing",
-                "title": "Work lead: %s" % label,
-                "company": label, "companyId": None,
-                "why": ("Lead from %s on %s has no MQL date."
-                        % (l.get("source") or "unknown source", l.get("lead") or l.get("leadDate") or "unknown date")),
-                "confidence": "high",
-                "confidenceNote": "From the Lead Tracker." if sheet_leads else "HubSpot contact. The sheet row for this company is not in the collection.",
-                "evidence": [], "drawerKeys": [],
-                "lead": {"name": label, "source": l.get("source"),
-                         "leadDate": l.get("lead") or l.get("leadDate"), "owner": l.get("owner"), "note": l.get("note")},
-                "_hash": short_hash("lead", lid, l.get("mql")),
-                "_sort": newest_key(l.get("lead") or l.get("leadDate")),
-                "_company_key": key,
-            })
 
     # 4) crm_update proposals (aggregate hygiene items)
     if autonomy.get("crm_updates") == "propose":

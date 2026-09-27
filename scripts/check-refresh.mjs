@@ -46,7 +46,20 @@ const env = {
   GTM_FACTS_ONLY: '1',
 };
 const first = execFileSync('python3', ['refresh/run.py'], { cwd: root, env, encoding: 'utf8' });
-console.log(first.slice(-400));
+console.log(first.slice(-800));
+const expectedSkips = [
+  ['sheets_sync.py', 'google-sheets-credential'],
+  ['hubspot_sync.py', 'hubspot-token'],
+  ['fathom_sync.py', 'fathom-token'],
+  ['ga4_sync.py', 'ga4-credential'],
+  ['lemlist_sync.py', 'lemlist-api-key'],
+  ['otterly_sync.py', 'otterly-token'],
+];
+for (const [script, secret] of expectedSkips) {
+  check('skipped ' + script, first.includes('skipping ' + script) && first.includes('opstream-gtm/' + secret), 'log did not name the skip');
+}
+check('sync summary ran none', first.includes('sync summary: ran none'), 'missing ran-none line');
+check('brain.db left unchanged', first.includes('brain.db left unchanged'), 'missing unchanged line');
 const latestPath = path.join(fsRoot, 'published', 'LATEST.json');
 check('published latest', fs.existsSync(latestPath), 'missing LATEST.json');
 const latest = JSON.parse(fs.readFileSync(latestPath, 'utf8'));
