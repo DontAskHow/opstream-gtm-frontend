@@ -7,8 +7,9 @@ the six JSON files in the exact shapes scripts/synthetic-data.cjs produces.
 
 Honesty rules: never invent names, dates, or stage labels. Where the brain
 lacks something (stage catalog, days-in-stage, MQL/SQL dates, an owner
-name), use null / empty / "Owner name not connected". Never show a raw
-HubSpot owner id, and never prefix a name with "Owner".
+name), use null or empty. When an owner id has no name, store "Owner {id}".
+The workspace shows "Owner #…1234" (last four digits) and does not show the
+full id. Never invent a person name, and never prefix a real name with "Owner".
 """
 import sqlite3, json, os, re, sys
 from datetime import datetime, timezone
@@ -81,7 +82,16 @@ def load_owner_names(cur):
 def owner_label(hubspot_owner_id):
     if not hubspot_owner_id:
         return 'Unassigned'
-    return OWNER_NAMES.get(str(hubspot_owner_id)) or 'Owner name not connected'
+    name = OWNER_NAMES.get(str(hubspot_owner_id))
+    if name:
+        return name
+    # Keep the id so the workspace can show a distinguishable "Owner #…1234".
+    return 'Owner ' + str(hubspot_owner_id)
+
+
+def clean_company_name(name):
+    """Drop a dangling comma or semicolon. Keep 'Inc.' and similar endings."""
+    return re.sub(r'[,;]+$', '', (name or '').strip()).strip()
 
 
 _ANALYTICS_SOURCE = {
@@ -307,7 +317,7 @@ def main():
         domain as the company name; when that happens, try the meeting and
         recording titles linked to the company (e.g. 'Allied World - Demo'
         reveals the real name behind 'awacservices.com')."""
-        raw = (p.get('name') or '').strip()
+        raw = clean_company_name(p.get('name'))
         if raw and not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', raw, re.I):
             return raw
         # Name is a bare domain (or missing) — look at linked titles.
@@ -329,7 +339,7 @@ def main():
             head = parts[0].strip()
             if head and len(head) > 2 and not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', head, re.I) \
                and head.lower() not in ('sync', 'stand-up', 'standup', 'weekly', 'check-in', 'checkin', 'intro', 'demo', 'call', 'meeting'):
-                return head
+                return clean_company_name(head)
         return raw or ('Company ' + cid)
 
     for cid in sorted(scoped_company_ids):
@@ -674,6 +684,7 @@ def main():
             cname = cp.get('name')
         if not cname:
             cname = (dp.get('dealname') or 'Untitled deal')
+        cname = clean_company_name(cname)
         prob = probability_fraction(num(dp.get('hs_deal_stage_probability')))
         label = stage_label(did, dp.get('dealstage'))
         candidate = {

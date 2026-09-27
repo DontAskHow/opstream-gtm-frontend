@@ -121,6 +121,11 @@ aside[data-screen-label="Evidence"]{padding:16px!important}
 select.input{min-height:44px}
 .table-scroll{-webkit-overflow-scrolling:touch}
 }
+.table-scroll{overflow-x:auto;overflow-y:hidden;max-width:100%;-webkit-overflow-scrolling:touch}
+.money,.table td.money,.table th.money{white-space:nowrap;font-variant-numeric:tabular-nums}
+.table td.money,.table th.money{text-align:right;width:1%;min-width:max-content}
+.table td.company{max-width:14rem;overflow-wrap:anywhere}
+.table td.stage{max-width:9rem}
 </style></head>
 <body><div id="topBanner" role="note" style="padding:10px 20px;background:#143e32;color:white;font:14px sans-serif;text-align:center">Company data · HubSpot, Fathom, Sheets, GA4 · Drafts stay in your browser · Nothing is sent without approval</div>
 <x-dc>
@@ -212,10 +217,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                 </div>
               </sc-for>
             </div>
-            <table class="table" style="font-size:14px">
-              <thead><tr><th>Source</th><th style="text-align:right">This week</th><th style="text-align:right">6-week average</th><th style="text-align:right">Quarter</th><th style="text-align:right">Cost / lead</th></tr></thead>
-              <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td style="text-align:right">{{ c.week }}</td><td style="text-align:right">{{ c.six }}</td><td style="text-align:right">{{ c.quarter }}</td><td style="text-align:right">{{ c.cpl }}</td></tr></sc-for></tbody>
-            </table>
+            <div class="table-scroll"><table class="table" style="font-size:14px">
+              <thead><tr><th>Source</th><th class="money">This week</th><th class="money">6-week average</th><th class="money">Quarter</th><th class="money">Cost / lead</th></tr></thead>
+              <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td class="money">{{ c.week }}</td><td class="money">{{ c.six }}</td><td class="money">{{ c.quarter }}</td><td class="money">{{ c.cpl }}</td></tr></sc-for></tbody>
+            </table></div>
             <sc-if value="{{ marketingEmpty }}"><p class="muted-copy">No leads in this week, the last six weeks, or the quarter.</p></sc-if>
             <sc-for list="{{ connectionLines }}" as="c"><p style="margin:8px 0 0;font-size:14px">{{ c.line }}</p></sc-for>
           </section>
@@ -486,10 +491,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Leads by source</h6><button onClick="{{ exportSources }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
             <sc-if value="{{ marketingEmpty }}" hint-placeholder-val="{{ false }}"><p style="margin:12px 0;font-size:13px;color:var(--color-neutral-700)">No leads in these intervals.</p></sc-if>
-            <table class="table" style="font-size:14px">
-              <thead><tr><th>Source</th><th style="text-align:right">This week</th><th style="text-align:right">6-week average</th><th style="text-align:right">Quarter</th><th style="text-align:right">Cost / lead</th></tr></thead>
-              <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.week }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.six }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.quarter }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.cpl }}</td></tr></sc-for></tbody>
-            </table>
+            <div class="table-scroll"><table class="table" style="font-size:14px">
+              <thead><tr><th>Source</th><th class="money">This week</th><th class="money">6-week average</th><th class="money">Quarter</th><th class="money">Cost / lead</th></tr></thead>
+              <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td class="money">{{ c.week }}</td><td class="money">{{ c.six }}</td><td class="money">{{ c.quarter }}</td><td class="money">{{ c.cpl }}</td></tr></sc-for></tbody>
+            </table></div>
             <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Sources are the lead’s channel, not the system the row was exported from. The 6-week column is the weekly average. Cost per lead uses quarter spend only when every month in the quarter has an actual; otherwise it says not connected.</p>
           </section>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 24px;border-bottom:2px solid var(--color-divider)">
@@ -520,11 +525,12 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             </section>
             <section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Selected period by source · {{ periodRange }}</h6></div>
-              <table class="table" style="font-size:14px">
-                <thead><tr><th>Source</th><th style="text-align:right">Leads</th><th style="text-align:right">MQL</th><th style="text-align:right">SQL</th><th style="text-align:right">SQL / leads</th></tr></thead>
-                <tbody><sc-for list="{{ channels }}" as="c" hint-placeholder-count="5"><tr><td>{{ c.channel }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.leads }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.mql }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.sql }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ c.rate }}</td></tr></sc-for></tbody>
-              </table>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Same definitions as the cards: leads by lead date, MQL by meetings booked, SQL by meetings held. A meeting with no lead source is listed as Unattributed so the columns add up to the cards.</p>
+              <sc-if value="{{ showChannelLinkNote }}" hint-placeholder-val="{{ false }}"><p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">{{ channelLinkNote }}</p></sc-if>
+              <div class="table-scroll"><table class="table" style="font-size:14px">
+                <thead><tr><th>Source</th><th class="money">Leads</th><th class="money">MQL</th><th class="money">SQL</th><th class="money">SQL / leads</th></tr></thead>
+                <tbody><sc-for list="{{ channels }}" as="c" hint-placeholder-count="5"><tr><td>{{ c.channel }}</td><td class="money">{{ c.leads }}</td><td class="money">{{ c.mql }}</td><td class="money">{{ c.sql }}</td><td class="money">{{ c.rate }}</td></tr></sc-for></tbody>
+              </table></div>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">{{ channelFoot }}</p>
             </section>
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
@@ -534,11 +540,11 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                 <div style="display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--color-divider);font-size:14px">
                   <span>{{ s.stage }}</span>
                   <div style="height:14px;background:var(--color-surface)"><div style="height:100%;width:{{ s.w }};background:var(--color-accent-2)"></div></div>
-                  <span style="font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap">{{ s.count }} · {{ s.amount }}</span>
+                  <span class="money">{{ s.count }} · {{ s.amount }}</span>
                 </div>
               </sc-for>
               <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;padding-top:14px">
-                <sc-for list="{{ scorecard }}" as="k" hint-placeholder-count="4"><div><span style="display:block;font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums;line-height:1.1">{{ k.value }}</span><span style="font-size:12px;color:var(--color-neutral-700)">{{ k.label }}</span></div></sc-for>
+                <sc-for list="{{ scorecard }}" as="k" hint-placeholder-count="4"><div><span class="money" style="display:block;font-family:var(--font-heading);font-weight:800;font-size:22px;line-height:1.1">{{ k.value }}</span><span style="font-size:12px;color:var(--color-neutral-700)">{{ k.label }}</span></div></sc-for>
               </div>
               <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Company scorecard. All pipeline values are owner estimates, not buyer commitments.</p>
             </section>
@@ -562,10 +568,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
             <section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Plan vs recorded, 2026</h6><button onClick="{{ exportSpend }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
-              <table class="table" style="font-size:14px">
-                <thead><tr><th>Month</th><th style="text-align:right">Planned</th><th style="text-align:right">Recorded</th><th style="text-align:right">Difference</th></tr></thead>
-                <tbody><sc-for list="{{ spendMonths }}" as="m" hint-placeholder-count="9"><tr><td>{{ m.month }} <span class="tag tag-neutral" style="margin-left:6px;display:{{ m.tagDisplay }}">{{ m.tag }}</span></td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ m.budget }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ m.actual }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ m.diff }}</td></tr></sc-for></tbody>
-              </table>
+              <div class="table-scroll"><table class="table" style="font-size:14px">
+                <thead><tr><th>Month</th><th class="money">Planned</th><th class="money">Recorded</th><th class="money">Difference</th></tr></thead>
+                <tbody><sc-for list="{{ spendMonths }}" as="m" hint-placeholder-count="9"><tr><td>{{ m.month }} <span class="tag tag-neutral" style="margin-left:6px;display:{{ m.tagDisplay }}">{{ m.tag }}</span></td><td class="money">{{ m.budget }}</td><td class="money">{{ m.actual }}</td><td class="money">{{ m.diff }}</td></tr></sc-for></tbody>
+              </table></div>
               <p style="margin:12px 0 0;font-size:13px;color:var(--color-neutral-800);line-height:1.5">Monthly budget. Missing actuals mean not entered, not zero.</p>
             </section>
             <section style="flex:1 1 320px;min-width:0">
@@ -574,7 +580,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                 <div style="display:grid;grid-template-columns:minmax(0,120px) minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--color-divider);font-size:14px">
                   <span>{{ v.name }}</span>
                   <div style="height:14px;background:var(--color-surface)"><div style="height:100%;width:{{ v.w }};background:var(--color-accent-2)"></div></div>
-                  <span style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ v.amount }}</span>
+                  <span class="money">{{ v.amount }}</span>
                 </div>
               </sc-for>
               <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Marketing spend grouped by channel, from the collected record.</p>
@@ -587,7 +593,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Advertising and outbound</h6><span style="font-size:12px;color:var(--color-neutral-700)">Platform-reported · not qualified leads</span></div>
             <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:560px">
               <thead><tr><th>Line</th><th style="text-align:right">Sent / shown</th><th style="text-align:right">Replies / conv.</th><th style="text-align:right">Bounces</th><th>Note</th></tr></thead>
-              <tbody><sc-for list="{{ ads }}" as="a" hint-placeholder-count="4"><tr><td style="font-weight:600">{{ a.name }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ a.sent }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ a.replies }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ a.bounces }}</td><td style="font-size:13px;color:var(--color-neutral-800)">{{ a.note }}</td></tr></sc-for></tbody>
+              <tbody><sc-for list="{{ ads }}" as="a" hint-placeholder-count="4"><tr><td style="font-weight:600">{{ a.name }}</td><td class="money">{{ a.sent }}</td><td class="money">{{ a.replies }}</td><td class="money">{{ a.bounces }}</td><td style="font-size:13px;color:var(--color-neutral-800)">{{ a.note }}</td></tr></sc-for></tbody>
             </table></div>
           </section>
           </sc-if>
@@ -644,17 +650,17 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
         </div>
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
           <input class="input" placeholder="Search companies and notes" value="{{ searchValue }}" onChange="{{ setSearch }}" style="max-width:320px;min-height:34px">
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ ownerValue }}" onChange="{{ setOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><sc-for list="{{ ownerOptions }}" as="o"><option value="{{ o.name }}">{{ o.name }}</option></sc-for></select></label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ ownerValue }}" onChange="{{ setOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><sc-for list="{{ ownerOptions }}" as="o"><option value="{{ o.name }}" title="{{ o.title }}">{{ o.name }}</option></sc-for></select></label>
           <sc-if value="{{ showAccountSort }}"><label style="display:flex;align-items:center;gap:8px;font-size:14px">Sort<select class="input" value="{{ sortValue }}" onChange="{{ setSort }}" style="width:auto;max-width:100%;min-height:34px"><option value="amount">Amount — largest first</option><option value="close">Close date — earliest first</option><option value="interaction">Last interaction — newest first</option><option value="name">Account name — A to Z</option></select></label></sc-if>
           <div style="margin-left:auto;display:flex;gap:8px"><button onClick="{{ exportAccounts }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ exportLabel }}</button></div>
         </div>
 
         <p class="account-order-note">{{ accountOrderNote }}</p><sc-if value="{{ accountsDeals }}" hint-placeholder-val="{{ true }}">
-          <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:760px">
-            <thead><tr><th>Company</th><th>Owner</th><th>Stage</th><th style="text-align:right">ARR</th><th style="text-align:right">Prob.</th><th style="text-align:right">Weighted ARR</th><th>Close</th><th>Last interaction</th><th style="text-align:right">Days in stage</th><th>Last note</th></tr></thead>
+          <div class="table-scroll"><table class="table" style="font-size:14px">
+            <thead><tr><th>Company</th><th>Owner</th><th>Stage</th><th class="money">ARR</th><th class="money">Prob.</th><th class="money">Weighted ARR</th><th>Close</th><th>Last interaction</th><th class="money">Days in stage</th><th style="display:{{ lastNoteDisplay }}">Last note</th></tr></thead>
             <tbody><sc-for list="{{ deals }}" as="d" hint-placeholder-count="10">
               <tr onClick="{{ d.go }}" style="cursor:pointer">
-                <td style="font-weight:600">{{ d.company }}</td><td>{{ d.owner }}</td><td>{{ d.stage }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.arr }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.prob }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.weighted }}</td><td style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ d.close }}</td><td style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ d.lastInteraction }}</td><td style="text-align:right;font-variant-numeric:tabular-nums;color:{{ d.daysColor }}">{{ d.days }}</td><td style="font-size:13px;color:var(--color-neutral-800);max-width:300px">{{ d.note }}</td>
+                <td class="company" style="font-weight:600">{{ d.company }}</td><td title="{{ d.ownerTitle }}" style="white-space:nowrap">{{ d.owner }}</td><td class="stage">{{ d.stage }}</td><td class="money">{{ d.arr }}</td><td class="money">{{ d.prob }}</td><td class="money">{{ d.weighted }}</td><td class="money">{{ d.close }}</td><td style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ d.lastInteraction }}</td><td class="money" style="color:{{ d.daysColor }}">{{ d.days }}</td><td style="display:{{ lastNoteDisplay }};font-size:13px;color:var(--color-neutral-800);max-width:16rem">{{ d.note }}</td>
               </tr>
             </sc-for></tbody>
           </table></div>
@@ -680,7 +686,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
         <sc-if value="{{ accountsLeads }}" hint-placeholder-val="{{ false }}">
           <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:680px">
             <thead><tr><th>Company</th><th>Source</th><th>Owner</th><th>Lead date</th><th>MQL</th><th>SQL</th><th>Notes</th></tr></thead>
-            <tbody><sc-for list="{{ leads }}" as="l" hint-placeholder-count="12"><tr><td style="font-weight:600">{{ l.company }}</td><td>{{ l.source }}</td><td>{{ l.owner }}</td><td style="font-variant-numeric:tabular-nums">{{ l.date }}</td><td style="font-variant-numeric:tabular-nums">{{ l.mql }}</td><td style="font-variant-numeric:tabular-nums">{{ l.sql }}</td><td style="font-size:13px;color:var(--color-neutral-800)">{{ l.note }}</td></tr></sc-for></tbody>
+            <tbody><sc-for list="{{ leads }}" as="l" hint-placeholder-count="12"><tr><td class="company" style="font-weight:600">{{ l.company }}</td><td>{{ l.source }}</td><td title="{{ l.ownerTitle }}" style="white-space:nowrap">{{ l.owner }}</td><td class="money">{{ l.date }}</td><td class="money">{{ l.mql }}</td><td class="money">{{ l.sql }}</td><td style="font-size:13px;color:var(--color-neutral-800)">{{ l.note }}</td></tr></sc-for></tbody>
           </table></div>
           <sc-if value="{{ leadsEmpty }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:14px;color:var(--color-neutral-800)"><span>{{ emptyNote }}</span><button onClick="{{ clearSearch }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">Clear search and owner</button></div></sc-if>
           <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ leadsCount }} · Lead Tracker, newest lead dates first. 62 webinar registrants have no owner and no qualification dates.</p>
@@ -695,7 +701,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
         <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px">
           <div>
             <h1 style="font-size:36px;margin:0 0 6px">{{ acct.name }}</h1>
-            <p style="margin:0;color:var(--color-neutral-700);font-size:14px">{{ acct.subtitle }}</p>
+            <p style="margin:0;color:var(--color-neutral-700);font-size:14px" title="{{ acct.ownerTitle }}">{{ acct.subtitle }}</p>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap"><button onClick="{{ acct.draftGo }}" class="btn btn-primary">{{ acct.draftLabel }}</button><button onClick="{{ exportAccount }}" class="btn btn-secondary">Export record</button></div>
         </div>
@@ -1009,7 +1015,7 @@ class Component extends DCLogic {
     const followRaw = [];
     const leadsRaw = this._verifiedLeadRows();
     const ownerOptions=[...new Set([...dealsRaw.map(d=>d[1]),...leadsRaw.map(l=>l[2])].filter(o=>o&&o!=='—'))].sort().map(name=>({name}));
-    const meetingOwnerOptions=[...new Set([...(st.records?.companies||[]).flatMap(c=>[workspaceModel.displayOwner(c.owner),...(c.recordings||[]).map(r=>workspaceModel.displayOwner(r.recordedBy))])].filter(n=>n&&n!=='Unassigned'&&n!=='Owner name not connected'))].sort().map(name=>({name}));
+    const meetingOwnerOptions=[...new Set([...(st.records?.companies||[]).flatMap(c=>[workspaceModel.displayOwner(c.owner),...(c.recordings||[]).map(r=>workspaceModel.displayOwner(r.recordedBy))])].filter(n=>n&&n!=='Unassigned'))].sort().map(name=>({name,title:workspaceModel.ownerInfo(name).title}));
     const peopleNote=ownerOptions.length?('Owners in the collected record: '+ownerOptions.map(o=>o.name).join(' · ')+'. The owner filters use these values.'):'Owner information was not in the collected record.';
     const savedRaw = [];
     const suggestedRaw = [];
@@ -1095,7 +1101,7 @@ class Component extends DCLogic {
     });
     const tlShown = st.timelineAll ? timeline : timeline.slice(0, 30);
     const acct = {
-      name: co.name, description: (co.description || '').length > 320 ? co.description.slice(0, 300).replace(/[,;]\s*\S*$/, '') + '…' : (co.description || ''), hasDescription: !!co.description,
+      name: workspaceModel.companyName(co.name), ownerTitle: workspaceModel.ownerInfo(co.owner).title, description: (co.description || '').length > 320 ? co.description.slice(0, 300).replace(/[,;]\s*\S*$/, '') + '…' : (co.description || ''), hasDescription: !!co.description,
       subtitle: [co.domain, co.owner ? workspaceModel.displayOwner(co.owner) : null, co.industry ? co.industry.toLowerCase().replace(/_/g, ' ') : null, co.employees ? co.employees.toLocaleString('en-US') + ' employees' : null, [co.city, co.country].filter(Boolean).join(', ') || null, co.lifecycle ? 'CRM: ' + co.lifecycle : null].filter(Boolean).join(' · '),
       hasReview: !!review, noReview: !review && !!st.records, reason: review ? review[2] : '', next: review ? review[3] : '', uncertainty: review ? review[4] : '',
       draftLabel: review ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: review ? () => { this.setState({ screen: 'drafts', draft: review[5] }); window.scrollTo(0, 0); } : () => { const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + co.name, company: co.name, text: '', rationale: openDeal ? openDeal.name + ' · ' + openDeal.stageLabel + ' · ' + money(openDeal.amount) : '', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: co.contacts.slice(0, 2).map(c => c.name).join(', '), saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
@@ -1133,7 +1139,7 @@ class Component extends DCLogic {
     const evKey = typeof st.evidence === 'string' ? st.evidence : 'doug-11';
     const dyn = (() => { const [kind, a, b] = evKey.split(':'); const c = REC.companies.find(x => x.id === a) || REC.companies.find(x => x.deals.some(d => d.id === a));
       if (kind === 'note' && c) { const n = c.notes.find(x => x.id === b) || {}; const body = workspaceModel.plainNote(n.text); return { kicker: c.name + (n.date ? ' · ' + fmtD(n.date) : ''), title: 'Note' + (n.owner ? ' from ' + workspaceModel.displayOwner(n.owner) : ''), meta: '', rows: body ? [{ label: '', value: body }] : [], note: '', operational: true }; }
-      if (kind === 'deal' && c) { const d = c.deals.find(x => x.id === a); const dl = d.displayLine || ''; const what = dl.indexOf(d.name) === 0 ? dl : d.name + (dl ? ' — ' + dl : ''); return { kicker: c.name, title: what, meta: d.isOpen ? 'Open opportunity' : 'Closed', rows: [d.amount != null ? { label: 'Amount', value: money(d.amount) } : null, d.close ? { label: 'Expected close', value: fmtD(d.close) } : null, d.owner ? { label: 'Owner', value: d.owner } : null].filter(Boolean), note: '', operational: true }; }
+      if (kind === 'deal' && c) { const d = c.deals.find(x => x.id === a); const dl = d.displayLine || ''; const what = dl.indexOf(d.name) === 0 ? dl : d.name + (dl ? ' — ' + dl : ''); return { kicker: workspaceModel.companyName(c.name), title: what, meta: d.isOpen ? 'Open opportunity' : 'Closed', rows: [d.amount != null ? { label: 'Amount', value: money(d.amount) } : null, d.close ? { label: 'Expected close', value: fmtD(d.close) } : null, d.owner ? { label: 'Owner', value: workspaceModel.displayOwner(d.owner) } : null].filter(Boolean), note: '', operational: true }; }
       if (kind === 'company' && c) return { kicker: [c.domain, c.industry, c.employees ? c.employees.toLocaleString('en-US') + ' employees' : null, [c.city, c.country].filter(Boolean).join(', ') || null].filter(Boolean).join(' · '), title: c.name, meta: '', rows: (c.contacts || []).slice(0, 5).map(p => ({ label: p.title || 'Contact', value: p.name + (p.email ? ' · ' + p.email : '') })).concat((c.deals || []).filter(d => d.isOpen).slice(0, 3).map(d => { const dl = d.displayLine || ''; return { label: 'Open deal', value: dl.indexOf(d.name) === 0 ? dl : d.name + (dl ? ' — ' + dl : '') }; })), note: '', operational: true };
       if (kind === 'contact' && c) { const p = c.contacts.find(x => (x.email || x.name) === b) || {}; const theirMeetings = (c.meetings || []).filter(m => (m.start || '').slice(0, 10) <= new Date().toISOString().slice(0, 10)).slice(-3); return { kicker: c.name, title: p.name || 'Contact', meta: p.title || '', rows: (p.email ? [{ label: 'Email', value: p.email }] : []).concat(theirMeetings.length ? [{ label: 'Recent meetings', value: theirMeetings.map(m => m.title + ' · ' + fmtD((m.start || '').slice(0, 10))).join('\n') }] : []), note: '', operational: true }; }
       if (kind === 'crm-meeting' && c) { const m = c.meetings.find(x => x.id === b) || {}; const startDay = workspaceModel.dateOnly(m.start); const future = !!(startDay && startDay > workspaceModel.phoenixToday()); const rec = future ? null : (c.recordings || []).find(r => workspaceModel.dateOnly(r.date) === startDay); const who = rec ? (rec.invitees || []).map(i => i.name || i.email).filter(x => x && !/@opstream\.ai/i.test(x)).slice(0, 6) : (c.contacts || []).slice(0, 4).map(p => p.name + (p.title ? ' — ' + p.title : '')); const deal = (c.deals || []).find(d => d.isOpen); const whoLabel = future ? 'Who is invited' : 'Who was there'; return { kicker: fmtDT(m.start) || 'Meeting', title: m.title || 'Meeting', meta: c.name, rows: (who.length ? [{ label: whoLabel, value: who.join(', ') }] : []).concat(!future && rec && rec.summary ? [{ label: 'What was discussed', value: rec.summary.slice(0, 2).map(p => (p.x || p).toString().replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')).join(' ') }] : []).concat(!future && rec && rec.actions && rec.actions.length ? [{ label: 'Action items', value: rec.actions.slice(0, 5).join(' · ') }] : []).concat(deal ? [{ label: 'Related deal', value: (deal.displayLine && deal.displayLine.indexOf(deal.name) === 0 ? deal.displayLine : deal.name + (deal.displayLine ? ' — ' + deal.displayLine : '')) }] : []).concat(future ? [{ label: 'Notes', value: 'This meeting has not happened yet.' }] : (!rec && !m.outcome ? [{ label: 'Notes', value: 'No call notes or recording were captured for this meeting.' }] : [])), note: '', operational: true }; }
@@ -1286,7 +1292,7 @@ class Component extends DCLogic {
     const topQuietDays = topCompany ? workspaceModel.daysQuiet(topCompany, todayPhx) : null;
     const share = topDeal ? workspaceModel.closeDateShare(pipeNow.deals, topDeal.close) : null;
     const briefingDecisions = topDeal ? [
-      { title: 'Push ' + topDeal.name + ' or let it slip', why: topDeal.name + ' is the largest open deal (' + usd(topDeal.amount || 0) + '). The close date is ' + fmtD(topDeal.close) + '. ' + (topQuietDays != null ? 'It has been quiet ' + topQuietDays + ' days.' : 'No past engagement date is on file.'), confidence: 'Computed from open deals after excluding past close dates, renewals, current agreements, Disqualified and On Hold.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal.name) },
+      { title: 'Push ' + workspaceModel.companyName(topDeal.name) + ' or let it slip', why: workspaceModel.companyName(topDeal.name) + ' is the largest open deal (' + usd(topDeal.amount || 0) + '). The close date is ' + fmtD(topDeal.close) + '. ' + (topQuietDays != null ? 'It has been quiet ' + topQuietDays + ' days.' : 'No past engagement date is on file.'), confidence: 'Computed from open deals after excluding past close dates, renewals, current agreements, Disqualified and On Hold.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal.name) },
     ].concat(share && share.count >= 2 ? [{ title: share.count + ' of ' + share.total + ' open deals share a ' + fmtD(share.day) + ' close date', why: 'These deals are grouped by the Phoenix calendar date of the close, not the raw timestamp.', confidence: 'Computed from the same open-pipeline set as the headline.', evidenceLabel: 'Review by close date', evidenceGo: this.go('accounts', { accounts: 'deals', sort: 'close' }) }] : []) : [];
     return {
       ...(() => {
@@ -1311,6 +1317,7 @@ class Component extends DCLogic {
       marketingBriefBg: (st.briefAudience || 'marketing') === 'marketing' ? 'var(--color-text)' : 'transparent', marketingBriefFg: (st.briefAudience || 'marketing') === 'marketing' ? 'var(--color-bg)' : 'var(--color-text)',
       salesBriefBg: st.briefAudience === 'sales' ? 'var(--color-text)' : 'transparent', salesBriefFg: st.briefAudience === 'sales' ? 'var(--color-bg)' : 'var(--color-text)',
       connectionLines: [], spendConnected: false, adsConnected: false, webConnected: false,
+      showChannelLinkNote: false, channelLinkNote: '', channelFoot: 'Same definitions as the cards: leads by lead date, MQL by meetings booked, SQL by meetings held. A meeting with no lead source is listed as Unattributed so the columns add up to the cards.', lastNoteDisplay: 'table-cell',
       acct, mtg, coverageNote: REC.coverage ? 'This prototype loads ' + REC.coverage.primary + ' accounts (' + REC.coverage.companiesInExtract + ' CRM company records, ' + REC.coverage.foldedRelated + ' duplicates folded), ' + REC.coverage.contacts.toLocaleString('en-US') + ' contacts, ' + REC.coverage.notes + ' notes, ' + REC.coverage.calls + ' calls, ' + REC.coverage.meetings + ' calendar entries, ' + REC.coverage.tasks + ' tasks and ' + REC.coverage.fathomTotal + ' recordings (' + REC.coverage.unmatchedRecordings + ' with companies outside the extract), full transcripts for ' + (REC.coverage.transcripts || 0) + ' of them. ' + (REC.coverage.ownersArchived || 0) + ' of 54 CRM owners are archived and shown as (former). Email bodies were excluded. Stage names for numeric CRM stage ids are inferred from the owner sheets; the connector does not export the stage catalog.' : '',
       meetingsNote: st.records ? (new Set(allRecs.map(r => r.id)).size) + ' recordings · ' + (REC.unmatchedRecordings || []).length + ' with companies outside the 31 extracted accounts · CRM calendar entries for upcoming' : 'Loading meeting records…',
       evidenceOpen: !!st.evidence, openEvidence: goEvidence, ev: evVal, evReviewSample: ev('review-sample'), evRecordingSample: ev('recording-sample'), evTim13: ev('tim-13'), evDraftRefs: ev('draft-refs'), closeEvidence: () => this.setState({ evidence: false }), stop: e => e.stopPropagation(),
@@ -1469,7 +1476,7 @@ class Component extends DCLogic {
         const monthLabel = k => new Date(k + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
         let items;
         if (st.meetings === 'upcoming') {
-          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => (workspaceModel.dateOnly(m.start) || '') >= todayStr && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => ({ when: fmtDT(m.start), sort: m.start, title: m.title, who: c.name + (workspaceModel.displayOwner(c.owner) === 'Unassigned' || workspaceModel.displayOwner(c.owner) === 'Owner name not connected' ? '' : ' · ' + workspaceModel.displayOwner(c.owner)), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: workspaceModel.displayOwner(c.owner) })));
+          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => (workspaceModel.dateOnly(m.start) || '') >= todayStr && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => { const ownerLabel = workspaceModel.displayOwner(c.owner); return { when: fmtDT(m.start), sort: m.start, title: m.title, who: workspaceModel.companyName(c.name) + (ownerLabel === 'Unassigned' ? '' : ' · ' + ownerLabel), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: ownerLabel }; }));
           const notes = [];
           items = [...ups, ...notes].sort((a, b) => a.sort.localeCompare(b.sort));
           const g = {}; for (const it of items) { const k = it.sort.slice(0, 10) <= plus(todayStr, 7) ? 'This week' : it.sort.slice(0, 10) <= plus(todayStr, 14) ? 'Next week' : 'Later'; (g[k] = g[k] || []).push(it); }

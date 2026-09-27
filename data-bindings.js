@@ -111,7 +111,15 @@ Component.prototype.renderVals = function () {
   const bars=[];
   while(at<=end){const next=monthly?new Date(Date.UTC(+at.slice(0,4),+at.slice(5,7),1,12)).toISOString().slice(0,10):f.add(at,7);const last=f.add(next,-1);const leads=d.leads.filter(r=>inRange(r.lead)&&r.lead>=at&&r.lead<=last).length;bars.push({date:at,label:monthly?new Date(at+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',timeZone:'UTC'}):f.date(at),leads});at=next;}
   const max=Math.max(1,...bars.map(b=>b.leads));v.weeks=bars.map(b=>({...b,title:(monthly?'':'Week of ')+b.label+': '+b.leads+' new leads',leadH:Math.round(b.leads/max*100)+'%'}));v.barCols=bars.length;v.barsTitle=monthly?'New leads by month':'New leads by week';
-  v.channels=workspaceModel.channels(d.leads,s.records,start,end).map(r=>({...r,rate:r.leads?Math.round(r.sql/r.leads*100)+'%':'—'}));
+  v.channels=workspaceModel.channels(d.leads,s.records,start,end).map(r=>{
+    const unlinked=r.channel==='Unattributed'&&!r.leads&&(r.mql||r.sql);
+    return {channel:unlinked?'Meetings not linked to a lead':r.channel,leads:r.leads,mql:r.mql,sql:r.sql,rate:r.leads?Math.round(r.sql/r.leads*100)+'%':'—'};
+  });
+  v.showChannelLinkNote=v.channels.some(c=>c.channel==='Meetings not linked to a lead');
+  v.channelLinkNote=v.showChannelLinkNote?"Meetings aren't linked to leads in this extract, so booked and held meetings are listed on their own row.":'';
+  v.channelFoot=v.showChannelLinkNote
+    ?'Same definitions as the cards: leads by lead date, MQL by meetings booked, SQL by meetings held. These rows are not a conversion funnel.'
+    :'Same definitions as the cards: leads by lead date, MQL by meetings booked, SQL by meetings held. A meeting with no lead source is listed as Unattributed so the columns add up to the cards.';
   const marketing=workspaceModel.marketingView(d.leads,s.records,d.report&&d.report.spend,workspaceModel.phoenixToday());
   v.marketingIntervals=marketing.intervals;
   v.marketingSources=marketing.sources;
@@ -165,12 +173,18 @@ Component.prototype.renderVals = function () {
   else if(s.perf==='spend')v.scopeNote='Spend: Jan – Dec 2026, as entered in the workbook. Campaign counts use the '+v.collectedShort+' collection; advertising dates are shown per source.';
   else v.scopeNote='The period '+period+' applies to new leads, meetings booked and meetings held. Open pipeline is the current book. All dates are America/Phoenix.';
   const query=(s.search||'').trim().toLowerCase(),owner=s.owner||'Everyone',todayPhx=workspaceModel.phoenixToday();
-  const accountRows=opportunities.map(o=>{
+  const prelim=opportunities.map(o=>{
     const company=workspaceModel.companyForOpportunity(o,s.records);
+    return {o,company,rawOwner:o.owner||company?.owner||''};
+  }).filter(x=>workspaceModel.listStatus(x.o,todayPhx)!=='excluded');
+  const resolved=workspaceModel.resolveOwners([...prelim.map(x=>x.rawOwner),...d.leads.map(r=>r.owner)]);
+  const infoFor=raw=>resolved.get(String(raw??''))||workspaceModel.ownerInfo(raw);
+  const accountRows=prelim.map(({o,company,rawOwner})=>{
+    const info=infoFor(rawOwner);
     const last=company?workspaceModel.lastEngagement(company,todayPhx):null;
     const quietDays=company?workspaceModel.daysQuiet(company,todayPhx):null;
-    return {...o,owner:workspaceModel.displayOwner(o.owner||company?.owner),lastEngagement:last,quietDays,companyRecord:company};
-  }).filter(o=>workspaceModel.listStatus(o,todayPhx)!=='excluded'&&(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage,o.owner].join(' ').toLowerCase().includes(query)));
+    return {...o,owner:info.label,ownerKey:info.key,ownerTitle:info.title,lastEngagement:last,quietDays,companyRecord:company};
+  }).filter(o=>(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage,o.owner].join(' ').toLowerCase().includes(query)));
   const deduped=new Map();
   for(const o of accountRows){
     const key=String(o.companyId||o.name).replace(/^company:/,'');
@@ -181,20 +195,24 @@ Component.prototype.renderVals = function () {
     if(better)deduped.set(key,o);
   }
   const selected=[...deduped.values()].sort((a,b)=>workspaceModel.compare(a,b,s.sort||'amount',todayPhx));
-  v.ownerOptions=[...new Set(accountRows.map(o=>o.owner).filter(name=>name&&name!=='Unassigned'))].sort().map(name=>({name}));
-  v.deals=selected.map(o=>({company:o.name,owner:o.owner,stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note:o.note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement)+(o.quietDays!=null?' · '+o.quietDays+' days quiet':''):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}}));
+  const optionRows=[...prelim.map(({rawOwner})=>infoFor(rawOwner)),...d.leads.map(r=>infoFor(r.owner))].filter(info=>info.label&&info.label!=='Unassigned');
+  v.ownerOptions=[...new Map(optionRows.map(info=>[info.label,info])).values()].sort((a,b)=>a.label.localeCompare(b.label)).map(info=>({name:info.label,title:info.title||''}));
+  v.peopleNote=v.ownerOptions.length?('Owners in the collected record: '+v.ownerOptions.map(o=>o.name).join(' · ')+'. The owner filter uses these values.'):'Owner information was not in the collected record.';
+  v.showLastNote=selected.some(o=>String(o.note||'').trim());
+  v.lastNoteDisplay=v.showLastNote?'table-cell':'none';
+  v.deals=selected.map(o=>({company:workspaceModel.companyName(o.name),owner:o.owner,ownerTitle:o.ownerTitle||'',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note:o.note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement)+(o.quietDays!=null?' · '+o.quietDays+' days quiet':''):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}}));
   v.dealsCount=selected.length+' accounts · '+pipe.count+' open deals';
-  const leadRows=d.leads.map(r=>({...r,owner:workspaceModel.displayOwner(r.owner)})).filter(r=>(owner==='Everyone'||r.owner===owner)&&(!query||[r.name,r.source,r.note].join(' ').toLowerCase().includes(query))&&(s.contributor?inRange(r[s.contributor]):!!r.lead)).sort((a,b)=>workspaceModel.compareLeads(a,b));
-  v.leads=leadRows.map(r=>({company:r.name,source:workspaceModel.sourceLabel(r.source),owner:r.owner||'—',date:f.date(r.lead),note:r.note,mql:f.date(r.mql),sql:f.date(r.sql)}));
+  const leadRows=d.leads.map(r=>{const info=infoFor(r.owner);return {...r,owner:info.label,ownerTitle:info.title};}).filter(r=>(owner==='Everyone'||r.owner===owner)&&(!query||[r.name,r.source,r.note,r.owner].join(' ').toLowerCase().includes(query))&&(s.contributor?inRange(r[s.contributor]):!!r.lead)).sort((a,b)=>workspaceModel.compareLeads(a,b));
+  v.leads=leadRows.map(r=>({company:r.name,source:workspaceModel.sourceLabel(r.source),owner:r.owner||'—',ownerTitle:r.ownerTitle||'',date:f.date(r.lead),note:r.note,mql:f.date(r.mql),sql:f.date(r.sql)}));
   v.leadsEmpty=leadRows.length===0;v.dealsEmpty=selected.length===0;
   v.leadsCount=leadRows.length+' tracker records'+(s.contributor?' · '+s.contributor.toUpperCase()+' date '+period:' with a lead date');
   v.accountTabs.forEach(t=>{const go=t.go;t.go=()=>{this.setState({contributor:null});go();};});
   v.exportLabel=s.accounts==='leads'?'Export '+leadRows.length+' leads':s.accounts==='follow'?'Export follow-ups':'Export '+selected.length+' opportunities';
   if(s.accounts==='leads')v.exportAccounts=()=>this.csv('leads.csv',['Company','Source','Owner','Lead date','Notes','MQL date','SQL date'],leadRows.map(r=>[r.name,r.source,r.owner,r.lead,r.note,r.mql,r.sql]));
-  else if(s.accounts==='deals')v.exportAccounts=()=>this.csv('opportunities.csv',['Company','Owner','Stage','ARR','Probability','Weighted ARR','Close','Days in stage','Last note'],selected.map(o=>[o.name,o.owner,o.stage,o.amount,o.probability,workspaceModel.weighted(o),workspaceModel.closeLabel(o.close),o.days,o.note]));
+  else if(s.accounts==='deals')v.exportAccounts=()=>this.csv('opportunities.csv',['Company','Owner','Stage','ARR','Probability','Weighted ARR','Close','Days in stage'].concat(v.showLastNote?['Last note']:[]),selected.map(o=>[workspaceModel.companyName(o.name),o.owner,o.stage,o.amount,o.probability,workspaceModel.weighted(o),workspaceModel.closeLabel(o.close),o.days].concat(v.showLastNote?[o.note]:[])));
   v.exportSources=()=>this.csv('leads-by-source.csv',['Source','This week','6-week average','Quarter to date','Quarter cost per lead'],(v.marketingSources||[]).map(r=>[r.channel,r.week,r.six,r.quarter,r.cpl]));
   v.exportSpend=()=>this.csv('spend-2026.csv',['Month','Planned','Recorded','Note'],d.report.spend.months.map(m=>[m.month,m.planned,m.actual,m.partial?'Partly entered':m.actual==null?'Not entered':'']));
-  v.movements=v.movements.map(shown=>{const o=d.opportunities.find(o=>o.name===shown.name);return o?{name:o.name,meta:workspaceModel.displayOwner(o.owner)+' · '+workspaceModel.stageDisplay(o.stage),change:o.note,go:()=>this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name)}:shown;});
+  v.movements=v.movements.map(shown=>{const o=d.opportunities.find(o=>o.name===shown.name);return o?{name:workspaceModel.companyName(o.name),meta:workspaceModel.displayOwner(o.owner)+' · '+workspaceModel.stageDisplay(o.stage),change:o.note,go:()=>this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name)}:shown;});
   v.checkUpdates=()=>{this.setState({checking:true});return this._loadVerified();};v.checkNote=s.verifiedError||('Verified collection · '+v.collectedShort+(s.checkedAt?' · last checked '+s.checkedAt:''));
   v.coverageNote=s.records.companies.length+' account pages; '+f.number(s.records.coverage.contacts)+' linked contacts, '+f.number(s.records.coverage.notes)+' notes, '+s.records.coverage.fathomTotal+' unique recordings and '+s.records.coverage.transcripts+' complete transcripts. The opportunity list covers companies with open deals in the CRM extract; the Lead Tracker holds '+d.leads.length+' HubSpot contact rows with lead, MQL and SQL dates where recorded.';
   if(v.readingRules[4])v.readingRules[4].text='The workspace uses the retained '+v.collectedShort+' collection. Website reports cover '+webRange+'.';

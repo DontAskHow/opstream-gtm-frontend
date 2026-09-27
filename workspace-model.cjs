@@ -77,14 +77,49 @@ const workspaceModel = {
     const raw=String(text||'').trim();
     return raw?raw.replace(/\bgood\s+(morning|afternoon|evening)\b/ig,g):g;
   },
-  // One label everywhere. A raw HubSpot id is not a name, and "Owner Owner 1234" is the same id twice.
-  displayOwner(value) {
+  // One label everywhere. A raw HubSpot id is not a name. When no name was
+  // collected, show the last digits so owners stay distinguishable. The full id
+  // stays off the screen. "Owner Owner 1234" is the same id twice.
+  ownerInfo(value, tail) {
+    const digitsWanted=Math.max(4, Number(tail)||4);
     let s=String(value??'').trim();
-    if(!s||/^unassigned$/i.test(s))return 'Unassigned';
-    s=s.replace(/^(owner\s+)+/i,'').trim();
-    if(!s)return 'Unassigned';
-    if(/^\d+$/.test(s)||/^[a-f0-9-]{8,}$/i.test(s))return 'Owner name not connected';
-    return s;
+    if(!s||/^unassigned$/i.test(s))return {label:'Unassigned', title:'', key:'Unassigned', named:true};
+    const stripped=s.replace(/^(owner\s+)+/i,'').trim();
+    if(!stripped)return {label:'Unassigned', title:'', key:'Unassigned', named:true};
+    if(/^owner name not connected$/i.test(stripped))return {label:'Owner name not connected', title:"Owner name isn't connected", key:'Owner name not connected', named:false};
+    if(/^\d+$/.test(stripped)||/^[a-f0-9-]{8,}$/i.test(stripped)){
+      const digits=stripped.replace(/\D/g,'')||stripped;
+      const n=Math.min(digitsWanted, digits.length);
+      return {label:'Owner #\u2026'+digits.slice(-n), title:"Owner name isn't connected", key:stripped, named:false};
+    }
+    return {label:stripped, title:'', key:stripped, named:true};
+  },
+  displayOwner(value) {
+    return this.ownerInfo(value).label;
+  },
+  // Lengthen the visible tail until two different ids do not share a label.
+  resolveOwners(values) {
+    const raws=[...new Set((values||[]).map(v=>String(v??'')))];
+    let tail=4,map=new Map(raws.map(v=>[v,this.ownerInfo(v,tail)]));
+    while(tail<32){
+      const seen=new Map();
+      let clash=false;
+      for(const info of map.values()){
+        if(info.named)continue;
+        const prev=seen.get(info.label);
+        if(prev&&prev!==info.key){clash=true;break;}
+        seen.set(info.label,info.key);
+      }
+      if(!clash)return map;
+      tail+=2;
+      map=new Map(raws.map(v=>[v,this.ownerInfo(v,tail)]));
+    }
+    return map;
+  },
+  // A trailing comma or semicolon on a CRM company name is not part of the name.
+  // Keep endings such as "Inc." and names that end in an exclamation point.
+  companyName(value) {
+    return String(value??'').trim().replace(/[,;]+$/g,'').trim();
   },
   // HubSpot is the system the lead was stored in, not a marketing channel.
   sourceLabel(source) {
