@@ -270,6 +270,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <h3>{{ p.title }}</h3>
                   <div class="priority-context">
                     <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
+                    <sc-if value="{{ p.hasLeadOwners }}"><span><strong>Lead owners:</strong> {{ p.leadOwnersLine }}</span></sc-if>
                     <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
                   </div>
                   <p>{{ p.why }}</p>
@@ -316,6 +317,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <h3>{{ p.title }}</h3>
                   <div class="priority-context">
                     <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
+                    <sc-if value="{{ p.hasLeadOwners }}"><span><strong>Lead owners:</strong> {{ p.leadOwnersLine }}</span></sc-if>
                     <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
                   </div>
                   <p>{{ p.why }}</p>
@@ -359,25 +361,33 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             <section id="events-shows" aria-label="Events and shows">
               <div class="section-rule"><h6>Events &amp; shows</h6><span style="font-size:12px;color:var(--color-neutral-700)">{{ showsSourceNote }}</span></div>
               <sc-if value="{{ showsNotConnected }}"><p class="muted-copy" style="padding-top:12px">{{ showsNotConnectedNote }}</p></sc-if>
+              <sc-if value="{{ showsConnected }}"><sc-if value="{{ !hasShowsAhead }}"><p class="muted-copy" style="padding-top:12px">{{ showsEmptyNote }}</p></sc-if></sc-if>
               <sc-for list="{{ showsAhead }}" as="sh" hint-placeholder-count="2">
                 <article class="show-card" aria-label="{{ sh.name }}">
-                  <div class="show-head"><h3>{{ sh.name }}</h3><span class="show-when">{{ sh.phaseLabel }} · {{ sh.when }}</span></div>
+                  <div class="show-head"><h3>{{ sh.name }}</h3><span class="show-when">{{ sh.when }}</span></div>
                   <p class="show-meta">{{ sh.meta }}</p>
                   <p class="show-meta">{{ sh.attendees }}<sc-if value="{{ sh.hasCampaign }}"> · {{ sh.campaign }}</sc-if></p>
-                  <dl class="show-figures"><sc-for list="{{ sh.figures }}" as="f"><div><dt>{{ f.label }}</dt><dd>{{ f.value }}<span class="figure-note">{{ f.note }}</span></dd></div></sc-for></dl>
-                  <div class="show-checklist">
-                    <div><h4>Prep</h4><ul><sc-for list="{{ sh.prep }}" as="c"><li><span aria-label="{{ c.state }}">{{ c.mark }}</span><span>{{ c.label }}<small>{{ c.detail }}</small></span></li></sc-for></ul></div>
-                    <sc-if value="{{ sh.hasFollowUp }}"><div><h4>Follow-up</h4><ul><sc-for list="{{ sh.followUp }}" as="c"><li><span aria-label="{{ c.state }}">{{ c.mark }}</span><span>{{ c.label }}<small>{{ c.detail }}</small></span></li></sc-for></ul></div></sc-if>
-                  </div>
-                  <div class="priority-actions"><button class="btn btn-primary" onClick="{{ sh.linkedinGo }}" disabled="{{ sh.linkedinDisabled }}">{{ sh.linkedinLabel }}</button></div>
+                  <sc-if value="{{ sh.hasOnCalendar }}"><p class="show-meta" style="color:var(--color-text)"><strong>{{ sh.onCalendar }}</strong> <span style="color:var(--color-neutral-700)">· Google Calendar</span></p></sc-if>
+                  <sc-if value="{{ sh.hasData }}">
+                    <dl class="show-figures"><sc-for list="{{ sh.figures }}" as="f"><div><dt>{{ f.label }}</dt><dd>{{ f.value }}<span class="figure-note">{{ f.note }}</span></dd></div></sc-for></dl>
+                    <div class="show-checklist">
+                      <div><h4>Prep</h4><ul><sc-for list="{{ sh.prep }}" as="c"><li><span aria-label="{{ c.state }}">{{ c.mark }}</span><span>{{ c.label }}<small>{{ c.detail }}</small></span></li></sc-for></ul></div>
+                      <sc-if value="{{ sh.hasFollowUp }}"><div><h4>Follow-up</h4><ul><sc-for list="{{ sh.followUp }}" as="c"><li><span aria-label="{{ c.state }}">{{ c.mark }}</span><span>{{ c.label }}<small>{{ c.detail }}</small></span></li></sc-for></ul></div></sc-if>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ !sh.hasData }}"><p class="show-meta">{{ sh.noDataLine }}</p></sc-if>
+                  <div class="priority-actions"><button class="btn btn-primary" onClick="{{ sh.linkedinGo }}" disabled="{{ sh.linkedinDisabled }}">{{ sh.linkedinLabel }}</button><sc-if value="{{ sh.hasFollowDrafts }}"><button class="btn btn-secondary" onClick="{{ sh.followDraftsGo }}">{{ sh.followDraftsLabel }}</button></sc-if></div>
                   <sc-if value="{{ sh.hasLinkedinError }}"><p class="form-error" role="alert">{{ sh.linkedinError }}</p></sc-if>
                 </article>
               </sc-for>
+              <sc-if value="{{ hasShowsAlso }}"><div style="padding-top:16px"><h6 style="margin:0 0 6px;font-size:12px">Also on the calendar</h6>
+                <sc-for list="{{ showsAlso }}" as="sh"><p style="margin:0;padding:6px 0;border-bottom:1px solid var(--color-divider);font-size:14px"><strong>{{ sh.name }}</strong> · <span style="color:var(--color-neutral-700)">{{ sh.line }}</span></p></sc-for>
+              </div></sc-if>
               <sc-if value="{{ hasShowsPast }}"><details class="past-shows"><summary>{{ showsPastLabel }}</summary>
-                <sc-for list="{{ showsPast }}" as="sh"><p><strong>{{ sh.name }}</strong> · {{ sh.pastLine }} <button class="text-control" onClick="{{ sh.linkedinGo }}" disabled="{{ sh.linkedinDisabled }}">{{ sh.linkedinLabel }}</button></p></sc-for>
+                <sc-for list="{{ showsPast }}" as="sh"><p><strong>{{ sh.name }}</strong> · {{ sh.pastLine }} <sc-if value="{{ sh.hasFollowDrafts }}"><button class="text-control" onClick="{{ sh.followDraftsGo }}">{{ sh.followDraftsLabel }}</button> · </sc-if><button class="text-control" onClick="{{ sh.linkedinGo }}" disabled="{{ sh.linkedinDisabled }}">{{ sh.linkedinLabel }}</button></p></sc-for>
               </details></sc-if>
-              <sc-if value="{{ hasUnattributed }}"><p class="priority-caveat" style="margin-top:12px">{{ unattributedNote }}</p></sc-if>
-              <p class="priority-caveat" style="margin-top:8px">Posts are drafts. Nothing is posted to LinkedIn from here.</p>
+              <sc-if value="{{ hasUnattributed }}"><p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ unattributedNote }}</p></sc-if>
+              <p style="margin:6px 0 0;font-size:12px;color:var(--color-neutral-700)">Posts are drafts. Nothing is posted to LinkedIn from here.</p>
             </section>
           </div>
           <aside class="home-side" aria-label="Numbers and what is coming up">
@@ -668,10 +678,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Leads by source</h6><button onClick="{{ exportSources }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">Export CSV</button></div>
             <sc-if value="{{ marketingEmpty }}" hint-placeholder-val="{{ false }}"><p style="margin:12px 0;font-size:13px;color:var(--color-neutral-700)">{{ marketingEmptyNote }}</p></sc-if>
             <div class="table-scroll"><table class="table" style="font-size:14px">
-              <thead><tr><th>Source</th><th class="money">This week</th><th class="money">6-week average</th><th class="money">Quarter</th><th class="money">Cost / lead</th></tr></thead>
-              <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td class="money">{{ c.week }}</td><td class="money">{{ c.six }}</td><td class="money">{{ c.quarter }}</td><td class="money">{{ c.cpl }}</td></tr></sc-for></tbody>
+              <thead><tr><th>Source</th><th class="money">Last 7 days</th><th class="money">6-week average</th><th class="money">Quarter</th></tr></thead>
+              <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td class="money">{{ c.week }}</td><td class="money">{{ c.six }}</td><td class="money">{{ c.quarter }}</td></tr></sc-for></tbody>
             </table></div>
-            <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Sources are the lead’s channel, not the system the row was exported from. The 6-week column is the weekly average. Cost per lead uses quarter spend only when every month in the quarter has an actual; otherwise it says not connected.</p>
+            <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Lead Tracker source column. A lead counts on its first stage date. The 6-week column is the weekly average. Each column adds up to the lead numbers above.</p>
           </section>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 24px;border-bottom:2px solid var(--color-divider)">
             <sc-for list="{{ demandMetrics }}" as="m" hint-placeholder-count="5">
@@ -685,7 +695,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
             <section style="flex:1 1 320px;min-width:0">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">{{ barsTitle }}</h6><span style="font-size:12px;color:var(--color-neutral-700)">Lead Tracker · lead date</span></div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">{{ barsTitle }}</h6><span style="font-size:12px;color:var(--color-neutral-700)">Lead Tracker · first stage date</span></div>
               <div style="display:grid;grid-template-columns:repeat({{ barCols }},minmax(0,1fr));gap:6px;align-items:end;height:180px;padding-top:16px">
                 <sc-for list="{{ weeks }}" as="w" hint-placeholder-count="10">
                   <div style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0" title="{{ w.title }}">
@@ -697,7 +707,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div style="display:grid;grid-template-columns:repeat({{ barCols }},minmax(0,1fr));gap:6px;border-top:1px solid var(--color-divider);padding-top:6px">
                 <sc-for list="{{ weeks }}" as="w" hint-placeholder-count="10"><span style="font-size:11px;color:var(--color-neutral-700);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ w.label }}</span></sc-for>
               </div>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">New leads are counted by lead date. Marketing qualified is a meeting booked in the period. Sales qualified is a meeting held. Dates are America/Phoenix.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Lead Tracker definitions: a lead counts on its first stage date, an MQL on its MQL date and an SQL on its SQL date. Dates are America/Phoenix.</p>
             </section>
             <section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Selected period by source · {{ periodRange }}</h6></div>
@@ -748,12 +758,14 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-divider)">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><h6 style="margin:0">Renewals</h6><span class="money" style="font-size:14px;font-weight:700">{{ renewalsValue }}</span></div>
                 <p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">{{ renewalsNote }}</p>
-                <sc-for list="{{ renewals }}" as="r" hint-placeholder-count="4">
+                <details class="past-shows"><summary>{{ renewalsToggle }}</summary>
+                <sc-for list="{{ renewals }}" as="r" hint-placeholder-count="0">
                   <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:8px 0;border-bottom:1px solid var(--color-divider);font-size:13px">
                     <span style="font-weight:600">{{ r.company }}</span><span class="money">{{ r.amount }}</span>
-                    <span style="grid-column:1/-1;color:var(--color-neutral-700)">{{ r.dealName }}{{ r.note ? ' · ' + r.note : '' }} · {{ r.stage }}</span>
+                    <span style="grid-column:1/-1;color:var(--color-neutral-700)">{{ r.line }}</span>
                   </div>
                 </sc-for>
+                </details>
               </div>
             </section>
             <sc-if value="{{ showOwnerNotes }}"><section style="flex:1 1 320px;min-width:0">
@@ -782,7 +794,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <p style="margin:12px 0 0;font-size:13px;color:var(--color-neutral-800);line-height:1.5">Monthly budget. Missing actuals mean not entered, not zero.</p>
             </section></sc-if>
             <section style="flex:1 1 320px;min-width:0">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Where the money went</h6><span style="font-size:12px;color:var(--color-neutral-700)">Recorded Jan – Jul · by channel</span></div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Where the money went</h6><span style="font-size:12px;color:var(--color-neutral-700)">{{ spendChannelRange }}</span></div>
               <sc-for list="{{ spendChannels }}" as="v" hint-placeholder-count="6">
                 <div style="display:grid;grid-template-columns:minmax(0,120px) minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--color-divider);font-size:14px">
                   <span>{{ v.name }}</span>
@@ -790,11 +802,13 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <span class="money">{{ v.amount }}</span>
                 </div>
               </sc-for>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Marketing spend grouped by channel, from the collected record.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700);line-height:1.5">Marketing spend grouped by channel. {{ spendTotals }}</p>
+              <sc-if value="{{ hasEventPayments }}"><div style="margin-top:14px"><h6 style="margin:0 0 6px;font-size:12px">Event payments not given to any one show</h6><sc-for list="{{ eventPayments }}" as="e"><div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--color-divider)"><span>{{ e.vendor }}</span><span class="money">{{ e.amount }}</span></div></sc-for></div></sc-if>
             </section>
           </div>
           </sc-if>
-          <sc-if value="{{ !adsConnected }}"><p style="margin:12px 0 0;font-size:14px">Ads: not connected</p></sc-if>
+          <sc-if value="{{ !adsConnected }}"><p style="margin:12px 0 0;font-size:14px">Advertising and outbound are not connected yet.</p></sc-if>
+          <sc-if value="{{ hasOutboundNote }}"><p style="margin:12px 0 0;font-size:13px;color:var(--color-neutral-700)">{{ outboundNote }}</p></sc-if>
           <sc-if value="{{ adsConnected }}">
           <section>
             <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Advertising and outbound</h6><span style="font-size:12px;color:var(--color-neutral-700)">Platform-reported · not qualified leads</span></div>
@@ -819,8 +833,9 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             </sc-for>
           </div>
           <p style="margin:0;font-size:13px;color:var(--color-neutral-800);line-height:1.5;max-width:76ch">Website figures are for www.opstream.ai only. Staging, localhost and preview hosts are excluded.<sc-if value="{{ showAi }}"> AI visibility uses completed monitored answers in the retained collection; failed answers are excluded.</sc-if></p>
-          <sc-if value="{{ showWebWeeks }}"><div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
-            <section style="flex:1 1 320px;min-width:0">
+          <sc-if value="{{ hasWebGapNote }}"><p style="margin:0;font-size:13px;color:var(--color-neutral-700)">{{ webGapNote }}</p></sc-if>
+          <sc-if value="{{ showWebBlock }}"><div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+            <sc-if value="{{ showWebWeeks }}"><section style="flex:1 1 320px;min-width:0">
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Visits by week</h6><span style="font-size:12px;color:var(--color-neutral-700)">www.opstream.ai · {{ webRangeLabel }}</span></div>
               <div style="display:grid;grid-template-columns:repeat({{ webCols }},minmax(0,1fr));gap:6px;align-items:end;height:160px;padding-top:16px">
                 <sc-for list="{{ webWeeks }}" as="w" hint-placeholder-count="10"><div style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0" title="{{ w.title }}"><div style="background:var(--color-accent-2);height:{{ w.h }}"></div></div></sc-for>
@@ -828,7 +843,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <div style="display:grid;grid-template-columns:repeat({{ webCols }},minmax(0,1fr));gap:6px;border-top:1px solid var(--color-divider);padding-top:6px">
                 <sc-for list="{{ webWeeks }}" as="w" hint-placeholder-count="10"><span style="font-size:11px;color:var(--color-neutral-700);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ w.label }}</span></sc-for>
               </div>
-            </section>
+            </section></sc-if>
             <sc-if value="{{ showWebSources }}"><section style="flex:1 1 320px;min-width:0">
               <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">How visitors arrive · {{ webRangeLabel }}</h6></div>
               <table class="table" style="font-size:14px"><thead><tr><th>Channel</th><th style="text-align:right">Visits</th><th style="text-align:right">Engaged</th><th style="text-align:right">Key events</th></tr></thead>
@@ -861,7 +876,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           <div style="margin-left:auto;display:flex;gap:8px"><button onClick="{{ exportAccounts }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ exportLabel }}</button></div>
         </div>
 
-        <p class="account-order-note">{{ accountOrderNote }}</p><sc-if value="{{ accountsDeals }}" hint-placeholder-val="{{ true }}">
+        <p class="account-order-note">{{ accountOrderNote }}</p><sc-if value="{{ accountsDeals }}" hint-placeholder-val="{{ true }}"><sc-if value="{{ hasPlaceholderNote }}"><p class="account-order-note" style="color:var(--color-accent-700)">{{ placeholderNote }}</p></sc-if>
           <div class="table-scroll"><table class="table" style="font-size:14px">
             <thead><tr><th>Company</th><th>Owner</th><th>Stage</th><th class="money">ARR</th><th class="money">Prob.</th><th class="money">Weighted ARR</th><th>Close</th><th>Last interaction</th><th class="money">Days in stage</th><th style="display:{{ lastNoteDisplay }}">Last note</th></tr></thead>
             <tbody><sc-for list="{{ deals }}" as="d" hint-placeholder-count="10">
@@ -1071,7 +1086,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           </div>
           <sc-if value="{{ hasDraft }}"><section class="email-composer" aria-label="Draft editor">
             <div class="section-rule"><h6>{{ draft.company }}</h6><span class="muted-copy" role="status">{{ draft.versionLabel }}</span></div>
-            <sc-if value="{{ isEmailDraft }}"><div class="sender-line"><span><strong>From</strong> {{ senderLabel }}</span><span><sc-if value="{{ gmailEmail }}"><button class="text-control" onClick="{{ disconnectGmail }}">Disconnect</button></sc-if><sc-if value="{{ !gmailEmail }}"><button class="text-control" onClick="{{ connectGmailAction }}">Connect your Gmail</button></sc-if></span></div></sc-if>
+            <sc-if value="{{ isEmailDraft }}"><div class="sender-line"><span><strong>From</strong> {{ senderLabel }}</span><span><sc-if value="{{ gmailEmail }}"><button class="text-control" onClick="{{ disconnectGmail }}">Sign out</button></sc-if><sc-if value="{{ !gmailEmail }}"><button class="text-control" onClick="{{ connectGmailAction }}">Sign in with Google</button></sc-if></span></div></sc-if>
             <sc-if value="{{ isCampaignDraft }}"><div class="field"><label for="campaign-sender">Campaign sender reference</label><select id="campaign-sender" class="input" value="{{ draft.campaignSender }}" onChange="{{ editCampaignSender }}"><option value="">Choose a mailbox</option><sc-for list="{{ campaignSenders }}" as="sender"><option value="{{ sender.email }}">{{ sender.email }}</option></sc-for></select></div><p class="muted-copy">Prepare your copy here, then choose the sending accounts and launch in LemList.</p></sc-if>
             <div class="field"><label for="draft-subject">{{ subjectLabel }}</label><input id="draft-subject" class="input" maxlength="500" value="{{ draft.subject }}" onInput="{{ editSubject }}"></div>
             <sc-if value="{{ isEmailDraft }}">
@@ -1367,11 +1382,12 @@ class Component extends DCLogic {
     const totalPipe = pipeNow.openAmount;
     const weightedPipe = pipeNow.weighted || 0;
     const boundsNow = workspaceModel.periodBounds(st.period || 'quarter', st.start, st.end, todayPhx);
-    const funnelNow = workspaceModel.funnel(st.verified?.leads || [], REC, boundsNow.start, boundsNow.end);
-    const unworkedInfo = workspaceModel.unworkedLeads(st.verified?.leads || [], st.sheetReview);
+    const trackerNow = workspaceModel.trackerRows(st.sheetReview, st.verified?.leads || []);
+    const funnelNow = workspaceModel.leadCounts(trackerNow, boundsNow.start, boundsNow.end);
+    const unworkedInfo = { count: workspaceModel.unworkedRows(trackerNow).length, source: (st.sheetReview && (st.sheetReview.leads || []).length) ? 'sheet' : 'leads' };
     const quietNow = workspaceModel.quietDeals(opps, REC, todayPhx);
     const rankedDeals = [...dealsRaw].sort((a, b) => (Number(b[3]) || 0) - (Number(a[3]) || 0));
-    const unqualifiedLeads = (st.verified?.leads || []).filter(l => !workspaceModel.dateOnly(l.mql) && !/subscriber|newsletter/i.test(String(l.note||'')) && !String(l.name||'').includes('@'));
+    const unqualifiedLeads = workspaceModel.unworkedRows(trackerNow);
     const unsentDrafts = drafts.filter(d => !d.version).length;
     const draftForCompany = (company, rationale) => () => { const cc = findCo(company); const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + company, company, text: '', rationale, refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: cc ? cc.contacts.slice(0, 2).map(x => x.name).join(', ') : '', saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); };
     const dealEvidenceId = company => { const cc = findCo(company); const dd = cc && (cc.deals.find(d => !d.closed) || cc.deals[0]); return dd ? dd.id : null; };
@@ -1408,7 +1424,7 @@ class Component extends DCLogic {
       const pm = q.kind === 'followup_draft' ? ['Open draft', seedDraft(q)] : q.kind === 'stale_deal' ? ['Draft nudge', nudgeDraft(q)] : q.kind === 'unworked_lead' ? ['Review leads', goLeads] : q.kind === 'sheet_review' ? (q.companyId ? ['Review in account', goCo(q.companyId)] : ['Review deals', goDeals]) : q.kind === 'crm_update' ? ['Review deals', goDeals] : ['Open meetings', goMeetings];
       const confirmGo = (action, fn) => () => { const key = q.id + ':' + action; if (confirmKey === key) { this.setState({ confirmQueue: null }); fn(); } else { this.setState({ confirmQueue: key }); setTimeout(() => { if (this.state.confirmQueue === key) this.setState({ confirmQueue: null }); }, 6000); } };
       return {
-        id: q.id, companyId: q.companyId, n: i + 1, title: (q.kind === 'stale_deal' && q.lastEngagement) ? String(q.title).replace(/quiet \d+ days/, 'quiet ' + workspaceModel.relativeDays(q.lastEngagement, viewerToday) + ' days') : q.title, isNew: !!q.isNew, needsDecision: !!q.needsDecision, audience: q.audience || 'sales',
+        id: q.id, companyId: q.companyId, dealId: q.dealId || null, n: i + 1, title: (q.kind === 'stale_deal' && q.lastEngagement) ? String(q.title).replace(/quiet \d+ days/, 'quiet ' + workspaceModel.relativeDays(q.lastEngagement, viewerToday) + ' days') : q.title, isNew: !!q.isNew, needsDecision: !!q.needsDecision, audience: q.audience || 'sales',
         kind: kindLabel[q.kind] || q.kind,
         goal: q.goal || 'pipeline',
         context: [q.company, (q.deal && q.deal !== q.company ? q.deal : null), q.stage].filter(Boolean).join(' · '),
@@ -1451,7 +1467,7 @@ class Component extends DCLogic {
       { title: 'Meetings today & tomorrow', line: soonNow.length ? soonNow.join(' / ') : 'None scheduled', note: 'Built from the calendar when the page renders. Times are America/Phoenix.', go: this.go('meetings', { meetings: 'upcoming' }), goLabel: 'Open meetings' },
       { title: 'Deals gone quiet', line: quietNow.length + ' with no engagement in ' + workspaceModel.QUIET_DAYS + '+ days', note: hb.quietDeals.note, go: goFollow, goLabel: 'Open follow-ups' },
       { title: 'Follow-ups owed', line: hb.followupsOwed.items.length + ' calls with open action items', note: hb.followupsOwed.note, go: goFollow, goLabel: 'Open follow-ups' },
-      { title: 'New leads', line: unworkedInfo.count + ' unworked', note: 'No meeting booked' + (unworkedInfo.source === 'sheet' ? ' · sheet is authoritative' : ''), go: goLeads, goLabel: 'Open new leads' },
+      { title: 'New leads', line: unworkedInfo.count + ' unworked', note: 'No MQL date on the ' + (unworkedInfo.source === 'sheet' ? 'Lead Tracker' : 'HubSpot contacts') + '.', go: goLeads, goLabel: 'Open new leads' },
     ] : [];
     const hollieAutonomy = hop ? [
       { label: 'Meeting prep', text: (hop.autonomyText || {}).meeting_prep },
@@ -1710,7 +1726,7 @@ class Component extends DCLogic {
       draftFeedback: st.draftFeedback || null,
       draftFeedbackClass: st.draftFeedbackClass || 'form-success',
       get meetingsEmpty() { return this.meetingGroups.length === 0; },
-      readingRules: [{ title: 'Missing spend is not zero', text: workspaceModel.missingSpendText(st.marketing && st.marketing.spend) }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'New leads use the lead date. Marketing qualified means a meeting was booked. Sales qualified means a meeting was held (a recording, or a CRM meeting marked held). They are separate counts, not stages of one population.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. They are not counted as meetings booked or meetings held.' }, { title: 'Each source has its own date', text: 'The extract was generated from the company brain (HubSpot, Fathom, Sheets, GA4).' }],
+      readingRules: [{ title: 'Missing spend is not zero', text: workspaceModel.missingSpendText(st.marketing && st.marketing.spend) }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'Leads, MQLs and SQLs come from the Lead Tracker using the definitions below. A lead counts on its first stage date, an MQL on its MQL date and an SQL on its SQL date, so a short period can have more SQLs than leads. Completed meetings come from the CRM and recordings from Fathom.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. Only the Lead Tracker decides qualification.' }, { title: 'Each source has its own date', text: 'HubSpot, Fathom, the master Sheet and the budget workbook use this collection. Website channels cover the last 90 days; AI answers use the latest Otterly report; ad platforms use each report sheet\u2019s window.' }],
       sources: [],
       definitions: [{ source: 'Inbound', lead: 'Gated content (excl. spam/jobs); simple email form', mql: 'Demo request, meeting booked, pricing, contact form', sql: 'Meeting happened' }, { source: 'Outbound', lead: 'Prospect replied with positive engagement', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'Events', lead: 'Gave us contact info / badge scanned', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'RFP', lead: 'Said they want to send an RFI/RFP', mql: 'Sent RFI/RFP', sql: 'Invitation to start demo' }]
     };

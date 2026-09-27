@@ -89,7 +89,8 @@ function request(method, reqPath, { cookie, body } = {}) {
 
 const marketing = JSON.parse(fs.readFileSync(path.join(root, 'out/data/marketing.json'), 'utf8'));
 const hollie = JSON.parse(fs.readFileSync(path.join(root, 'out/data/hollie.json'), 'utf8'));
-const thisWeek = (marketing.shows.items || []).filter(s => s.phase === 'this-week');
+const thisWeek = (marketing.shows.items || []).filter(s => s.phase === 'soon' && s.approved);
+const facts = JSON.parse(fs.readFileSync(path.join(root, 'out/data/run-facts.json'), 'utf8'));
 const shots = process.env.SCREENSHOT_DIR || '';
 if (shots) fs.mkdirSync(shots, { recursive: true });
 
@@ -140,7 +141,10 @@ async function publicRun(width, tag) {
   const cards = await page.locator('section[aria-label="Priorities"] .priority-card').allInnerTexts();
   check(tag + ' priorities come from the operator', cards.length === hollie.marketingPriorities.length && cards.length >= 3,
     cards.length + ' vs ' + hollie.marketingPriorities.length);
-  check(tag + ' first priority is this week\'s shows', thisWeek.every(s => cards[0].includes(s.name)));
+  check(tag + ' first priority is this week\'s shows', thisWeek.length > 0 && thisWeek.every(s => cards[0].includes(s.name)));
+  check(tag + ' show priority uses relative days', /start this coming week/.test(cards[0]) && /\((tomorrow|today|in \d days|on now[^)]*)\)/.test(cards[0]), cards[0].split('\n')[1]);
+  check(tag + ' owner is Hollie with lead owners apart', /Owner: Hollie\b/.test(cards[0]) && !/Hollie \(marketing\)/.test(cards.join(' ')) && /Lead owners:/.test(cards.join(' ')));
+  check(tag + ' spend is in dollars', /\$429K/.test(cards.join(' ')) && !/Currency is not stated/.test(cards.join(' ')));
   check(tag + ' cards show owner and last interaction', cards.every(t => /Owner:/.test(t) && /Last interaction:/.test(t) && /Next step:/.test(t)));
   await shot(page, 'marketing-home-' + tag);
   const events = page.locator('#events-shows');
@@ -148,6 +152,9 @@ async function publicRun(width, tag) {
   check(tag + ' events list this week\'s shows', thisWeek.every(s => eventsText.includes(s.name)));
   check(tag + ' events show planned and recorded', /Planned/.test(eventsText) && /Recorded/.test(eventsText));
   check(tag + ' events have prep checklist', /Prep/i.test(eventsText) && /Sponsorship signed/.test(eventsText));
+  check(tag + ' shows with no data get one line', /No spend or attendees recorded yet/.test(eventsText));
+  check(tag + ' unapproved and undated shows are compact', /Also on the calendar/i.test(eventsText) && /Workday Rising/.test(eventsText) && (await events.locator('.show-card', { hasText: 'Workday Rising' }).count()) === 0);
+  check(tag + ' show money is $K', /\$28K/.test(eventsText) && /\$32\.7K/.test(eventsText));
   await events.scrollIntoViewIfNeeded();
   await page.evaluate(() => document.getElementById('events-shows').scrollIntoView({ block: 'start' }));
   await shot(page, 'events-shows-' + tag);
@@ -201,12 +208,112 @@ async function publicRun(width, tag) {
     await page.getByRole('heading', { name: 'Drafts' }).waitFor();
     const draftText = await page.locator('main').innerText();
     check('signed-out LinkedIn draft opens in Drafts', /LinkedIn posts/.test(draftText) && /Sources:/.test(draftText) && /Dashboard:/.test(draftText) && !/Gmail:/.test(draftText));
+    await checkDrafts(page);
+    await checkTotals(page);
+    await checkAccounts(page);
   }
   check(tag + ' page has no errors', errors.length === 0, errors.join(' | '));
   await context.close();
 }
 
+const num = t => Number(String(t || '').replace(/[^0-9.]/g, '') || 'NaN');
+
+async function checkDrafts(page) {
+  const context = await browser.newContext();
+  const fresh = await context.newPage();
+  await fresh.setViewportSize({ width: 1440, height: 1000 });
+  await fresh.goto(base + '/?view=drafts', { waitUntil: 'networkidle' });
+  await fresh.getByRole('heading', { name: 'Drafts' }).waitFor();
+  const tabs = await fresh.locator('.draft-purpose-tab').allInnerTexts();
+  const count = label => num((tabs.find(t => t.startsWith(label)) || '').replace(label, ''));
+  check('drafts are pre-filled on first load', (await fresh.locator('.draft-list-item').count()) > 0 && count('Event follow-ups') > 0 && count('LinkedIn posts') > 0 && count('Campaign drafts') > 0, tabs.join(' | '));
+  await fresh.locator('.draft-purpose-tab', { hasText: 'Campaign drafts' }).click();
+  const campaign = await fresh.locator('main').innerText();
+  check('campaign draft copies for LemList', /Copy for LemList/.test(campaign) && /Version history/.test(campaign) && (await fresh.locator('.content-modes select').count()) === 2);
+  await fresh.locator('.draft-purpose-tab', { hasText: 'Event follow-ups' }).click();
+  const event = await fresh.locator('main').innerText();
+  check('event follow-up is an email with a send path', /Event follow-ups/.test(event) && /\bTo\b/.test(event) && /Send via Gmail|Sign in with Google/.test(event));
+  if (shots) await fresh.screenshot({ path: path.join(shots, 'drafts-desktop.png') });
+  await context.close();
+}
+
+async function viewShots() {
+  if (!shots) return;
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  for (const [name, query] of [['pipeline-demand', 'view=pipeline&perf=demand'], ['pipeline-spend', 'view=pipeline&perf=spend'], ['pipeline-web', 'view=pipeline&perf=web'], ['accounts', 'view=accounts'], ['about', 'view=data']]) {
+    await page.goto(base + '/?' + query, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: path.join(shots, name + '-desktop.png') });
+  }
+  const spend = await (async () => { await page.goto(base + '/?view=pipeline&perf=spend', { waitUntil: 'networkidle' }); await page.waitForTimeout(400); return page.locator('main').innerText(); })();
+  check('spend tab shows workbook actuals and ads', /\$27\.9K/.test(spend) && /Google Ads/.test(spend) && /Event payments not given to any one show/i.test(spend), [/\$27\.9K/.test(spend), /Google Ads/.test(spend), /Event payments not given/i.test(spend)].join(','));
+  const web = await (async () => { await page.goto(base + '/?view=pipeline&perf=web', { waitUntil: 'networkidle' }); await page.waitForTimeout(400); return page.locator('main').innerText(); })();
+  check('web tab shows AI mentions from Otterly', /AI answers mentioning Opstream/.test(web) && /46%/.test(web) && /Otterly/.test(web));
+  await context.close();
+}
+
+async function checkTotals(page) {
+  await goView(page, 'Today');
+  await page.getByRole('button', { name: 'Marketing', exact: true }).click();
+  const rows = await page.locator('#marketing-numbers .figure-row').allInnerTexts();
+  const quarterRow = rows.find(r => /Quarter to date/.test(r)) || '';
+  const weekRow = rows.find(r => /Last 7 days/.test(r)) || '';
+  const qLeads = num(quarterRow.split('\n').pop());
+  const qMql = num((quarterRow.match(/MQL ([\d,]+)/) || [])[1]);
+  const qSql = num((quarterRow.match(/SQL ([\d,]+)/) || [])[1]);
+  const sideSources = await page.locator('#marketing-numbers tbody tr').evaluateAll(trs => trs.map(tr => [...tr.querySelectorAll('td')].map(td => td.textContent.trim())));
+  check('side sources add up to the quarter', sideSources.reduce((n, r) => n + num(r[2]), 0) === qLeads, sideSources.length + ' rows vs ' + qLeads);
+  check('side sources add up to the last 7 days', sideSources.reduce((n, r) => n + num(r[1]), 0) === num(weekRow.split('\n').pop()), weekRow);
+  check('marketing numbers match run facts', qLeads === facts.leads && qMql === facts.mql && qSql === facts.sql, [qLeads, qMql, qSql].join('/') + ' vs ' + [facts.leads, facts.mql, facts.sql].join('/'));
+  const unworkedCard = (await page.locator('section[aria-label="Priorities"] .priority-card', { hasText: 'have no MQL date yet' }).first().innerText().catch(() => '')).match(/(\d[\d,]*) leads have no MQL date yet/);
+  await page.getByRole('button', { name: 'Sales & CS', exact: true }).click();
+  const salesText = await page.locator('main').innerText();
+  const salesUnworked = (salesText.match(/(\d[\d,]*) unworked/) || [])[1];
+  check('unworked leads agree', unworkedCard && salesUnworked && num(unworkedCard[1]) === num(salesUnworked), (unworkedCard && unworkedCard[1]) + ' vs ' + salesUnworked);
+  check('sales brief repeats the quarter', salesText.includes(facts.leads + ' leads / ' + facts.mql + ' MQL / ' + facts.sql + ' SQL'));
+  await goView(page, 'Pipeline');
+  const cards = await page.locator('main button').evaluateAll(bs => bs.map(b => b.innerText));
+  const card = label => num(((cards.find(t => t.startsWith(label)) || '').split('\n')[1]));
+  check('pipeline cards match', card('New leads') === facts.leads && card('Marketing qualified') === facts.mql && card('Sales qualified') === facts.sql, [card('New leads'), card('Marketing qualified'), card('Sales qualified')].join('/'));
+  const tables = await page.locator('main table').evaluateAll(ts => ts.map(t => [...t.querySelectorAll('tbody tr')].map(tr => [...tr.querySelectorAll('td')].map(td => td.textContent.trim()))));
+  const bySource = tables.find(t => t.length && t[0].length === 5) || [];
+  check('selected period by source adds up', bySource.reduce((n, r) => n + num(r[1]), 0) === facts.leads && bySource.reduce((n, r) => n + num(r[2]), 0) === facts.mql && bySource.reduce((n, r) => n + num(r[3]), 0) === facts.sql);
+  check('no unknown source bucket', !bySource.some(r => /Unknown source/.test(r[0])));
+  const leadSources = tables.find(t => t.length && t[0].length === 4) || [];
+  check('leads by source quarter adds up', leadSources.reduce((n, r) => n + num(r[3]), 0) === facts.leads);
+  const { computeFacts, runAssistantTool } = await import('./workspace-facts.mjs');
+  const read = n => JSON.parse(fs.readFileSync(path.join(root, 'out/data', n), 'utf8'));
+  const assistant = JSON.parse(runAssistantTool('get_pipeline_metrics', {}, computeFacts(read('verified.json'), read('records.json'), null, read('sheet-review.json'))));
+  check('assistant repeats the same numbers', assistant.leads === facts.leads && assistant.mql === facts.mql && assistant.sql === facts.sql, [assistant.leads, assistant.mql, assistant.sql].join('/'));
+}
+
+async function checkAccounts(page) {
+  await goView(page, 'Accounts');
+  const text = await page.locator('main').innerText();
+  const rows = await page.locator('main table tbody tr').allInnerTexts();
+  check('accounts have no Opstream or event names', !rows.some(r => /^Opstream\b|The future of procurement/.test(r)) && rows.some(r => /BT Sourced/.test(r)) && rows.some(r => /TAPI \(Teva\)/.test(r)));
+  const flagged = rows.filter(r => /HubSpot (amount|close|stage|owner)/.test(r)).length;
+  check('HubSpot differences are specific', flagged > 0 && flagged < rows.length && !rows.some(r => /HubSpot differs/.test(r)), flagged + ' of ' + rows.length);
+  check('placeholder close date is flagged', /probably a placeholder/.test(text) && rows.some(r => /likely placeholder close date/.test(r)));
+  const taboola = rows.find(r => /^Taboola/.test(r)) || '';
+  await page.getByRole('button', { name: 'Today' }).first().click();
+  await page.getByRole('button', { name: 'Sales & CS', exact: true }).click();
+  const nudge = await page.locator('article', { hasText: 'Nudge Taboola' }).first().innerText().catch(() => '');
+  const owner = (nudge.match(/Owner: ([^\n]+?)(\s+Last interaction|\n|$)/) || [])[1] || '';
+  check('Taboola owner matches Accounts', owner && taboola.includes(owner.trim().split(' ')[0]), owner + ' | ' + taboola.slice(0, 60));
+  await goView(page, 'Meetings');
+  const options = await page.locator('main select').first().locator('option').allInnerTexts();
+  const firsts = options.filter(o => !/^Owner #/.test(o)).map(o => o.split(' ')[0].toLowerCase());
+  check('meeting owners are not duplicated', firsts.length === new Set(firsts).size, options.join(', '));
+  await goView(page, 'Pipeline');
+  const pipe = await page.locator('main').innerText();
+  check('renewals are collapsed', /Show the \d+ renewal rows/.test(pipe) && !/No company linked|Scott McKenna/.test(pipe));
+}
+
 await publicRun(1440, 'desktop');
+await viewShots();
 await publicRun(390, 'mobile');
 check('signed-out visitor never calls Google', !fetched.some(line => /googleapis\.com\/(gmail|calendar|drive)/.test(line)));
 
@@ -235,6 +342,8 @@ for (const [width, tag] of [[1440, 'desktop'], [390, 'mobile']]) {
   await panel.waitFor();
   const conn = await panel.innerText();
   check(tag + ' connections show the signed-in mailbox', /Connected as hollie@opstream\.ai/.test(conn) && !/disabled/i.test(conn));
+  const amsterdam = await page.locator('#events-shows .show-card', { hasText: 'DPW Amsterdam' }).first().innerText();
+  check(tag + ' calendar overlap is shown with a citation', /On your calendar: DPW Amsterdam booth shift/.test(amsterdam) && /Google Calendar/.test(amsterdam));
   await page.evaluate(() => scrollTo(0, 0));
   await shot(page, 'connections-signed-in-' + tag);
   if (width >= 600) {

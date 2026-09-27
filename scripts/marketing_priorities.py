@@ -6,13 +6,11 @@ no card; the section that would show it says it is not connected yet.
 from collections import Counter
 from datetime import date, timedelta
 
+from gtm_metrics import first_touch, money_k, tracker_rows, unworked_rows
+
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
           "September", "October", "November", "December"]
-RESPONSIBLE = "Hollie (marketing)"
-
-
-def num(n):
-    return f"{round(float(n)):,}"
+RESPONSIBLE = "Hollie"
 
 
 def short_day(iso):
@@ -36,27 +34,27 @@ def owner_of(value):
     return raw[:1].upper() + raw[1:].lower() if raw.isalpha() else raw
 
 
-def subscriber(lead):
-    note = str(lead.get("note") or "").lower()
-    return note == "subscriber" or "newsletter" in note
-
-
 def lead_day(lead):
-    return lead.get("lead") or lead.get("leadDate") or None
+    return first_touch(lead)
 
 
-def card(pid, title, why, nxt, caveat, owner, last, last_label, primary, secondary=None, kind="marketing"):
-    return {
+def card(pid, title, why, nxt, caveat, owner, last, last_label, primary, secondary=None, kind="marketing",
+         lead_owners=None, extra=None):
+    out = {
         "id": pid, "kind": kind, "audience": "marketing",
         "title": title, "why": why, "next": nxt, "caveat": caveat,
-        "owner": owner, "lastInteraction": last, "lastInteractionLabel": last_label,
+        "owner": owner, "leadOwners": sorted(set(lead_owners or [])),
+        "lastInteraction": last, "lastInteractionLabel": last_label,
         "primary": primary, "secondary": secondary,
         "accountIds": [], "refs": [],
     }
+    out.update(extra or {})
+    return out
 
 
 def shows_this_week(marketing, collected):
-    shows = [s for s in ((marketing.get("shows") or {}).get("items") or []) if s.get("phase") == "this-week"]
+    shows = [s for s in ((marketing.get("shows") or {}).get("items") or [])
+             if s.get("phase") == "soon" and s.get("approved")]
     if not shows:
         return None
     bits, steps, owners, newest = [], [], set(), ""
@@ -65,9 +63,9 @@ def shows_this_week(marketing, collected):
         part = "%s (%s, %s)" % (s["name"], where, s.get("dateLabel"))
         money = []
         if s.get("planned") is not None:
-            money.append("%s planned" % num(s["planned"]))
+            money.append("%s planned" % money_k(s["planned"]))
         if (s.get("recorded") or {}).get("amount") is not None:
-            money.append("%s recorded" % num(s["recorded"]["amount"]))
+            money.append("%s recorded" % money_k(s["recorded"]["amount"]))
         if money:
             part += ": " + ", ".join(money)
         if not s.get("attendees"):
@@ -89,26 +87,24 @@ def shows_this_week(marketing, collected):
         if not s.get("attendees"):
             steps.append("confirm who is at the %s booth" % s["name"])
     names = [s["name"] for s in shows]
-    if len(shows) == 1:
-        title = "%s starts %s" % (names[0], short_day(shows[0].get("start")))
-    else:
-        title = "%s this week: %s" % ("Two shows" if len(shows) == 2 else "%d shows" % len(shows), join(names))
+    title = ("%s starts %s" % (names[0], short_day(shows[0].get("start")))) if len(shows) == 1 else \
+        "%s coming up: %s" % ("Two shows" if len(shows) == 2 else "%d shows" % len(shows), join(names))
     why = ". ".join(bits) + "."
     nxt = (steps[0][:1].upper() + steps[0][1:] + (", then " + ", then ".join(steps[1:]) if steps[1:] else "") + ".") if steps \
         else "Prepare the booth follow-up list so show leads get an owner the day after."
-    who = RESPONSIBLE + (" · meetings: " + join(sorted(owners)) if owners else "")
     return card(
-        "mkt:shows-this-week:" + "+".join(s["id"] for s in shows), title, why, nxt,
+        "mkt:shows-soon:" + "+".join(s["id"] for s in shows), title, why, nxt,
         "Dates, packages and attendees are from the budget workbook's show calendar. Meeting requests are Lead Tracker notes, collected %s." % collected,
-        who, newest or None, "newest meeting request" if newest else "No meeting requests recorded",
+        RESPONSIBLE, newest or None, "newest meeting request" if newest else "No meeting requests recorded",
         {"label": "Open Events & shows", "target": {"kind": "section", "id": "events-shows"}},
         {"label": "Draft LinkedIn post", "target": {"kind": "linkedin", "id": shows[0]["id"]}},
-        kind="shows",
+        kind="shows", lead_owners=owners,
+        extra={"shows": [{"id": s["id"], "name": s["name"], "start": s.get("start"), "end": s.get("end")} for s in shows]},
     )
 
 
 def webinar_unowned(leads, collected):
-    rows = [l for l in leads if str(l.get("source") or "").lower() == "webinar" and not subscriber(l)]
+    rows = [l for l in leads if str(l.get("source") or "").lower() == "webinar"]
     unowned = [l for l in rows if not owner_of(l.get("owner"))]
     if not unowned:
         return None
@@ -125,7 +121,7 @@ def webinar_unowned(leads, collected):
         why,
         "Review the registrants by role and timing, and assign an owner to the few with an active project before the next webinar push.",
         "Registration is not attendance or intent. Lead Tracker, collected %s." % collected,
-        RESPONSIBLE + " · leads unassigned", newest, "newest registrant",
+        RESPONSIBLE, newest, "newest registrant",
         {"label": "Open the registrants", "target": {"kind": "view", "view": "accounts", "tab": "leads", "search": "webinar"}},
         {"label": "See lead sources", "target": {"kind": "section", "id": "marketing-numbers"}},
         kind="webinar",
@@ -147,18 +143,18 @@ def spend_not_entered(marketing):
         why = "Actuals stop at %s" % last_name
         if len(last_rows) == 1:
             amt = next(m["amount"] for m in last_rows[0]["months"] if m["month"] == last)
-            why += ", one line: %s at %s" % (last_rows[0]["vendor"], num(amt))
+            why += ", one line: %s at %s" % (last_rows[0]["vendor"], money_k(amt))
         why += ". "
-    why += join(["%s (%s planned)" % (MONTHS[int(m["month"][5:7]) - 1], num(m["planned"])) for m in missing])
+    why += join(["%s (%s planned)" % (MONTHS[int(m["month"][5:7]) - 1], money_k(m["planned"])) for m in missing])
     why += " %s no actuals. " % ("has" if len(missing) == 1 else "have")
-    why += "Recorded spend this year is %s against a %s plan" % (num(spend.get("actualTotal") or 0), num(spend.get("plannedTotal") or 0))
-    why += ("; events are %s of it." % num(events)) if events else "."
+    why += "Recorded spend this year is %s against a %s plan" % (money_k(spend.get("actualTotal") or 0), money_k(spend.get("plannedTotal") or 0))
+    why += ("; events are %s of it." % money_k(events)) if events else "."
     return card(
         "mkt:spend-not-entered", "Marketing spend has not been entered since %s" % (last_name or "the start of the year"),
         why,
         "Enter %s vendor actuals, including show costs, before the next spend review." % join(
             [MONTHS[int(m["month"][5:7]) - 1] for m in missing]),
-        "Blank months are missing, not zero. Currency is not stated in the workbook.",
+        "Blank months are missing, not zero. Budget workbook, Actuals tab.",
         RESPONSIBLE, None,
         ("%s was the last month entered" % last_name) if last_name else "No month has actuals",
         {"label": "See spend", "target": {"kind": "view", "view": "pipeline", "tab": "spend"}},
@@ -186,10 +182,10 @@ def show_followups(marketing, today):
         "Ask %s which of these leads are worth a follow-up, and prepare one event follow-up draft for the rest." % (
             join(owners) or "the lead owners"),
         "Show leads are Lead Tracker rows with the Events source dated during the show, or whose note names the show.",
-        RESPONSIBLE + (" · leads: " + join(owners) if owners else ""), newest, "newest show lead",
+        RESPONSIBLE, newest, "newest show lead",
+        {"label": "Draft event follow-up", "target": {"kind": "event-followup", "id": stuck[0]["id"]}},
         {"label": "Open Events & shows", "target": {"kind": "section", "id": "events-shows"}},
-        {"label": "Open the leads", "target": {"kind": "view", "view": "accounts", "tab": "leads", "search": ""}},
-        kind="show-followup",
+        kind="show-followup", lead_owners=owners,
     )
 
 
@@ -199,21 +195,21 @@ def mql_without_sql(leads, collected):
         return None
     rows.sort(key=lambda l: l.get("mql") or "", reverse=True)
     owners = sorted({owner_of(l.get("owner")) for l in rows if owner_of(l.get("owner"))})
-    recent = ", ".join("%s (%s, %s)" % (l.get("company") or l.get("name"), l.get("source") or "no source", short_day(l["mql"]))
+    recent = ", ".join("%s (%s, %s)" % (l.get("name"), l.get("source") or "no source", short_day(l["mql"]))
                        for l in rows[:3])
     return card(
         "mkt:mql-no-sql", "%d marketing-qualified leads have not become sales-qualified" % len(rows),
         "They have an MQL date and no SQL date on the Lead Tracker. The most recent are %s." % recent,
         "Check with %s whether the meeting happened, and update the SQL date if it did." % (join(owners) or "the owners"),
         "MQL and SQL dates are owner-entered on the Lead Tracker, collected %s." % collected,
-        RESPONSIBLE + (" · leads: " + join(owners) if owners else ""), rows[0].get("mql"), "newest MQL",
+        RESPONSIBLE, rows[0].get("mql"), "newest MQL",
         {"label": "Open the leads", "target": {"kind": "view", "view": "accounts", "tab": "leads", "search": ""}},
-        None, kind="handoff",
+        None, kind="handoff", lead_owners=owners,
     )
 
 
 def unworked_by_source(leads, collected):
-    rows = [l for l in leads if not l.get("mql") and not subscriber(l)]
+    rows = unworked_rows(leads)
     if not rows:
         return None
     by = Counter(str(l.get("source") or "No source") for l in rows)
@@ -231,7 +227,7 @@ def unworked_by_source(leads, collected):
 
 
 def build(marketing, review, today, collected_label):
-    leads = (review or {}).get("leads") or []
+    leads = tracker_rows(review)
     marketing = marketing or {}
     items = [
         shows_this_week(marketing, collected_label),

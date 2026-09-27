@@ -1,7 +1,7 @@
 // LinkedIn post drafts for a show. Reads the show calendar row and, when the
 // person is signed in, their own Gmail, Calendar and Drive. Returns text only;
 // nothing is posted or sent.
-import { searchEmail, listCalendar, searchDrive } from './google-workspace.mjs';
+import { searchEmail, listCalendar, searchDrive, calendarEvents } from './google-workspace.mjs';
 
 function addDays(day, n) {
   const t = new Date(day + 'T12:00:00Z');
@@ -126,4 +126,32 @@ export async function linkedInDraft({ show, user, token, fetchImpl, chat, model 
     usedGoogle,
     expired,
   };
+}
+
+const words = text => String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+function eventDays(event) {
+  const start = String((event.start && (event.start.date || event.start.dateTime)) || '').slice(0, 10);
+  let end = String((event.end && (event.end.date || event.end.dateTime)) || '').slice(0, 10) || start;
+  if (event.end && event.end.date && end > start) end = addDays(end, -1);
+  return { start, end };
+}
+
+// Calendar events that overlap a show's dates and name the show or its city.
+export async function showCalendarMatches(fetchImpl, token, shows) {
+  const dated = (shows || []).filter(s => s.start).slice(0, 6);
+  const out = {};
+  for (const show of dated) {
+    const events = await calendarEvents(fetchImpl, token, show.start, addDays(show.end || show.start, 1));
+    const name = words(show.name);
+    const city = words(show.location);
+    for (const event of events) {
+      const { start, end } = eventDays(event);
+      if (!start || start > (show.end || show.start) || end < show.start) continue;
+      const blob = words((event.summary || '') + ' ' + (event.location || ''));
+      if (!(name && blob.includes(name)) && !(city && city.length > 2 && ` ${blob} `.includes(` ${city} `))) continue;
+      (out[show.id] = out[show.id] || []).push({ title: String(event.summary || 'Untitled event').slice(0, 140), start });
+    }
+  }
+  return out;
 }

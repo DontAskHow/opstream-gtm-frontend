@@ -95,15 +95,20 @@ function addDays(day, n) {
   return t.toISOString().slice(0, 10);
 }
 
-export async function listCalendar(fetchImpl, token, start, end) {
+export async function calendarEvents(fetchImpl, token, start, end) {
   const today = phoenixDay(new Date());
   const timeMin = (start || today) + 'T00:00:00-07:00';
   const timeMax = (end || addDays(today, 2)) + 'T00:00:00-07:00';
   const url = 'https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=20'
     + '&timeMin=' + encodeURIComponent(timeMin) + '&timeMax=' + encodeURIComponent(timeMax);
   const body = await googleGet(fetchImpl, token, url);
+  return (body.items || []).slice(0, 20);
+}
+
+export async function listCalendar(fetchImpl, token, start, end) {
+  const items = await calendarEvents(fetchImpl, token, start, end);
   const lines = [];
-  for (const event of (body.items || []).slice(0, 20)) {
+  for (const event of items) {
     const when = event.start && (event.start.dateTime || event.start.date) || '';
     const who = (event.attendees || []).slice(0, 6).map(a => a.email || a.displayName || '').filter(Boolean).join(', ');
     lines.push(clip(when, 32) + ' | ' + clip(event.summary, 140) + (who ? ' | ' + clip(who, 180) : ''));

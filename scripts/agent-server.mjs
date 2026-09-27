@@ -29,7 +29,7 @@ import {
 import {
   GOOGLE_TOOL_SCHEMAS, isGoogleTool, runGoogleTool, buildPersonalBrief, gtmIndex, createGmailDraft, sendGmailMessage,
 } from './google-workspace.mjs';
-import { linkedInDraft } from './marketing-drafts.mjs';
+import { linkedInDraft, showCalendarMatches } from './marketing-drafts.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
@@ -337,7 +337,7 @@ AUTONOMY (hard rules — never break these):
 Answer using only the workspace data. Be concise and concrete: names, numbers, dates.
 The open book is already computed in the OPEN BOOK METRICS lines and in get_pipeline_metrics. It is the master sheet's active new-business rows. A past close date stays in that book and is marked close date passed; it is left out of the monthly commit. Renewals, current agreements, Disqualified, and On Hold are not in it. A HubSpot deal that is not on the sheet is not in the total. Repeat those figures. A larger renewal, current agreement, on-hold, or disqualified amount is not the largest open deal. If you mention one, name that reason and say it is not in the open book. Owner labels that start with "Owner #…" mean the name is not connected; do not invent a person's name. Quiet-day figures in the data are already computed; repeat them. The DATA COLLECTED line is the timestamp of the files on disk. Repeat it when you give current pipeline or lead figures.
 Timestamps that end in Z are UTC. Answer in America/Phoenix. Never show a UTC clock time.
-The MARKETING BRIEF lines (this week, 6-week average, source table) are already computed. Repeat them. Do not calculate another weekly lead count.
+The MARKETING BRIEF lines (last 7 days, 6-week average, source table) and the UNWORKED LEADS line are already computed. Leads, MQL and SQL use the Lead Tracker definitions. Repeat them. Do not calculate another weekly lead count.
 When you draft an email, sign with the deal owner's name only when that name is a person in the data. If the owner is "Owner #…" or missing, leave the draft unsigned. Do not sign as Hollie unless she is the named deal owner.
 Format your answer as a compact HTML fragment using only <p>, <ul>, <ol>, <li>, <strong>, <em>, <br>. Output raw HTML only, never markdown — markdown is displayed to the user as literal asterisks and dashes. No code fences, no <h1>.
 
@@ -1068,6 +1068,22 @@ function onRequest(req, res) {
         console.error('[gmail-send] failed: ' + safeCode(err));
         res.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Gmail did not send this draft.' }));
       }
+      return;
+    }
+    if (url.pathname === '/api/me/show-calendar' && req.method === 'GET') {
+      const existing = currentUser(req);
+      const token = existing && !existing.expired ? await ensureAccess(existing) : '';
+      if (!token) {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ signedIn: !!existing, matches: {} }));
+        return;
+      }
+      let marketing = null;
+      try { marketing = readJson(path.join(dataDir, 'marketing.json')); } catch { marketing = null; }
+      const shows = (((marketing || {}).shows || {}).items || []).filter(s => s.phase !== 'past');
+      let matches = {};
+      try { matches = await showCalendarMatches(hooks.fetchImpl, token, shows); }
+      catch (err) { console.error('[show-calendar] ' + safeCode(err)); }
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ signedIn: true, matches }));
       return;
     }
     if (url.pathname === '/api/drafts/linkedin' && req.method === 'POST') {
