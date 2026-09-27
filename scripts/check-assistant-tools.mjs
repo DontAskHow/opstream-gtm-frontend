@@ -3,10 +3,20 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ASSISTANT_TOOL_NAMES, dataRevision, loadWorkspace, needsReload, runAssistantTool } from './workspace-facts.mjs';
+import { ASSISTANT_TOOL_NAMES, computeFacts, dataRevision, loadWorkspace, needsReload, runAssistantTool } from './workspace-facts.mjs';
+import fs from 'node:fs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const facts = loadWorkspace(path.join(root, 'out', 'data'));
+const dataDir = path.join(root, 'out', 'data');
+// Quarter-to-date ends on the Phoenix calendar day the process runs. The
+// figures below were measured as of 2026-09-26, the collection's Phoenix date.
+// A later calendar day can include one more booked meeting without changing
+// the open book. Lock both: the certified day, and live agreement with Python.
+const CERTIFIED_DAY = '2026-09-26';
+const verified = JSON.parse(fs.readFileSync(path.join(dataDir, 'verified.json'), 'utf8'));
+const records = JSON.parse(fs.readFileSync(path.join(dataDir, 'records.json'), 'utf8'));
+const certified = computeFacts(verified, records, CERTIFIED_DAY);
+const facts = loadWorkspace(dataDir);
 const failures = [];
 
 function check(name, ok, detail) {
@@ -30,16 +40,19 @@ for (const name of ASSISTANT_TOOL_NAMES) {
 
 const metrics = JSON.parse(toolResults.get_pipeline_metrics);
 const largest = metrics.largestOpenDeal || {};
-check('largest company', largest.company === 'NXP', JSON.stringify(largest.company));
-check('largest deal', largest.dealName === 'NXP - New Deal', JSON.stringify(largest.dealName));
-check('largest amount', largest.amount === 500000 && largest.amountLabel === '$500,000', JSON.stringify(largest.amount) + ' ' + largest.amountLabel);
-check('largest in open book', largest.inOpenBook === true, String(largest.inOpenBook));
-check('open count', metrics.openCount === 83, String(metrics.openCount));
-check('open amount', metrics.openAmount === 4736300 && metrics.openAmountLabel === '$4,736,300', metrics.openAmount + ' ' + metrics.openAmountLabel);
-check('weighted', metrics.weighted === 1212860 && metrics.weightedLabel === '$1,212,860', metrics.weighted + ' ' + metrics.weightedLabel);
-check('funnel', metrics.leads === 383 && metrics.mql === 279 && metrics.sql === 118, [metrics.leads, metrics.mql, metrics.sql].join('/'));
+const certifiedMetrics = JSON.parse(runAssistantTool('get_pipeline_metrics', {}, certified));
+const certifiedLargest = certifiedMetrics.largestOpenDeal || {};
+check('largest company', certifiedLargest.company === 'NXP', JSON.stringify(certifiedLargest.company));
+check('largest deal', certifiedLargest.dealName === 'NXP - New Deal', JSON.stringify(certifiedLargest.dealName));
+check('largest amount', certifiedLargest.amount === 500000 && certifiedLargest.amountLabel === '$500,000', JSON.stringify(certifiedLargest.amount) + ' ' + certifiedLargest.amountLabel);
+check('largest in open book', certifiedLargest.inOpenBook === true, String(certifiedLargest.inOpenBook));
+check('open count', certifiedMetrics.openCount === 83, String(certifiedMetrics.openCount));
+check('open amount', certifiedMetrics.openAmount === 4736300 && certifiedMetrics.openAmountLabel === '$4,736,300', certifiedMetrics.openAmount + ' ' + certifiedMetrics.openAmountLabel);
+check('weighted', certifiedMetrics.weighted === 1212860 && certifiedMetrics.weightedLabel === '$1,212,860', certifiedMetrics.weighted + ' ' + certifiedMetrics.weightedLabel);
+check('funnel', certifiedMetrics.leads === 383 && certifiedMetrics.mql === 279 && certifiedMetrics.sql === 118, [certifiedMetrics.leads, certifiedMetrics.mql, certifiedMetrics.sql].join('/'));
+check('live largest still NXP', largest.company === 'NXP' && largest.amount === 500000, JSON.stringify(largest));
+check('live open book unchanged', metrics.openCount === 83 && metrics.openAmount === 4736300 && metrics.weighted === 1212860, [metrics.openCount, metrics.openAmount, metrics.weighted].join('/'));
 check('collected timestamp', !!metrics.collectedAt && facts.context.includes('DATA COLLECTED:') && facts.context.includes(metrics.collectedAt) && String(metrics.collectedLabel).includes('Phoenix'), metrics.collectedLabel || 'missing');
-const dataDir = path.join(root, 'out', 'data');
 const revA = dataRevision(dataDir);
 const revB = dataRevision(dataDir);
 check('revision stable', revA === revB && revA.includes('records.json:'), revA.slice(0, 80));
@@ -56,13 +69,14 @@ const nxp = JSON.parse(runAssistantTool('lookup_deals', { query: 'NXP' }, facts)
 const nxpOpen = (nxp.deals || []).find(d => d.amount === 500000 && d.inOpenBook);
 check('nxp open lookup', !!nxpOpen && nxpOpen.company === 'NXP', nxpOpen ? nxpOpen.company : 'missing');
 
-const lines = facts.context.split('\n');
+const lines = certified.context.split('\n');
 const largestLine = lines.find(l => l.startsWith('LARGEST OPEN DEAL:'));
 check('context largest line', !!largestLine && largestLine.includes('NXP') && largestLine.includes('$500,000') && !/kidde/i.test(largestLine), largestLine || 'missing');
 const renewalLine = lines.find(l => l.includes('Renewal Agreement - 2027') && l.includes('$514,800'));
 check('context renewal label', !!renewalLine && renewalLine.includes('NOT IN THE OPEN BOOK (renewal)'), renewalLine || 'missing');
-check('context open total', facts.context.includes('OPEN PIPELINE: 83 deals, $4,736,300 open, $1,212,860 weighted.'), 'missing open pipeline line');
-check('context funnel', facts.context.includes('383 leads / 279 MQL / 118 SQL'), 'missing funnel line');
+check('context open total', certified.context.includes('OPEN PIPELINE: 83 deals, $4,736,300 open, $1,212,860 weighted.'), 'missing open pipeline line');
+check('context funnel', certified.context.includes('383 leads / 279 MQL / 118 SQL'), 'missing funnel line');
+check('live funnel line', facts.context.includes(metrics.leads + ' leads / ' + metrics.mql + ' MQL / ' + metrics.sql + ' SQL'), 'missing live funnel line');
 
 const openLines = lines.filter(l => l.startsWith('OPEN DEAL:') || l.startsWith('LARGEST OPEN DEAL:'));
 check('owner labels', openLines.every(l => !/owner Owner \d{5,}/.test(l) && !/owner \d{6,}/.test(l)), 'full owner id in an open-deal line');
@@ -93,7 +107,8 @@ const pyBook = JSON.parse(py);
 check('python count', pyBook.openCount === metrics.openCount, String(pyBook.openCount));
 check('python amount', pyBook.openAmount === metrics.openAmount, String(pyBook.openAmount));
 check('python weighted', pyBook.weighted === metrics.weighted, String(pyBook.weighted));
-check('python funnel', pyBook.leads === 383 && pyBook.mql === 279 && pyBook.sql === 118, [pyBook.leads, pyBook.mql, pyBook.sql].join('/'));
+check('python funnel', pyBook.leads === metrics.leads && pyBook.mql === metrics.mql && pyBook.sql === metrics.sql, [pyBook.leads, pyBook.mql, pyBook.sql].join('/') + ' vs ' + [metrics.leads, metrics.mql, metrics.sql].join('/'));
+check('certified day', certified.today === CERTIFIED_DAY, certified.today);
 check('python largest', pyBook.largest && pyBook.largest.company === 'NXP' && pyBook.largest.amount === 500000 && pyBook.largest.owner === largest.owner, JSON.stringify(pyBook.largest));
 check('python kidde', pyBook.kidde.length === 1 && pyBook.kidde[0].inOpenBook === false && pyBook.kidde[0].reason === 'renewal', JSON.stringify(pyBook.kidde));
 check('python date', pyBook.today === facts.today, pyBook.today + ' vs ' + facts.today);

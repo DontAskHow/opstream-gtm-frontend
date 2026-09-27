@@ -5,6 +5,12 @@
 const workspaceModel = {
   PHOENIX: 'America/Phoenix',
   QUIET_DAYS: 14,
+  // One formatter per shape. Constructing Intl.DateTimeFormat per date retains
+  // ICU data until the process is huge; the open-book walk hits this thousands of times.
+  fmt(name, locale, options) {
+    const cache=this._fmt||(this._fmt=Object.create(null));
+    return cache[name]||(cache[name]=new Intl.DateTimeFormat(locale, options));
+  },
   date(value) {
     const raw=String(value??'').trim();
     if(!raw)return null;
@@ -15,10 +21,10 @@ const workspaceModel = {
     return iso&&Number.isFinite(Date.parse(iso[1]))&&new Date(iso[1]+'T12:00:00Z').toISOString().startsWith(iso[1])?iso[1]:null;
   },
   phoenixToday(now=new Date()) {
-    return new Intl.DateTimeFormat('en-CA',{timeZone:this.PHOENIX,year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
+    return this.fmt('day','en-CA',{timeZone:this.PHOENIX,year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
   },
   phoenixHour(now=new Date()) {
-    return Number(new Intl.DateTimeFormat('en-US',{timeZone:this.PHOENIX,hour:'numeric',hourCycle:'h23'}).format(now));
+    return Number(this.fmt('hour','en-US',{timeZone:this.PHOENIX,hour:'numeric',hourCycle:'h23'}).format(now));
   },
   // Calendar date in Phoenix. A date-only string is kept as written so it is
   // not shifted into the previous day by a UTC conversion.
@@ -27,7 +33,7 @@ const workspaceModel = {
     const raw=String(value).trim();
     if(/^\d{4}-\d{2}-\d{2}$/.test(raw))return raw;
     const parsed=Date.parse(raw.length===16?raw+':00Z':raw);
-    if(Number.isFinite(parsed))return new Intl.DateTimeFormat('en-CA',{timeZone:this.PHOENIX,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(parsed));
+    if(Number.isFinite(parsed))return this.fmt('day','en-CA',{timeZone:this.PHOENIX,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(parsed));
     return this.date(raw);
   },
   addDays(iso,n) {
@@ -45,8 +51,8 @@ const workspaceModel = {
     const parsed=Date.parse(raw.length===16?raw+':00Z':raw);
     if(!Number.isFinite(parsed))return this.formatDate(raw);
     const when=new Date(parsed);
-    const date=new Intl.DateTimeFormat('en-US',{timeZone:this.PHOENIX,month:'short',day:'numeric',year:'numeric'}).format(when);
-    const time=new Intl.DateTimeFormat('en-US',{timeZone:this.PHOENIX,hour:'numeric',minute:'2-digit'}).format(when);
+    const date=this.fmt('stampDate','en-US',{timeZone:this.PHOENIX,month:'short',day:'numeric',year:'numeric'}).format(when);
+    const time=this.fmt('stampTime','en-US',{timeZone:this.PHOENIX,hour:'numeric',minute:'2-digit'}).format(when);
     return date+' · '+time+' Phoenix';
   },
   // CRM notes are stored as HTML. Show the words, never the tags or scripts.
@@ -64,7 +70,7 @@ const workspaceModel = {
     const raw=String(value??'').trim();if(!raw)return '';
     const parsed=Date.parse(raw.length===16?raw+':00Z':raw);
     if(!Number.isFinite(parsed))return '';
-    return new Intl.DateTimeFormat('en-US',{timeZone:this.PHOENIX,hour:'numeric',minute:'2-digit'}).format(new Date(parsed))+' Phoenix';
+    return this.fmt('stampTime','en-US',{timeZone:this.PHOENIX,hour:'numeric',minute:'2-digit'}).format(new Date(parsed))+' Phoenix';
   },
   greeting(now=new Date()) {
     const hour=this.phoenixHour(now);

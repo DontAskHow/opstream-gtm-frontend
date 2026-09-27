@@ -17,7 +17,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
-import { DATA_TOOL_SCHEMAS, collectedLabel, dataRevision, loadWorkspace, needsReload, runAssistantTool } from './workspace-facts.mjs';
+import { DATA_TOOL_SCHEMAS, collectedLabel, computeFacts, dataRevision, needsReload, runAssistantTool } from './workspace-facts.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
@@ -133,19 +133,29 @@ const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 let CTX = '';
 let FACTS = null;
 let revision = '';
+function clip(value, n) {
+  const raw = String(value ?? '');
+  return raw.length > n ? raw.slice(0, n) : raw;
+}
 function buildContext() {
   try {
+    // Parse each file once. The facts object keeps the open-book lines, not the records.
     const verified = readJson(path.join(dataDir, 'verified.json'));
     const records = readJson(path.join(dataDir, 'records.json'));
-    const trunc = (s, n) => String(s || '').replace(/\s+/g, ' ').slice(0, n);
-    FACTS = loadWorkspace(dataDir);
+    const trunc = (s, n) => clip(s, n).replace(/\s+/g, ' ');
+    FACTS = computeFacts(verified, records);
     const lines = [FACTS.context];
     // Call summaries + action items (NOT full transcripts: too large for per-question context).
     for (const c of records.companies || []) {
       for (const r of c.recordings || []) {
-        const summ = (r.summary || []).map(p => p.x || p).join(' ').slice(0, 500);
-        const acts = (r.actions || []).slice(0, 6).join('; ');
-        lines.push(`- CALL "${r.title}" (${String(r.date).slice(0, 10)}, ${c.name}): ${trunc(summ, 500)}${acts ? ' Action items: ' + trunc(acts, 300) : ''}`);
+        let summ = '';
+        for (const part of r.summary || []) {
+          if (summ.length >= 500) break;
+          const piece = String(part && part.x != null ? part.x : part);
+          summ += (summ ? ' ' : '') + piece.slice(0, 500 - summ.length);
+        }
+        const acts = (r.actions || []).slice(0, 6).map(a => clip(a, 80)).join('; ');
+        lines.push(`- CALL "${clip(r.title, 120)}" (${String(r.date).slice(0, 10)}, ${clip(c.name, 120)}): ${trunc(summ, 500)}${acts ? ' Action items: ' + trunc(acts, 300) : ''}`);
       }
     }
     for (const p of verified.presentation?.priorities || []) {
@@ -206,7 +216,8 @@ function ensureContext() {
   if (buildContext()) revision = next;
   return FACTS;
 }
-ensureContext();
+// Facts are built on the first ask, then kept until the watched files change.
+// Building them at import time is what exhausted a 1 GB instance.
 
 const SYSTEM = `You are the GTM Workspace assistant for Opstream — the marketing lead runs marketing and this workspace is their autonomous copilot.
 
@@ -571,15 +582,25 @@ const server = http.createServer((req, res) => {
   (async () => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/api/data-stamp' && req.method === 'GET') {
-      // generatedAt from records.json, re-read only when the file changes.
-      // The page uses this to reload after a newer collection lands on disk.
+      // generatedAt from the start of records.json. The page reloads when it changes.
+      // Do not parse the whole extract for this poll.
       let generatedAt = null;
       try {
         const file = path.join(dataDir, 'records.json');
         const st = fs.statSync(file);
         const key = st.mtimeMs + ':' + st.size;
         if (!serveStatic.stamp || serveStatic.stamp.key !== key) {
-          generatedAt = JSON.parse(fs.readFileSync(file, 'utf8')).generatedAt || null;
+          const fd = fs.openSync(file, 'r');
+          try {
+            const buf = Buffer.alloc(8192);
+            const n = fs.readSync(fd, buf, 0, buf.length, 0);
+            const head = buf.toString('utf8', 0, n);
+            const match = head.match(/"generatedAt"\s*:\s*"([^"]*)"/);
+            generatedAt = match ? (match[1] || null) : null;
+          } finally { fs.closeSync(fd); }
+          if (generatedAt == null) {
+            try { generatedAt = JSON.parse(fs.readFileSync(file, 'utf8')).generatedAt || null; } catch { generatedAt = null; }
+          }
           serveStatic.stamp = { key, generatedAt };
         } else generatedAt = serveStatic.stamp.generatedAt;
       } catch { generatedAt = null; }

@@ -118,14 +118,54 @@ export function loadWorkspace(dataDir) {
   return computeFacts(verified, records);
 }
 
+// One index for the whole extract. companyForOpportunity scans every company
+// for every deal; doing that here would walk the snapshot hundreds of times.
+function companyIndex(records) {
+  const companies = records?.companies || [];
+  const byDeal = new Map();
+  const byId = new Map();
+  const byName = new Map();
+  for (const company of companies) {
+    if (company && company.id != null && !byId.has(company.id)) byId.set(company.id, company);
+    if (company && company.name && !byName.has(company.name)) byName.set(company.name, company);
+    for (const deal of company?.deals || []) {
+      if (!deal || deal.id == null) continue;
+      let holders = byDeal.get(deal.id);
+      if (!holders) { holders = []; byDeal.set(deal.id, holders); }
+      holders.push(company);
+    }
+  }
+  return { byDeal, byId, byName };
+}
+
+function companyForIndexed(opportunity, index) {
+  if (!opportunity || !index) return null;
+  const holders = index.byDeal.get(opportunity.id) || [];
+  const named = holders.find(c => c.name === opportunity.name);
+  if (named) return named;
+  if (holders.length === 1) return holders[0];
+  const id = String(opportunity.companyId || '').replace(/^company:/, '');
+  return index.byId.get(id) || holders[0] || index.byName.get(opportunity.name) || null;
+}
+
 export function computeFacts(verified, records, today) {
   today = today || model.phoenixToday();
   const annotated = model.annotateOpportunities(verified?.opportunities || [], records);
   const pipe = model.pipelineTotals(annotated, today);
   const bounds = model.periodBounds('quarter', null, null, today);
   const funnel = model.funnel(verified?.leads || [], records, bounds.start, bounds.end);
+  const index = companyIndex(records);
+  const quietByCompany = new Map();
+  const quietFor = company => {
+    if (!company) return null;
+    const key = company.id != null ? company.id : company;
+    if (quietByCompany.has(key)) return quietByCompany.get(key);
+    const days = model.daysQuiet(company, today);
+    quietByCompany.set(key, days);
+    return days;
+  };
   const linked = annotated.map(o => {
-    const company = model.companyForOpportunity(o, records);
+    const company = companyForIndexed(o, index);
     return { o, company, rawOwner: o.owner || company?.owner || '' };
   });
   const ownerValues = [
@@ -139,7 +179,7 @@ export function computeFacts(verified, records, today) {
   const deals = linked.map(({ o, company, rawOwner }) => {
     const reason = exclusionReason(o, today);
     const info = infoFor(rawOwner);
-    const quiet = company ? model.daysQuiet(company, today) : null;
+    const quiet = quietFor(company);
     return {
       id: o.id,
       company: model.companyName(company?.name || o.name),
@@ -222,7 +262,7 @@ export function computeFacts(verified, records, today) {
       return (d.name || 'Untitled deal') + ' [' + tag + ', ' + stage + ', ' + amt + ', owner ' + who + ', close ' + (model.dateOnly(d.close) || 'not entered') + ']';
     });
     const contacts = (c.contacts || []).slice(0, 8).map(x => x.name + (x.title ? ' — ' + x.title : '') + (x.email ? ' <' + x.email + '>' : '')).join('; ');
-    const quiet = model.daysQuiet(c, today);
+    const quiet = quietFor(c);
     const owner = infoFor(c.owner).label;
     lines.push('- ACCOUNT ' + model.companyName(c.name) + ' (id ' + c.id + '): owner ' + owner + '; ' + [c.industry, c.domain].filter(Boolean).join(', ') + '. Deals: ' + (dealBits.join('; ') || 'none') + '. Quiet days: ' + (quiet == null ? 'n/a' : quiet) + '. Contacts: ' + (contacts || 'none') + '. Last contact: ' + (c.lastContact || 'n/a') + '.');
   }
