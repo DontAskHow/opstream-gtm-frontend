@@ -138,6 +138,10 @@ async function publicRun(width, tag) {
   const { page, errors } = await openPage(context, width);
   const pressed = await page.getByRole('button', { name: 'Marketing', exact: true }).getAttribute('aria-pressed');
   check(tag + ' marketing is the home view', pressed === 'true');
+  const theme = await page.evaluate(() => { const cs = getComputedStyle(document.documentElement); return { accent: cs.getPropertyValue('--color-accent').trim(), bg: cs.getPropertyValue('--color-bg').trim(), banner: getComputedStyle(document.getElementById('topBanner')).backgroundColor, text: document.getElementById('topBanner').textContent }; });
+  check(tag + ' uses the v10 theme', theme.accent.toLowerCase() === '#1ab396' && theme.bg.toLowerCase() === '#ffffff' && theme.banner === 'rgb(20, 62, 50)' && /collected /.test(theme.text), JSON.stringify(theme));
+  const lemlist = await page.locator('#events-shows').innerText();
+  check(tag + ' LemList stats state is said, not omitted', /LemList stats|sent and reply counts|stats not available on this API key/i.test(lemlist));
   const cards = await page.locator('section[aria-label="Priorities"] .priority-card').allInnerTexts();
   check(tag + ' priorities come from the operator', cards.length === hollie.marketingPriorities.length && cards.length >= 3,
     cards.length + ' vs ' + hollie.marketingPriorities.length);
@@ -309,6 +313,9 @@ async function checkAccounts(page) {
   check('meeting owners are not duplicated', firsts.length === new Set(firsts).size, options.join(', '));
   await goView(page, 'Pipeline');
   const pipe = await page.locator('main').innerText();
+  const rule = (pipe.match(/Open pipeline is the [^\n]+/) || [''])[0];
+  check('pipeline states its rule', new RegExp('Open pipeline is the ' + facts.openCount + ' active new-business rows').test(rule) && /Not included: \d+ renewals and customer expansions \(\$[\d.]+[KM]/.test(rule) && /\d+ On Hold/.test(rule), rule);
+  check('accounts state the same rule', /Open pipeline is the \d+ active new-business rows/.test(text));
   check('renewals are collapsed', /Show the \d+ renewal rows/.test(pipe) && !/No company linked|Scott McKenna/.test(pipe));
 }
 
