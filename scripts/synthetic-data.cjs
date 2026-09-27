@@ -27,7 +27,7 @@ function extraAccount(spec){
 const alex=owners[0].name;
 extraAccount({id:'summit',name:'Summit Peak',owner:alex,stage:'Decision',dealName:'Summit Peak expansion',amount:500000,probability:50,close:'2026-12-01',lastContact:'2026-04-20',daysInStage:337});
 extraAccount({id:'harbor',name:'Harbor and Co',owner:alex,stage:'Discovery/RFP received',dealName:'Harbor and Co pilot',amount:350000,probability:40,close:'2026-12-01',lastContact:'2026-09-20',daysInStage:12});
-extraAccount({id:'nostage',name:'Blank Stage Co',owner:alex,stage:'',dealName:'Blank Stage Co pilot',amount:120000,probability:null,close:'2026-12-15',lastContact:'2026-09-20',daysInStage:null});
+extraAccount({id:'nostage',name:'Blank Stage Co',owner:'Owner 8675309',stage:'',dealName:'Blank Stage Co pilot',amount:120000,probability:null,close:'2026-12-15',lastContact:'2026-09-20',daysInStage:null});
 extraAccount({id:'past',name:'Past Close Co',owner:alex,stage:'Discovery/RFP received',dealName:'Past Close Co pilot',amount:200000,probability:20,close:'2026-01-15',lastContact:'2026-01-10',daysInStage:400});
 extraAccount({id:'renew',name:'Renewal Sample',owner:alex,stage:'Renewal',dealName:'Renewal Sample renewal',amount:80000,probability:80,close:'2026-12-01',lastContact:'2026-09-01',daysInStage:30});
 extraAccount({id:'agree',name:'Current Agreement Sample',owner:alex,stage:'Current Agreement',dealName:'Current Agreement Sample agreement',amount:90000,probability:90,close:'2026-12-01',lastContact:'2026-09-01',daysInStage:40});

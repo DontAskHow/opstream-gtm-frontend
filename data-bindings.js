@@ -152,12 +152,26 @@ Component.prototype.renderVals = function () {
   if(s.perf==='web')v.scopeNote='Website: '+webRange+' · www.opstream.ai only. AI: '+f.number(web.aiCount)+' completed monitored answers through '+f.date(web.aiEnd)+'. No period filter applies.';
   else if(s.perf==='spend')v.scopeNote='Spend: Jan – Dec 2026, as entered in the workbook. Campaign counts use the '+v.collectedShort+' collection; advertising dates are shown per source.';
   else v.scopeNote='The period '+period+' applies to new leads, meetings booked and meetings held. Open pipeline is the current book. All dates are America/Phoenix.';
-  const query=(s.search||'').trim().toLowerCase(),owner=s.owner||'Everyone';
-  const selected=d.opportunities.filter(o=>workspaceModel.isOpenPipeline(o,workspaceModel.phoenixToday())&&(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage].join(' ').toLowerCase().includes(query)));
-  selected.sort((a,b)=>workspaceModel.compare(a,b,s.sort||'weighted'));
-  v.deals=selected.map(o=>({company:o.name,owner:o.owner||'—',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note:o.note,go:()=>{const c=this._verifiedAccount(o.companyId)||this._verifiedAccount(o.name);if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}}));
-  v.dealsCount=selected.length+' of '+pipe.count+' open opportunities';
-  const leadRows=d.leads.filter(r=>(owner==='Everyone'||r.owner===owner)&&(!query||[r.name,r.source,r.note].join(' ').toLowerCase().includes(query))&&(s.contributor?inRange(r[s.contributor]):!!r.lead)).sort((a,b)=>workspaceModel.compareLeads(a,b));
+  const query=(s.search||'').trim().toLowerCase(),owner=s.owner||'Everyone',todayPhx=workspaceModel.phoenixToday();
+  const accountRows=d.opportunities.map(o=>{
+    const company=this._verifiedAccount(o.companyId)||this._verifiedAccount(o.name);
+    const last=company?workspaceModel.lastEngagement(company,todayPhx):null;
+    return {...o,owner:workspaceModel.displayOwner(o.owner||company?.owner),lastEngagement:last,companyRecord:company};
+  }).filter(o=>workspaceModel.listStatus(o,todayPhx)!=='excluded'&&(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage,o.owner].join(' ').toLowerCase().includes(query)));
+  const deduped=new Map();
+  for(const o of accountRows){
+    const key=String(o.companyId||o.name).replace(/^company:/,'');
+    const prev=deduped.get(key);
+    if(!prev){deduped.set(key,o);continue;}
+    const better=workspaceModel.listStatus(o,todayPhx)!=='past'&&workspaceModel.listStatus(prev,todayPhx)==='past'
+      ||(workspaceModel.listStatus(o,todayPhx)===workspaceModel.listStatus(prev,todayPhx)&&(Number(o.amount)||0)>(Number(prev.amount)||0));
+    if(better)deduped.set(key,o);
+  }
+  const selected=[...deduped.values()].sort((a,b)=>workspaceModel.compare(a,b,s.sort||'amount',todayPhx));
+  v.ownerOptions=[...new Set(accountRows.map(o=>o.owner).filter(name=>name&&name!=='Unassigned'))].sort().map(name=>({name}));
+  v.deals=selected.map(o=>({company:o.name,owner:o.owner,stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note:o.note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}}));
+  v.dealsCount=selected.length+' accounts · '+pipe.count+' open deals';
+  const leadRows=d.leads.map(r=>({...r,owner:workspaceModel.displayOwner(r.owner)})).filter(r=>(owner==='Everyone'||r.owner===owner)&&(!query||[r.name,r.source,r.note].join(' ').toLowerCase().includes(query))&&(s.contributor?inRange(r[s.contributor]):!!r.lead)).sort((a,b)=>workspaceModel.compareLeads(a,b));
   v.leads=leadRows.map(r=>({company:r.name,source:r.source,owner:r.owner||'—',date:f.date(r.lead),note:r.note,mql:f.date(r.mql),sql:f.date(r.sql)}));
   v.leadsEmpty=leadRows.length===0;v.dealsEmpty=selected.length===0;
   v.leadsCount=leadRows.length+' tracker records'+(s.contributor?' · '+s.contributor.toUpperCase()+' date '+period:' with a lead date');
@@ -167,7 +181,7 @@ Component.prototype.renderVals = function () {
   else if(s.accounts==='deals')v.exportAccounts=()=>this.csv('opportunities.csv',['Company','Owner','Stage','ARR','Probability','Weighted ARR','Close','Days in stage','Last note'],selected.map(o=>[o.name,o.owner,o.stage,o.amount,o.probability,workspaceModel.weighted(o),workspaceModel.closeLabel(o.close),o.days,o.note]));
   v.exportSources=()=>this.csv('leads-by-source.csv',['Source','This week','6-week average','Quarter to date','Quarter cost per lead'],(v.marketingSources||[]).map(r=>[r.channel,r.week,r.six,r.quarter,r.cpl]));
   v.exportSpend=()=>this.csv('spend-2026.csv',['Month','Planned','Recorded','Note'],d.report.spend.months.map(m=>[m.month,m.planned,m.actual,m.partial?'Partly entered':m.actual==null?'Not entered':'']));
-  v.movements=v.movements.map(shown=>{const o=d.opportunities.find(o=>o.name===shown.name);return o?{name:o.name,meta:o.owner+' · '+o.stage,change:o.note,go:()=>this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name)}:shown;});
+  v.movements=v.movements.map(shown=>{const o=d.opportunities.find(o=>o.name===shown.name);return o?{name:o.name,meta:workspaceModel.displayOwner(o.owner)+' · '+workspaceModel.stageDisplay(o.stage),change:o.note,go:()=>this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name)}:shown;});
   v.checkUpdates=()=>{this.setState({checking:true});return this._loadVerified();};v.checkNote=s.verifiedError||('Verified collection · '+v.collectedShort+(s.checkedAt?' · last checked '+s.checkedAt:''));
   v.coverageNote=s.records.companies.length+' account pages; '+f.number(s.records.coverage.contacts)+' linked contacts, '+f.number(s.records.coverage.notes)+' notes, '+s.records.coverage.fathomTotal+' unique recordings and '+s.records.coverage.transcripts+' complete transcripts. The opportunity list covers companies with open deals in the CRM extract; the Lead Tracker holds '+d.leads.length+' HubSpot contact rows with lead, MQL and SQL dates where recorded.';
   if(v.readingRules[4])v.readingRules[4].text='The workspace uses the retained '+v.collectedShort+' collection. Website reports cover '+webRange+'.';

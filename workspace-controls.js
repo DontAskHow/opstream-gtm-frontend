@@ -6,6 +6,15 @@ Component.prototype._rememberPriority=function(id,patch){
   this.setState({workspacePreferences:{...prefs,...patch,priorityContext:{...prefs.priorityContext,[id]:{title:p.title,accountIds:p.accountIds,refs:p.refs,reviewId:this.state.verified.presentation.priorityReview.id}}}});
 };
 Component.prototype._ratePriority=function(id,value){const prefs=this._workspacePreferences(),ratings={...prefs.ratings};if(value)ratings[id]=value;else delete ratings[id];this._rememberPriority(id,{ratings});};
+Component.prototype._priorityNotes=function(){
+  if(this.state.priorityLocal)return this.state.priorityLocal;
+  try{return JSON.parse(localStorage.getItem('opstream-priority-local')||'{}')||{};}catch{return {};}
+};
+Component.prototype._priorityPatch=function(id,patch){
+  const all={...this._priorityNotes(),[id]:{...(this._priorityNotes()[id]||{}),...patch}};
+  try{localStorage.setItem('opstream-priority-local',JSON.stringify(all));}catch{}
+  this.setState({priorityLocal:all});
+};
 Component.prototype._commentEditor=function(id){return {text:'',tags:[],...this.state.commentEditors?.[id]};};
 Component.prototype._editComment=function(id,patch){this.setState({commentEditors:{...this.state.commentEditors,[id]:{...this._commentEditor(id),...patch}}});};
 Component.prototype._draftModeKey=function(){
@@ -16,11 +25,11 @@ Component.prototype.renderVals=function(){
   const v=workspaceRender.call(this),s=this.state,d=s.verified;
   v.storageError=s.storageError||'';v.storageFailed=!!s.storageError;v.canRetryStorage=!this._showcaseReadFailed;v.retryBrowserSave=()=>this._saveBrowserState(true);
   if(!d)return v;
-  const prefs=this._workspacePreferences(),through=d.presentation.priorityReview.asOf;
+  const prefs=this._workspacePreferences();
   const colleagues=d.meta.owners.filter(p=>!p.former&&/@example\.com$/i.test(p.email||'')).map(p=>({id:p.id,name:p.name}));
   const colleagueNames=new Map(colleagues.map(p=>[p.id,p.name]));
   const raw=d.presentation.priorities.map((p,i)=>{
-    const context=workspaceModel.ownerContext(p,s.records,through),rating=prefs.ratings[p.id];
+    const context=workspaceModel.ownerContext(p,s.records,workspaceModel.phoenixToday()),rating=prefs.ratings[p.id];
     const editor=this._commentEditor(p.id),comments=Array.isArray(prefs.comments[p.id])?prefs.comments[p.id]:[];
     const contextRefs=[...new Set([...context.ownerRefs,...context.interaction?.refs||[]])];
     return {...p,n:String(i+1),owner:context.owner,ownerLabel:context.account?'Account owner':'Responsible owner',
@@ -54,7 +63,36 @@ Component.prototype.renderVals=function(){
   v.prioritiesEmpty=v.priorities.length===0;v.goBriefing=this.go('briefing');
   v.priorityIntro=v.priorities.length?(v.priorities.length+' priorities from the collected record \u00b7 collected '+v.collectedShort+'.'):'No ranked priorities in this collection.';
   v.reviewScope=d.presentation.priorityReview.scope;
-  v.accountOrderNote=s.accounts==='follow'?'Order: saved follow-up review · personal priority ratings do not change this list.':s.accounts==='leads'?'Order: newest lead date first · missing lead dates last.':'Order: '+({weighted:'Weighted ARR — highest first (amount × probability)',close:'Close date — earliest first',days:'Days in stage — highest first',name:'Account name — A to Z'}[s.sort||'weighted']);
+  v.accountOrderNote=s.accounts==='follow'?'Order: saved follow-up review · personal priority ratings do not change this list.':s.accounts==='leads'?'Order: newest lead date first · missing lead dates last.':'Order: one row per account. '+({amount:'Largest amount first. HubSpot probability is not used.',close:'Earliest close date first.',interaction:'Most recent past interaction first. Accounts with no interaction date are last.',name:'Account name, A to Z.'}[s.sort||'amount']||'Largest amount first.')+' Deals with a past close date are listed after current ones.';
+  const localNotes=this._priorityNotes();
+  const companies=(s.records&&s.records.companies)||[];
+  const findCompany=item=>companies.find(c=>c.id===item.companyId||c.name===item.company||(item.context||'').startsWith(c.name));
+  const annotate=item=>{
+    if(!item||!item.id)return item;
+    const company=findCompany(item);
+    const saved=localNotes[item.id]||{};
+    const last=company?workspaceModel.lastEngagement(company):null;
+    item.owner=workspaceModel.displayOwner(company&&company.owner);
+    item.lastInteraction=last?workspaceModel.formatDate(last):'—';
+    item.important=!!saved.important;
+    item.importantLabel=saved.important?'Important':'Mark important';
+    item.commentsOpen=s.priorityNoteId===item.id;
+    item.savedComments=(saved.comments||[]).map(c=>({text:c.text,when:c.when,tags:(c.tags||[]).join(' · ')}));
+    item.commentLabel=(saved.comments||[]).length?'Comments ('+saved.comments.length+')':'Comment';
+    item.commentText=s.priorityNoteId===item.id?(s.priorityDraft||''):(saved.draft||'');
+    item.tagText=s.priorityNoteId===item.id?(s.priorityTagDraft||''):'';
+    item.commentEmpty=!String(s.priorityNoteId===item.id?s.priorityDraft:'').trim();
+    item.tags=(saved.tags||[]).map(name=>({name,remove:()=>this._priorityPatch(item.id,{tags:(saved.tags||[]).filter(t=>t!==name)})}));
+    item.importantGo=()=>this._priorityPatch(item.id,{important:!saved.important});
+    item.commentGo=()=>this.setState({priorityNoteId:s.priorityNoteId===item.id?null:item.id,priorityDraft:saved.draft||'',priorityTagDraft:''});
+    item.editComment=e=>this.setState({priorityDraft:e.target.value});
+    item.editTag=e=>this.setState({priorityTagDraft:e.target.value});
+    item.addTag=()=>{const tag=String(this.state.priorityTagDraft||'').trim();if(!tag)return;this._priorityPatch(item.id,{tags:[...new Set([...(saved.tags||[]),tag])]});this.setState({priorityTagDraft:''});};
+    item.saveComment=()=>{const text=String(this.state.priorityDraft||'').trim();if(!text)return;const when=workspaceModel.formatDateTime(new Date().toISOString());const comments=[...(saved.comments||[]),{text,tags:saved.tags||[],when}];this._priorityPatch(item.id,{comments,draft:''});this.setState({priorityDraft:''});};
+    return item;
+  };
+  (v.hollieQueue||[]).forEach(annotate);
+  (v.hollieQueueGroups||[]).forEach(g=>{if(Array.isArray(g.items))g.items.sort((a,b)=>(b.important?1:0)-(a.important?1:0));});
   v.showAccountSort=s.accounts==='deals';
   const query=(s.search||'').trim().toLowerCase(),owner=s.owner||'Everyone';
   v.followUps=v.followUps.filter(f=>(owner==='Everyone'||f.meta.startsWith(owner+' ·'))&&(!query||[f.name,f.meta,f.reason,f.next,f.uncertainty].join(' ').toLowerCase().includes(query)));

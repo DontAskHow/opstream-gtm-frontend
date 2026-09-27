@@ -296,7 +296,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                           <div class="priority-number">{{ a.n }}</div>
                           <div class="priority-content">
                             <h3>{{ a.title }} <sc-if value="{{ a.isNew }}"><span style="font-size:11px;font-weight:700;color:var(--color-accent-700);text-transform:uppercase;letter-spacing:.06em"> · new</span></sc-if><sc-if value="{{ a.needsDecision }}"><span style="font-size:11px;font-weight:700;color:var(--color-accent-700);text-transform:uppercase;letter-spacing:.06em"> · needs your decision</span></sc-if></h3>
-                            <div class="priority-context"><span>{{ a.kind }}</span><sc-if value="{{ a.context }}"><span>{{ a.context }}</span></sc-if></div>
+                            <div class="priority-context"><span>{{ a.kind }}</span><sc-if value="{{ a.context }}"><span>{{ a.context }}</span></sc-if><span>Owner: {{ a.owner }}</span><span>Last interaction: {{ a.lastInteraction }}</span></div>
                             <p>{{ a.why }}</p>
                             <p class="priority-caveat"><strong>Confidence:</strong> {{ a.confidenceText }}</p>
                             <div class="priority-actions">
@@ -305,7 +305,22 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                               <button onClick="{{ a.dismissGo }}" class="btn btn-secondary">{{ a.dismissLabel }}</button>
                               <sc-if value="{{ a.hasAccount }}"><button onClick="{{ a.accountGo }}" class="text-control">Open account</button></sc-if>
                               <sc-for list="{{ a.evidenceLinks }}" as="el"><button onClick="{{ el.go }}" class="text-control">{{ el.label }}</button></sc-for>
+                              <button onClick="{{ a.importantGo }}" class="btn btn-secondary">{{ a.importantLabel }}</button>
+                              <button onClick="{{ a.commentGo }}" class="btn btn-secondary">{{ a.commentLabel }}</button>
                             </div>
+                            <sc-if value="{{ a.commentsOpen }}">
+                              <section class="priority-comments" aria-label="Comments">
+                                <sc-for list="{{ a.savedComments }}" as="c"><div class="priority-comment"><div class="comment-meta"><span>{{ c.when }}</span><sc-if value="{{ c.tags }}"><span class="comment-tags">{{ c.tags }}</span></sc-if></div><p class="comment-text">{{ c.text }}</p></div></sc-for>
+                                <textarea class="input" rows="2" maxlength="2000" placeholder="Comment saved in this browser" value="{{ a.commentText }}" onInput="{{ a.editComment }}"></textarea>
+                                <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+                                  <input class="input" placeholder="Add a tag" value="{{ a.tagText }}" onInput="{{ a.editTag }}" style="max-width:180px;min-height:32px">
+                                  <button onClick="{{ a.addTag }}" class="btn btn-secondary">Add tag</button>
+                                  <sc-for list="{{ a.tags }}" as="tag"><button onClick="{{ tag.remove }}" class="btn btn-ghost" style="font-size:12px">{{ tag.name }} ×</button></sc-for>
+                                </div>
+                                <div class="priority-actions"><button onClick="{{ a.saveComment }}" class="btn btn-primary" disabled="{{ a.commentEmpty }}">Save comment</button></div>
+                                <p class="priority-caveat">Comments, tags and the important mark stay in this browser. Nothing is sent.</p>
+                              </section>
+                            </sc-if>
                           </div>
                         </article>
                         </sc-for>
@@ -590,16 +605,16 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
           <input class="input" placeholder="Search companies and notes" value="{{ searchValue }}" onChange="{{ setSearch }}" style="max-width:320px;min-height:34px">
           <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ ownerValue }}" onChange="{{ setOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><sc-for list="{{ ownerOptions }}" as="o"><option value="{{ o.name }}">{{ o.name }}</option></sc-for></select></label>
-          <sc-if value="{{ showAccountSort }}"><label style="display:flex;align-items:center;gap:8px;font-size:14px">Sort<select class="input" value="{{ sortValue }}" onChange="{{ setSort }}" style="width:auto;max-width:100%;min-height:34px"><option value="weighted">Weighted ARR — highest first</option><option value="close">Close date — earliest first</option><option value="days">Days in stage — highest first</option><option value="name">Account name — A to Z</option></select></label></sc-if>
+          <sc-if value="{{ showAccountSort }}"><label style="display:flex;align-items:center;gap:8px;font-size:14px">Sort<select class="input" value="{{ sortValue }}" onChange="{{ setSort }}" style="width:auto;max-width:100%;min-height:34px"><option value="amount">Amount — largest first</option><option value="close">Close date — earliest first</option><option value="interaction">Last interaction — newest first</option><option value="name">Account name — A to Z</option></select></label></sc-if>
           <div style="margin-left:auto;display:flex;gap:8px"><button onClick="{{ exportAccounts }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ exportLabel }}</button></div>
         </div>
 
         <p class="account-order-note">{{ accountOrderNote }}</p><sc-if value="{{ accountsDeals }}" hint-placeholder-val="{{ true }}">
           <div style="overflow-x:auto;overflow-y:hidden"><table class="table" style="font-size:14px;min-width:760px">
-            <thead><tr><th>Company</th><th>Owner</th><th>Stage</th><th style="text-align:right">ARR</th><th style="text-align:right">Prob.</th><th style="text-align:right">Weighted ARR</th><th>Close</th><th style="text-align:right">Days in stage</th><th>Last note</th></tr></thead>
+            <thead><tr><th>Company</th><th>Owner</th><th>Stage</th><th style="text-align:right">ARR</th><th style="text-align:right">Prob.</th><th style="text-align:right">Weighted ARR</th><th>Close</th><th>Last interaction</th><th style="text-align:right">Days in stage</th><th>Last note</th></tr></thead>
             <tbody><sc-for list="{{ deals }}" as="d" hint-placeholder-count="10">
               <tr onClick="{{ d.go }}" style="cursor:pointer">
-                <td style="font-weight:600">{{ d.company }}</td><td>{{ d.owner }}</td><td>{{ d.stage }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.arr }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.prob }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.weighted }}</td><td style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ d.close }}</td><td style="text-align:right;font-variant-numeric:tabular-nums;color:{{ d.daysColor }}">{{ d.days }}</td><td style="font-size:13px;color:var(--color-neutral-800);max-width:300px">{{ d.note }}</td>
+                <td style="font-weight:600">{{ d.company }}</td><td>{{ d.owner }}</td><td>{{ d.stage }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.arr }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.prob }}</td><td style="text-align:right;font-variant-numeric:tabular-nums">{{ d.weighted }}</td><td style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ d.close }}</td><td style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ d.lastInteraction }}</td><td style="text-align:right;font-variant-numeric:tabular-nums;color:{{ d.daysColor }}">{{ d.days }}</td><td style="font-size:13px;color:var(--color-neutral-800);max-width:300px">{{ d.note }}</td>
               </tr>
             </sc-for></tbody>
           </table></div>
@@ -951,7 +966,7 @@ class Component extends DCLogic {
     const followRaw = [];
     const leadsRaw = this._verifiedLeadRows();
     const ownerOptions=[...new Set([...dealsRaw.map(d=>d[1]),...leadsRaw.map(l=>l[2])].filter(o=>o&&o!=='—'))].sort().map(name=>({name}));
-    const meetingOwnerOptions=[...new Set([...(st.records?.companies||[]).flatMap(c=>[c.owner,...(c.recordings||[]).map(r=>r.recordedBy)])].filter(Boolean))].sort().map(name=>({name}));
+    const meetingOwnerOptions=[...new Set([...(st.records?.companies||[]).flatMap(c=>[workspaceModel.displayOwner(c.owner),...(c.recordings||[]).map(r=>workspaceModel.displayOwner(r.recordedBy))])].filter(n=>n&&n!=='Unassigned'&&n!=='Owner name not connected'))].sort().map(name=>({name}));
     const peopleNote=ownerOptions.length?('Owners in the collected record: '+ownerOptions.map(o=>o.name).join(' · ')+'. The owner filters use these values.'):'Owner information was not in the collected record.';
     const savedRaw = [];
     const suggestedRaw = [];
@@ -1022,13 +1037,13 @@ class Component extends DCLogic {
     const tlShown = st.timelineAll ? timeline : timeline.slice(0, 30);
     const acct = {
       name: co.name, description: (co.description || '').length > 320 ? co.description.slice(0, 300).replace(/[,;]\s*\S*$/, '') + '…' : (co.description || ''), hasDescription: !!co.description,
-      subtitle: [co.domain, co.owner ? 'Owner ' + co.owner : null, co.industry ? co.industry.toLowerCase().replace(/_/g, ' ') : null, co.employees ? co.employees.toLocaleString('en-US') + ' employees' : null, [co.city, co.country].filter(Boolean).join(', ') || null, co.lifecycle ? 'CRM: ' + co.lifecycle : null].filter(Boolean).join(' · '),
+      subtitle: [co.domain, co.owner ? workspaceModel.displayOwner(co.owner) : null, co.industry ? co.industry.toLowerCase().replace(/_/g, ' ') : null, co.employees ? co.employees.toLocaleString('en-US') + ' employees' : null, [co.city, co.country].filter(Boolean).join(', ') || null, co.lifecycle ? 'CRM: ' + co.lifecycle : null].filter(Boolean).join(' · '),
       hasReview: !!review, noReview: !review && !!st.records, reason: review ? review[2] : '', next: review ? review[3] : '', uncertainty: review ? review[4] : '',
       draftLabel: review ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: review ? () => { this.setState({ screen: 'drafts', draft: review[5] }); window.scrollTo(0, 0); } : () => { const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + co.name, company: co.name, text: '', rationale: openDeal ? openDeal.name + ' · ' + openDeal.stageLabel + ' · ' + money(openDeal.amount) : '', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: co.contacts.slice(0, 2).map(c => c.name).join(', '), saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
       timeline: tlShown.map(t => ({ ...t, date: fmtD(t.date) })), timelineNote: timeline.length + ' dated items · notes, calls, recordings, calendar, stage and amount changes, open tasks', hasMoreTimeline: timeline.length > tlShown.length, moreTimelineLabel: 'Show all ' + timeline.length, showAllTimeline: () => this.setState({ timelineAll: true }),
       hasRelated: !!(co.related && co.related.length), relatedNote: co.related && co.related.length ? 'Includes ' + co.related.length + ' related CRM company record' + (co.related.length > 1 ? 's' : '') + ' (' + co.related.map(r => r.name).join(', ') + ') whose contacts, meetings and emails are merged here. Records are kept separate in the CRM.' : '',
       emailNote: co.emails ? co.emails.count + ' CRM emails on file' + (co.emails.latest ? ', latest ' + fmtD(String(co.emails.latest).slice(0, 10)) : '') + '. Email bodies are not shown in this workspace.' : 'No CRM emails on file for this company.',
-      deals: co.deals.map(d => { const sh = sheetFor(co.name); return { name: d.name, line: 'CRM: ' + d.stageLabel + ' · ' + money(d.amount) + (d.currency && d.currency !== 'USD' ? ' ' + d.currency : '') + (d.probability !== null ? ' · ' + d.probability + '%' : '') + ' · close ' + fmtD(d.close) + (d.owner ? ' · ' + d.owner : ''), sheet: sh ? 'Owner sheet: ' + sh[2] + ' · $' + sh[3].toLocaleString('en-US') + ' · ' + sh[4] + '% · ' + sh[5] + ' · ' + (sh[6] ?? '—') + ' days in stage' : 'Not on an owner prep sheet', go: ev('deal:' + d.id) }; }),
+      deals: co.deals.map(d => { const sh = sheetFor(co.name); return { name: d.name, line: 'CRM: ' + (d.stageLabel || 'No stage') + ' · ' + money(d.amount) + (d.currency && d.currency !== 'USD' ? ' ' + d.currency : '') + (d.probability !== null ? ' · ' + d.probability + '%' : '') + ' · close ' + fmtD(d.close) + ' · ' + workspaceModel.displayOwner(d.owner), sheet: sh ? 'Owner sheet: ' + sh[2] + ' · $' + sh[3].toLocaleString('en-US') + ' · ' + sh[4] + '% · ' + sh[5] + ' · ' + (sh[6] ?? '—') + ' days in stage' : 'Not on an owner prep sheet', go: ev('deal:' + d.id) }; }),
       hasDealReview: !!(openDeal && openDeal.review), dealReview: openDeal && openDeal.review ? openDeal.review.flatMap(r => [...r.supporting.map(x => ({ kind: 'Supports', text: x })), ...r.concerns.map(x => ({ kind: 'Caveat', text: x }))]).filter((x, i, arr) => arr.findIndex(y => y.text === x.text) === i) : [], dealReviewNote: openDeal && openDeal.review ? 'The review cites ' + openDeal.review.reduce((n, r) => n + r.refs, 0) + ' evidence records by its own ids; those ids are not part of the collected snapshot, so they cannot be opened here.' : '',
       hasCriteria: !!(openDeal && (openDeal.successCriteria || openDeal.decisionMakers)), criteria: (openDeal || {}).successCriteria || 'Not recorded', decisionMakers: (openDeal || {}).decisionMakers || 'Not recorded', context: openDeal ? [openDeal.erp ? 'ERP: ' + openDeal.erp : null, openDeal.competitors ? 'Also considering: ' + openDeal.competitors : null, openDeal.champion ? 'Champion: ' + openDeal.champion : null, openDeal.segment].filter(Boolean).join(' · ') : '',
       peopleCount: co.contacts.length + ' in CRM', hasMorePeople: co.contacts.length > (st.peopleAll ? 0 : 8) && !st.peopleAll, morePeopleLabel: 'Show all ' + co.contacts.length, showAllPeople: () => this.setState({ peopleAll: true }), people: (st.peopleAll ? co.contacts : co.contacts.slice(0, 8)).map(c => ({ name: c.name, line: [c.title, c.email, c.lastContacted ? 'last contacted ' + fmtD(c.lastContacted) : null].filter(Boolean).join(' · '), go: ev('contact:' + co.id + ':' + (c.email || c.name)) })),
@@ -1116,7 +1131,7 @@ class Component extends DCLogic {
       const pm = q.kind === 'followup_draft' ? ['Open draft', seedDraft(q)] : q.kind === 'stale_deal' ? ['Draft nudge', nudgeDraft(q)] : q.kind === 'unworked_lead' ? ['Review leads', goLeads] : q.kind === 'sheet_review' ? (q.companyId ? ['Review in account', goCo(q.companyId)] : ['Review deals', goDeals]) : q.kind === 'crm_update' ? ['Review deals', goDeals] : ['Open meetings', goMeetings];
       const confirmGo = (action, fn) => () => { const key = q.id + ':' + action; if (confirmKey === key) { this.setState({ confirmQueue: null }); fn(); } else { this.setState({ confirmQueue: key }); setTimeout(() => { if (this.state.confirmQueue === key) this.setState({ confirmQueue: null }); }, 6000); } };
       return {
-        n: q.n || (i + 1), title: q.title, isNew: !!q.isNew, needsDecision: !!q.needsDecision,
+        id: q.id, companyId: q.companyId, n: q.n || (i + 1), title: q.title, isNew: !!q.isNew, needsDecision: !!q.needsDecision,
         kind: kindLabel[q.kind] || q.kind,
         goal: q.goal || 'pipeline',
         context: [q.company, (q.deal && q.deal !== q.company ? q.deal : null), q.stage].filter(Boolean).join(' · '),
@@ -1128,6 +1143,8 @@ class Component extends DCLogic {
         doneLabel: confirmKey === q.id + ':done' ? 'Confirm done' : 'Done',
         doneGo: confirmGo('done', () => this.hollieFeedback(q.id, 'done')),
         hasAccount: !!q.companyId && q.kind !== 'sheet_review', accountGo: q.companyId ? goCo(q.companyId) : null,
+        owner: '—', lastInteraction: '—', importantLabel: 'Mark important', commentLabel: 'Comment', commentsOpen: false, savedComments: [], tags: [], commentText: '', tagText: '', commentEmpty: true,
+        importantGo: () => {}, commentGo: () => {}, editComment: () => {}, editTag: () => {}, addTag: () => {}, saveComment: () => {},
         evidenceLinks: dedupeKeys(q.drawerKeys).slice(0, 3).map(k => ({ label: drawerLabel(k), go: ev(k) })),
       };
     }) : [];
@@ -1286,9 +1303,9 @@ class Component extends DCLogic {
       webWeeks: webWeeksRaw.map(([label, v]) => ({ label, title: 'Week of ' + label + ': ' + v.toLocaleString('en-US') + ' visits', h: Math.round(v / 3134 * 100) + '%' })),
       webSources: [].map(([name, v, e, ke]) => ({ name, visits: v.toLocaleString('en-US'), engaged: Math.round(e / v * 100) + '%', ke })),
       landing: [].map(([page, v, e, ke]) => ({ page, visits: v.toLocaleString('en-US'), engaged: e.toLocaleString('en-US'), ke })),
-      accountTabs: seg([['deals', 'Open opportunities'], ['follow', 'Needs follow-up'], ['leads', 'New leads']], st.accounts, 'accounts').map(t => ({ ...t, go: () => { if (st.accounts !== t.id) this.setState({ accounts: t.id, sort: 'weighted' }); } })),
+      accountTabs: seg([['deals', 'Open opportunities'], ['follow', 'Needs follow-up'], ['leads', 'New leads']], st.accounts, 'accounts').map(t => ({ ...t, go: () => { if (st.accounts !== t.id) this.setState({ accounts: t.id, sort: 'amount' }); } })),
       accountsDeals: st.accounts === 'deals', accountsFollow: st.accounts === 'follow', accountsLeads: st.accounts === 'leads',
-      setSort: e => this.setState({ sort: e.target.value }), setOwner: e => this.setState({ owner: e.target.value }), sortValue: st.sort || 'weighted', ownerValue: st.owner || 'Everyone',
+      setSort: e => this.setState({ sort: e.target.value }), setOwner: e => this.setState({ owner: e.target.value }), sortValue: st.sort || 'amount', ownerValue: st.owner || 'Everyone',
       searchValue: st.search || '', setSearch: e => this.setState({ search: e.target.value }), clearSearch: () => this.setState({ search: '', owner: 'Everyone', contributor: null }), ownerOptions, meetingOwnerOptions, peopleNote,
       dealsEmpty: filteredDeals.length === 0, leadsEmpty: filteredLeads.length === 0, emptyNote: 'Nothing matches' + (q ? ' “' + (st.search || '').trim() + '”' : '') + (st.owner && st.owner !== 'Everyone' ? ' for ' + st.owner : '') + '.',
       dealsCount: filteredDeals.length + ' of ' + dealsRaw.length + ' opportunities', leadsCount: filteredLeads.length + ' of ' + leadsRaw.length + ' recent leads',
@@ -1384,7 +1401,7 @@ class Component extends DCLogic {
         const monthLabel = k => new Date(k + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
         let items;
         if (st.meetings === 'upcoming') {
-          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => m.start.slice(0, 10) >= todayStr && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => ({ when: fmtDT(m.start), sort: m.start, title: m.title, who: c.name + (c.owner && !/^Owner \d+$/.test(c.owner) ? ' · ' + c.owner : ''), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: c.owner || '' })));
+          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => m.start.slice(0, 10) >= todayStr && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => ({ when: fmtDT(m.start), sort: m.start, title: m.title, who: c.name + (workspaceModel.displayOwner(c.owner) === 'Unassigned' || workspaceModel.displayOwner(c.owner) === 'Owner name not connected' ? '' : ' · ' + workspaceModel.displayOwner(c.owner)), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: workspaceModel.displayOwner(c.owner) })));
           const notes = [];
           items = [...ups, ...notes].sort((a, b) => a.sort.localeCompare(b.sort));
           const g = {}; for (const it of items) { const k = it.sort.slice(0, 10) <= plus(todayStr, 7) ? 'This week' : it.sort.slice(0, 10) <= plus(todayStr, 14) ? 'Next week' : 'Later'; (g[k] = g[k] || []).push(it); }

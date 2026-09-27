@@ -66,6 +66,23 @@ const workspaceModel = {
     const raw=String(text||'').trim();
     return raw?raw.replace(/\bgood\s+(morning|afternoon|evening)\b/ig,g):g;
   },
+  // One label everywhere. A raw HubSpot id is not a name, and "Owner Owner 1234" is the same id twice.
+  displayOwner(value) {
+    let s=String(value??'').trim();
+    if(!s||/^unassigned$/i.test(s))return 'Unassigned';
+    s=s.replace(/^(owner\s+)+/i,'').trim();
+    if(!s)return 'Unassigned';
+    if(/^\d+$/.test(s)||/^[a-f0-9-]{8,}$/i.test(s))return 'Owner name not connected';
+    return s;
+  },
+  // 'open' counts in the headline. 'past' failed only because the close date is past.
+  // 'excluded' is a renewal, current agreement, disqualified, on hold, or closed deal.
+  listStatus(deal,today) {
+    today=today||this.phoenixToday();
+    if(this.isOpenPipeline(deal,today))return 'open';
+    if(this.isOpenPipeline({...deal,close:this.addDays(today,30)},today))return 'past';
+    return 'excluded';
+  },
   closeLabel(value) {
     const date=this.dateOnly(value);if(!date)return 'Not entered';
     const monthOnly=/^[a-z]{3}\s+\d{2,4}$/i.test(String(value).trim());
@@ -349,13 +366,30 @@ const workspaceModel = {
     if(left==null||right==null)return left==null&&right==null?tie():left==null?1:-1;
     return right.localeCompare(left)||tie();
   },
-  compare(a,b,sort) {
-    const tie=()=>a.name.localeCompare(b.name)||String(a.id).localeCompare(String(b.id));
+  compare(a,b,sort,today) {
+    today=today||this.phoenixToday();
+    const tie=()=>String(a.name||'').localeCompare(String(b.name||''))||String(a.id).localeCompare(String(b.id));
+    const past=row=>this.listStatus(row,today)==='past'?1:0;
+    const pastDiff=past(a)-past(b);
+    if(pastDiff)return pastDiff;
     if(sort==='name')return tie();
-    const left=sort==='close'?this.date(a.close):sort==='days'?a.days:this.weighted(a);
-    const right=sort==='close'?this.date(b.close):sort==='days'?b.days:this.weighted(b);
-    if(left==null||right==null)return left==null&&right==null?tie():left==null?1:-1;
-    return (sort==='close'?left.localeCompare(right):right-left)||tie();
+    if(sort==='interaction'){
+      const left=this.dateOnly(a.lastEngagement),right=this.dateOnly(b.lastEngagement);
+      if(left==null||right==null)return left==null&&right==null?tie():left==null?1:-1;
+      return right.localeCompare(left)||tie();
+    }
+    if(sort==='close'){
+      const left=this.dateOnly(a.close),right=this.dateOnly(b.close);
+      if(left==null||right==null)return left==null&&right==null?tie():left==null?1:-1;
+      return left.localeCompare(right)||tie();
+    }
+    if(sort==='days'){
+      const left=Number(a.days),right=Number(b.days);
+      if(!Number.isFinite(left)||!Number.isFinite(right))return Number.isFinite(left)?-1:Number.isFinite(right)?1:tie();
+      return right-left||tie();
+    }
+    // Amount, not probability. A 0–1% HubSpot probability must not decide the order.
+    return (Number(b.amount)||0)-(Number(a.amount)||0)||tie();
   },
   interaction(company,through) {
     const candidates=[...(company.lastContact?[{date:company.lastContact,source:'CRM last contact',refs:company.refs||[]}]:[]),...(company.completedInteractions||[])];
@@ -364,7 +398,7 @@ const workspaceModel = {
   ownerContext(priority,records,through) {
     const companies=(priority.accountIds||[]).map(id=>records.companies.find(c=>c.id===id.replace(/^company:/,''))).filter(Boolean);
     const deals=companies.flatMap(c=>c.deals.filter(d=>d.closed===false));
-    const owners=[...new Set(deals.map(d=>d.owner||'Unassigned'))].sort();
+    const owners=[...new Set(deals.map(d=>this.displayOwner(d.owner)))].sort();
     const refs=deals.flatMap(d=>d.refs||[]);
     const interactions=companies.map(c=>this.interaction(c,through)).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date));
     const interaction=interactions[0]||null;

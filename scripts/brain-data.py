@@ -6,9 +6,9 @@ meetings/transcripts, findings, lemlist campaigns, sheets, GA4) and writes
 the six JSON files in the exact shapes scripts/synthetic-data.cjs produces.
 
 Honesty rules: never invent names, dates, or stage labels. Where the brain
-lacks something (stage catalog, days-in-stage, MQL/SQL dates), use null /
-empty and say so. Owner labels are 'Owner <first 8 of hubspot_owner_id>'
-or 'Unassigned' -- no invented person names.
+lacks something (stage catalog, days-in-stage, MQL/SQL dates, an owner
+name), use null / empty / "Owner name not connected". Never show a raw
+HubSpot owner id, and never prefix a name with "Owner".
 """
 import sqlite3, json, os, re, sys
 from datetime import datetime, timezone
@@ -45,10 +45,43 @@ def iso_date(s):
         return None
     return str(s)[:10]
 
+OWNER_NAMES = {}
+
+
+def load_owner_names(cur):
+    """Real names from an owners catalog, when the brain has one. Never invent one."""
+    names = {}
+    tables = {r[0] for r in q(cur, "SELECT name FROM sqlite_master WHERE type='table'")}
+
+    def remember(oid, first, last, email):
+        label = ' '.join(x for x in [first, last] if x).strip() or (email or '').strip()
+        if oid and label and '@' not in label.split(' ')[0]:
+            names[str(oid)] = label
+        elif oid and label:
+            names[str(oid)] = label
+
+    if 'hubspot_owners' in tables:
+        cols = {r[1] for r in q(cur, 'PRAGMA table_info(hubspot_owners)')}
+        id_col = 'id' if 'id' in cols else 'hs_id' if 'hs_id' in cols else None
+        if id_col:
+            first = 'first_name' if 'first_name' in cols else 'firstname' if 'firstname' in cols else None
+            last = 'last_name' if 'last_name' in cols else 'lastname' if 'lastname' in cols else None
+            email = 'email' if 'email' in cols else None
+            select = ', '.join(c for c in [id_col, first, last, email] if c)
+            for row in q(cur, 'SELECT %s FROM hubspot_owners' % select):
+                values = list(row) + [None, None, None]
+                remember(values[0], values[1] if first else None, values[2] if last else None, values[3] if email else None)
+    if 'hubspot_objects' in tables:
+        for hs_id, pj in q(cur, "SELECT hs_id, properties_json FROM hubspot_objects WHERE object_type='owners'"):
+            p = props_of((pj,))
+            remember(hs_id, p.get('firstName') or p.get('first_name'), p.get('lastName') or p.get('last_name'), p.get('email'))
+    return names
+
+
 def owner_label(hubspot_owner_id):
-    if hubspot_owner_id:
-        return 'Owner ' + str(hubspot_owner_id)[:8]
-    return 'Unassigned'
+    if not hubspot_owner_id:
+        return 'Unassigned'
+    return OWNER_NAMES.get(str(hubspot_owner_id)) or 'Owner name not connected'
 
 
 _ANALYTICS_SOURCE = {
@@ -99,6 +132,8 @@ def main():
 
     con = sqlite3.connect(DB)
     cur = con.cursor()
+    global OWNER_NAMES
+    OWNER_NAMES = load_owner_names(cur)
 
     # ---------- load all deals, find open ones ----------
     deal_rows = q(cur, "select hs_id, properties_json, fetched_at from hubspot_objects where object_type='deals'")
