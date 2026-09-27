@@ -2,6 +2,7 @@ const showcaseStorageKey = 'opstream-gtm-showcase-v1';
 const showcaseOriginal = { mount:Component.prototype.componentDidMount, update:Component.prototype.componentDidUpdate, render:Component.prototype.renderVals };
 const showcaseRouteKeys = ['perf','accounts','meetings','period','search','owner','sort','meetingSearch','meetingOwner','start','end','draft','contributor'];
 Component.prototype.componentDidMount = function () {
+  showcaseOriginal.mount?.call(this);
   try { const raw=localStorage.getItem(showcaseStorageKey),saved=JSON.parse(raw||'null');if(saved&&(!Object.prototype.hasOwnProperty.call(saved,'savedState')||typeof saved!=='object'||Array.isArray(saved)))throw new Error('Invalid browser data');this._legacyBrowserRaw=saved?raw:null; }
   catch {this._showcaseReadFailed=true;this.setState({storageError:'Saved browser data could not be read. Existing stored data has not been replaced. Keep this tab open to retain new edits.'});}
   this._showcaseRestore=()=>{
@@ -37,7 +38,6 @@ Component.prototype.componentDidMount = function () {
       }).catch(() => {});
     }, 60000);
   }
-  fetch('/api/gmail/status').then(r=>r.json()).then(g=>{if(g.connected)this.setState({gmailEmail:g.email});}).catch(()=>{});
 };
 Component.prototype.componentDidUpdate = function (...args) {
   showcaseOriginal.update?.apply(this,args);
@@ -56,7 +56,7 @@ Component.prototype.componentDidUpdate = function (...args) {
 };
 Component.prototype._saveBrowserState = function (retry=false) {
   if(this._showcaseReadFailed)return false;
-  const st=this.state,saved=JSON.stringify({...this._showcaseStored,savedState:st.savedState||{},newDrafts:st.newDrafts||[],edits:st.edits||{},versionHistory:st.versionHistory||{},workspacePreferences:st.workspacePreferences||{schemaVersion:1,mode:'cs',ratings:{},comments:{},draftModes:{},priorityContext:{}}});
+  const st=this.state,saved=JSON.stringify({...this._showcaseStored,savedState:st.savedState||{},newDrafts:st.newDrafts||[],edits:st.edits||{},versionHistory:st.versionHistory||{},workspacePreferences:st.workspacePreferences||{schemaVersion:1,mode:'marketing',ratings:{},comments:{},draftModes:{},priorityContext:{}}});
   if(saved===this._showcaseSaved){if(st.storageError)this.setState({storageError:null});return true;}
   if(!retry&&saved===this._showcaseWriteAttempt)return false;
   this._showcaseWriteAttempt=saved;

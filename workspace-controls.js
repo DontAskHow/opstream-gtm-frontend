@@ -1,6 +1,6 @@
 /* global Component, workspaceModel, verifiedFormat */
 const workspaceRender=Component.prototype.renderVals;
-Component.prototype._workspacePreferences=function(){return {schemaVersion:1,mode:'cs',ratings:{},comments:{},draftModes:{},priorityContext:{},...this.state.workspacePreferences};};
+Component.prototype._workspacePreferences=function(){return {schemaVersion:1,mode:'marketing',ratings:{},comments:{},draftModes:{},priorityContext:{},...this.state.workspacePreferences};};
 Component.prototype._rememberPriority=function(id,patch){
   const prefs=this._workspacePreferences(),p=this.state.verified.presentation.priorities.find(p=>p.id===id);
   this.setState({workspacePreferences:{...prefs,...patch,priorityContext:{...prefs.priorityContext,[id]:{title:p.title,accountIds:p.accountIds,refs:p.refs,reviewId:this.state.verified.presentation.priorityReview.id}}}});
@@ -26,14 +26,15 @@ Component.prototype.renderVals=function(){
   v.storageError=s.storageError||'';v.storageFailed=!!s.storageError;v.canRetryStorage=!this._showcaseReadFailed;v.retryBrowserSave=()=>this._saveBrowserState(true);
   if(!d)return v;
   const prefs=this._workspacePreferences();
-  const colleagues=d.meta.owners.filter(p=>!p.former&&/@example\.com$/i.test(p.email||'')).map(p=>({id:p.id,name:p.name}));
+  const colleagues=(d.meta.owners||[]).filter(p=>!p.former&&p.email).map(p=>({id:p.id,name:p.name}));
   const colleagueNames=new Map(colleagues.map(p=>[p.id,p.name]));
   const raw=d.presentation.priorities.map((p,i)=>{
     const context=workspaceModel.ownerContext(p,s.records,workspaceModel.phoenixToday()),rating=prefs.ratings[p.id];
     const editor=this._commentEditor(p.id),comments=Array.isArray(prefs.comments[p.id])?prefs.comments[p.id]:[];
     const contextRefs=[...new Set([...context.ownerRefs,...context.interaction?.refs||[]])];
-    return {...p,n:String(i+1),owner:context.owner,ownerLabel:context.account?'Account owner':'Responsible owner',
-      interactionDate:context.account?(context.interaction?verifiedFormat.date(context.interaction.date):'Not recorded'):'Not applicable',
+    const ownDate=p.lastInteraction?verifiedFormat.date(p.lastInteraction)+' · '+workspaceModel.relativeLabel(p.lastInteraction,workspaceModel.phoenixToday()):'';
+    return {...p,n:String(i+1),owner:context.owner,ownerLabel:context.account?'Account owner':'Owner',
+      interactionDate:context.account?(context.interaction?verifiedFormat.date(context.interaction.date):'Not recorded'):(ownDate?ownDate+(p.lastInteractionLabel?' · '+p.lastInteractionLabel:''):(p.lastInteractionLabel||'Not recorded')),
       contextLabel:context.interaction?.source||'Owner source',hasContextRefs:contextRefs.length>0,contextGo:()=>this._verifiedOpenRefs(contextRefs,'Owner and last interaction'),
       primary:p.primary.label,primaryGo:this._verifiedTarget(p.primary.target),hasSecondary:!!p.secondary,secondary:p.secondary?.label||'',secondaryGo:p.secondary?this._verifiedTarget(p.secondary.target):()=>{},
       rankLabel:'Recommended #'+(i+1)+' · Why this rank?',sourcesGo:()=>this._verifiedOpenRefs(p.refs,'Why this priority · '+p.title),
@@ -112,9 +113,9 @@ Component.prototype.renderVals=function(){
   v.followUps=v.followUps.filter(f=>(owner==='Everyone'||f.meta.startsWith(owner+' ·'))&&(!query||[f.name,f.meta,f.reason,f.next,f.uncertainty].join(' ').toLowerCase().includes(query)));
   v.followUpsEmpty=v.followUps.length===0;
   if(s.accounts==='follow')v.exportAccounts=()=>this.csv('follow-ups.csv',['Company','Owner / stage','Reason','Next step','Uncertainty'],v.followUps.map(f=>[f.name,f.meta,f.reason,f.next,f.uncertainty]));
-  const key=this._draftModeKey(),mode=prefs.mode==='marketing'?'marketing':'cs',override=prefs.draftModes[key];
+  const key=this._draftModeKey(),mode=prefs.mode==='cs'?'cs':'marketing',override=prefs.draftModes[key];
   v.contentMode=mode;v.draftContentMode=override||'default';
-  v.setContentMode=e=>this.setState({workspacePreferences:{...prefs,mode:e.target.value==='marketing'?'marketing':'cs'}});
+  v.setContentMode=e=>this.setState({workspacePreferences:{...prefs,mode:e.target.value==='cs'?'cs':'marketing'}});
   v.setDraftContentMode=e=>{const draftModes={...prefs.draftModes};if(e.target.value==='default')delete draftModes[key];else draftModes[key]=e.target.value;this.setState({workspacePreferences:{...prefs,draftModes}});};
   v.contentModeNote=(override||mode)==='marketing'?'Marketing: broader positioning and planned capabilities, with availability status preserved.':'CS: verified available capabilities and literal guidance from the Opstream user guide.';
   v.contentModeInstructions=workspaceModel.modeInstructions(override||mode);

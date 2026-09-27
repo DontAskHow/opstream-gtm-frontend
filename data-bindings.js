@@ -19,16 +19,6 @@ Component.prototype._loadVerified = async function () {
     let proposals=[];try{const pr=await fetch('data/crm-proposals.json',{cache:'no-store'});if(pr.ok){const pj=await pr.json();proposals=Array.isArray(pj)?pj:[];}}catch{}
     let sheetReview=null;try{sheetReview=await read('sheet-review');}catch{}
     this.setState({verified,records,verifiedEvidence:evidence,draftSeeds,sheetLabels,hollie,agentBrief,heartbeat,heartbeatFixes,proposals,sheetReview,verifiedError:null,checking:false,checkedAt:workspaceModel.formatTime(new Date().toISOString())});
-    try{
-      const banner=document.getElementById('topBanner');
-      if(banner){
-        const isDemo=/synthetic|demo/i.test(verified.snapshotId||'');
-        const cDate=records.generatedAt?workspaceModel.formatDateTime(records.generatedAt):'';
-        banner.textContent=isDemo
-          ? 'PUBLIC DEMO · All data is synthetic · Changes stay in your browser · Email and Slack are disabled'
-          : 'Company data · HubSpot, Fathom, Sheets, GA4'+(cDate?' · collected '+cDate:'')+' · Drafts stay in your browser · Nothing is sent without approval';
-      }
-    }catch{}
   } catch {this.setState({checking:false,verifiedError:'The collected data could not be loaded. Reload the page to try again.'});}
 };
 Component.prototype._verifiedRange = function () {
@@ -221,11 +211,6 @@ Component.prototype.renderVals = function () {
   v.showAi=typeof web.aiCount==='number';
   v.webRangeLabel=webRange;
   v.showOwnerNotes=!(v.movementsEmpty);
-  v.connectionLines=[
-    {name:'Spend',line:spendMonthsHave?'Spend is connected for the months with actuals.':spendChannelsHave?'Monthly spend is not connected. Channel totals are recorded without a month.':'Spend: not connected'},
-    {name:'Ads',line:v.adsConnected?'Ads are connected.':'Ads: not connected'},
-    {name:'Website & AI',line:v.webConnected?(typeof web.aiCount==='number'?'Website and AI figures are in this collection.':'Website sessions are in this collection. AI answers: not connected.'):'Website & AI: not connected'}
-  ];
   const runId=s.hollie&&s.hollie.runId;
   v.runMismatch=!!(runId&&((s.agentBrief&&s.agentBrief.runId&&s.agentBrief.runId!==runId)||(s.heartbeat&&s.heartbeat.runId&&s.heartbeat.runId!==runId)||(s.heartbeatFixes&&s.heartbeatFixes.runId&&s.heartbeatFixes.runId!==runId)));
   v.runMismatchNote=v.runMismatch?'This section is from a different run than the queue. It is hidden so the page shows one set of numbers.':'';
@@ -242,7 +227,7 @@ Component.prototype.renderVals = function () {
     {name:'GA4 · www.opstream.ai',used:'Website sessions and page views',updated:v.collectedShort,color:'var(--color-text)',count:f.number(web.sessions)+' sessions',gaps:'Engagement breakdowns were not available.'},
     {name:'Lemlist',used:'Outbound campaigns',updated:v.collectedShort,color:'var(--color-text)',count:d.report.spend.campaigns.length+' campaigns',gaps:'Send and reply statistics were not available.'}
   ];
-  if(s.perf==='web')v.scopeNote='Website: '+webRange+' · www.opstream.ai only. AI: '+f.number(web.aiCount)+' completed monitored answers through '+f.date(web.aiEnd)+'. No period filter applies.';
+  if(s.perf==='web')v.scopeNote='Website: '+webRange+' · www.opstream.ai only.'+(typeof web.aiCount==='number'?' AI: '+f.number(web.aiCount)+' completed monitored answers'+(web.aiEnd?' through '+f.date(web.aiEnd):'')+'.':'')+' No period filter applies.';
   else if(s.perf==='spend')v.scopeNote='Spend: Jan – Dec 2026, as entered in the workbook. Campaign counts use the '+v.collectedShort+' collection; advertising dates are shown per source.';
   else v.scopeNote='The period '+period+' applies to new leads, meetings booked and meetings held. Open pipeline is the current book. All dates are America/Phoenix.';
   const query=(s.search||'').trim().toLowerCase(),owner=s.owner||'Everyone',todayPhx=workspaceModel.phoenixToday();

@@ -794,6 +794,14 @@ const workspaceModel = {
     if(/\bkidde\b/i.test(deal||'')&&/\bcarrier\b/i.test(name||''))return 'Kidde Global Solutions';
     return name||null;
   },
+  missingSpendText(spend) {
+    const months=(spend&&spend.missingMonths)||[];
+    const names=months.map(k=>new Date(k+'-15T12:00:00Z').toLocaleDateString('en-US',{month:'long',timeZone:'UTC'}));
+    if(!spend||!spend.connected)return 'The budget workbook is not in this collection. Spend shows as not connected, never as zero.';
+    if(!names.length)return 'Every month so far has actuals in the budget workbook. A blank month would show as not entered, never as underspend.';
+    const list=names.length>1?names.slice(0,-1).join(', ')+' and '+names[names.length-1]:names[0];
+    return list+(names.length>1?' have':' has')+' no actuals in the budget workbook yet. '+(names.length>1?'They show':'It shows')+' as not entered, never as underspend.';
+  },
   modeInstructions(mode) {
     return mode==='marketing'
       ? 'Write marketing and prospect content. Use broader positioning and supported planned capabilities, preserving whether each capability is available, in development or planned. Do not describe an unreleased capability as available.'

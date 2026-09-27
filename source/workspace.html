@@ -13,7 +13,7 @@
 .priority-content p{margin:0;font-size:15px;line-height:1.55;text-wrap:pretty}
 .priority-content .priority-caveat,.priority-caveat{font-size:14px;line-height:1.5;color:var(--color-neutral-700);overflow-wrap:anywhere}
 .sc-interp{overflow-wrap:anywhere}
-.take-card{padding:16px 20px;margin:8px 0 4px;border-left:3px solid var(--color-accent,#0f766e);background:var(--color-surface);border-radius:0 10px 10px 0}.stat-card{border:1px solid var(--color-divider);border-radius:12px;padding:12px 16px;background:var(--color-surface);min-width:0}.stat-card h3{font-size:14px;margin:0 0 4px;overflow-wrap:break-word}.stat-card .stat-line{font-size:13px;color:var(--color-neutral-700)}.stat-card .stat-note{font-size:12px;color:var(--color-neutral-600);margin:6px 0 0}
+.take-card{padding:16px 20px;margin:8px 0 4px;border-left:3px solid var(--color-accent);background:var(--color-surface);border-radius:0 10px 10px 0}.stat-card{border:1px solid var(--color-divider);border-radius:12px;padding:12px 16px;background:var(--color-surface);min-width:0}.stat-card h3{font-size:14px;margin:0 0 4px;overflow-wrap:break-word}.stat-card .stat-line{font-size:13px;color:var(--color-neutral-700)}.stat-card .stat-note{font-size:12px;color:var(--color-neutral-600);margin:6px 0 0}
 .priority-context{display:flex;flex-wrap:wrap;column-gap:18px;row-gap:6px;font-size:14px;line-height:1.5}
 .priority-context strong{font-weight:600}
 .priority-actions,.priority-feedback{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -126,8 +126,35 @@ select.input{min-height:44px}
 .table td.money,.table th.money{text-align:right;width:1%;min-width:max-content}
 .table td.company{max-width:14rem;overflow-wrap:anywhere}
 .table td.stage{max-width:9rem}
+.home-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:40px;align-items:start}
+.home-side{display:flex;flex-direction:column;gap:28px}
+.home-side .figure-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:12px 0;border-bottom:1px solid var(--color-divider);font-size:14px}
+.home-side .figure-row strong{font-family:var(--font-heading);font-weight:800;font-size:22px;color:var(--color-text);white-space:nowrap;flex:0 0 auto}
+.home-side .figure-note{display:block;font-size:12px;color:var(--color-neutral-700);margin-top:2px}
+.reading-box{background:var(--color-surface);padding:16px 18px;font-size:13px;line-height:1.55}
+.reading-box h6{margin:0 0 8px}.reading-box p{margin:0 0 8px}
+.coming-row{display:block;width:100%;text-align:left;font:inherit;color:inherit;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:12px 0;cursor:pointer}
+.coming-row span{display:block;font-size:12px;color:var(--color-neutral-700)}.coming-row strong{display:block;font-size:14px;margin:2px 0}
+.show-card{padding:22px 0;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:12px}
+.show-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:6px 16px}
+.show-head h3{font-size:20px;margin:0}.show-when{font-size:14px;font-weight:600;color:var(--color-accent-700)}
+.show-meta{margin:0;font-size:14px;color:var(--color-neutral-700);line-height:1.5}
+.show-figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px 20px;margin:0}
+.show-figures div{min-width:0;border-top:1px solid var(--color-divider);padding-top:8px}
+.show-figures dt{font-size:13px;color:var(--color-neutral-700)}
+.show-figures dd{margin:2px 0 0;font-family:var(--font-heading);font-weight:800;font-size:22px;color:var(--color-accent-700)}
+.show-figures .figure-note{display:block;font-family:var(--font-body);font-weight:400;font-size:12px;color:var(--color-neutral-700);overflow-wrap:anywhere}
+.show-checklist{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px 28px}
+.show-checklist h4{font-size:13px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px}
+.show-checklist ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.show-checklist li{display:grid;grid-template-columns:18px minmax(0,1fr);gap:6px;font-size:14px;line-height:1.45}
+.show-checklist li small{display:block;color:var(--color-neutral-700);font-size:12px}
+.past-shows summary{cursor:pointer;font-size:14px;padding:12px 0}.past-shows p{margin:0;padding:8px 0;border-bottom:1px solid var(--color-divider);font-size:14px}
+.header-photo{display:inline-block;width:28px;height:28px;border-radius:50%;background-size:cover;background-position:center;background-color:var(--color-surface)}
+.header-initials{display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--color-text);color:var(--color-bg);align-items:center;justify-content:center;font-size:11px;font-weight:700}
+@media(max-width:900px){.home-grid{grid-template-columns:minmax(0,1fr)}}
 </style></head>
-<body><div id="topBanner" role="note" style="padding:10px 20px;background:#143e32;color:white;font:14px sans-serif;text-align:center">Company data · HubSpot, Fathom, Sheets, GA4 · Drafts stay in your browser · Nothing is sent without approval</div>
+<body>
 <x-dc>
 <helmet>
 <link rel="stylesheet" href="_ds/modernist-b33a3025-c7ab-4acb-99c2-5c4275b50711/styles.css">
@@ -153,7 +180,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
     </nav>
     <button onClick="{{ goData }}" style="margin-left:auto;font:inherit;font-size:13px;background:none;border:0;padding:6px 0;color:var(--color-neutral-700);cursor:pointer;text-align:left">Collected {{ collectedShort }} · <span style="text-decoration:underline;text-underline-offset:3px">About this data</span></button>
     <sc-if value="{{ !signedIn }}"><a href="/api/google/sign-in" style="font:inherit;font-size:13px;font-weight:600;color:var(--color-accent);text-decoration:none;padding:6px 0">Sign in with Google</a></sc-if>
-    <sc-if value="{{ signedIn }}"><button onClick="{{ toggleProfile }}" aria-haspopup="menu" style="display:inline-flex;align-items:center;gap:8px;font:inherit;font-size:13px;background:none;border:0;padding:6px 0;cursor:pointer;color:inherit"><span aria-hidden="true" style="display:inline-flex;width:28px;height:28px;border-radius:50%;background:#0f766e;color:#fff;align-items:center;justify-content:center;font-size:11px;font-weight:700">{{ signedInInitials }}</span>Signed in as {{ signedInLabel }}</button></sc-if>
+    <sc-if value="{{ signedIn }}"><button onClick="{{ toggleProfile }}" aria-haspopup="menu" aria-expanded="{{ profileOpen }}" style="display:inline-flex;align-items:center;gap:8px;font:inherit;font-size:13px;background:none;border:0;padding:6px 0;cursor:pointer;color:inherit"><sc-if value="{{ hasSignedInPicture }}"><span class="header-photo" role="img" aria-label="Your Google photo" style="{{ signedInPhotoStyle }}"></span></sc-if><sc-if value="{{ !hasSignedInPicture }}"><span aria-hidden="true" class="header-initials">{{ signedInInitials }}</span></sc-if>Signed in as {{ signedInLabel }}</button></sc-if>
     <sc-if value="{{ dataStale }}"><div role="status" style="padding:8px 16px;background:var(--color-accent-100);color:var(--color-accent-900);font-size:13px">{{ dataAgeLabel }}</div></sc-if>
   <button class="workspace-account-button" onClick="{{ showConnections }}">Connections</button></header>
   <sc-if value="{{ profileOpen }}"><div role="menu" aria-label="Account" style="margin-left:auto;margin-right:24px;max-width:360px;padding:12px 16px;border:1px solid var(--color-divider);background:var(--color-bg);font-size:14px">
@@ -174,7 +201,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
   </sc-if>
 
   <sc-if value="{{ toast }}">
-    <div role="status" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#143e32;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:1000;max-width:90vw">{{ toast }}</div>
+    <div role="status" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--color-text);color:var(--color-bg);padding:10px 18px;border-radius:8px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:1000;max-width:90vw">{{ toast }}</div>
   </sc-if>
 
   <main style="flex:1;width:100%;max-width:1320px;margin:0 auto;padding:28px 24px {{ mainPadBottom }};box-sizing:border-box">
@@ -206,46 +233,172 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
     <sc-if value="{{ isBriefing }}" hint-placeholder-val="{{ true }}">
       <div data-screen-label="Briefing" style="display:flex;flex-direction:column;gap:24px">
         <div>
-          <h6 style="margin:0 0 8px;color:var(--color-accent)">Proactive briefing</h6>
-          <h1 style="font-size:36px;margin:0 0 8px">What needs you today</h1>
-          <p style="margin:0;font-size:15px;color:var(--color-neutral-700);max-width:64ch;text-wrap:pretty">{{ briefingIntro }}</p>
-          <sc-if value="{{ signedIn }}"><section aria-label="Your brief" style="margin-top:20px;display:flex;flex-direction:column;gap:12px">
-            <h2 style="font-size:22px;margin:0">Your brief</h2>
-            <sc-if value="{{ googleExpired }}"><p style="margin:0">Google access expired, reconnect. <a href="/api/google/sign-in">Reconnect</a></p></sc-if>
-            <sc-if value="{{ personalBriefPending }}"><p style="margin:0">Building your brief from Gmail, Calendar, and the workspace.</p></sc-if>
-            <sc-for list="{{ personalMeetings }}" as="item" hint-placeholder-count="1"><p style="margin:0"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
-            <sc-for list="{{ personalFollowUps }}" as="item" hint-placeholder-count="1"><p style="margin:0"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
-            <sc-for list="{{ personalNotOnSheet }}" as="item" hint-placeholder-count="0"><p style="margin:0"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
-            <sc-for list="{{ personalDrafts }}" as="item" hint-placeholder-count="0"><p style="margin:0"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
-          </section></sc-if>
-          <div class="seg" style="margin-top:16px">
-            <button onClick="{{ showMarketingBrief }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;background:{{ marketingBriefBg }};color:{{ marketingBriefFg }};cursor:pointer">Marketing</button>
-            <button onClick="{{ showSalesBrief }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ salesBriefBg }};color:{{ salesBriefFg }};cursor:pointer">Sales &amp; CS</button>
+          <div class="seg" style="margin-bottom:20px">
+            <button onClick="{{ showMarketingBrief }}" aria-pressed="{{ briefMarketing }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;background:{{ marketingBriefBg }};color:{{ marketingBriefFg }};cursor:pointer">Marketing</button>
+            <button onClick="{{ showSalesBrief }}" aria-pressed="{{ briefSales }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ salesBriefBg }};color:{{ salesBriefFg }};cursor:pointer">Sales &amp; CS</button>
           </div>
+          <sc-if value="{{ briefMarketing }}" hint-placeholder-val="{{ true }}">
+            <h6 style="margin:0 0 8px;color:var(--color-accent)">{{ homeWeek }}</h6>
+            <h1 style="font-size:36px;margin:0 0 8px">Where to focus</h1>
+            <p style="margin:0;font-size:15px;color:var(--color-neutral-700);max-width:64ch;text-wrap:pretty">{{ homeIntro }}</p>
+          </sc-if>
+          <sc-if value="{{ briefSales }}">
+            <h6 style="margin:0 0 8px;color:var(--color-accent)">Sales &amp; CS</h6>
+            <h1 style="font-size:36px;margin:0 0 8px">What the team needs today</h1>
+            <p style="margin:0;font-size:15px;color:var(--color-neutral-700);max-width:64ch;text-wrap:pretty">{{ salesIntro }}</p>
+          </sc-if>
         </div>
         <sc-if value="{{ briefMarketing }}" hint-placeholder-val="{{ true }}">
-          <section>
-            <div class="section-rule"><h6 style="margin:0">Marketing brief</h6><span style="font-size:12px;color:var(--color-neutral-700)">One screen · America/Phoenix</span></div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;padding:12px 0">
-              <sc-for list="{{ marketingIntervals }}" as="m" hint-placeholder-count="3">
-                <div>
-                  <div style="font-size:13px;color:var(--color-neutral-700)">{{ m.label }}</div>
-                  <div style="font-family:var(--font-heading);font-weight:800;font-size:28px">{{ m.leads }} <span style="font-size:14px;font-weight:500">leads</span></div>
-                  <div style="font-size:13px">MQL {{ m.mql }} · SQL {{ m.sql }}</div>
-                  <div style="font-size:12px;color:var(--color-neutral-700)">{{ m.note }}</div>
+        <div class="home-grid">
+          <div style="display:flex;flex-direction:column;gap:32px;min-width:0">
+            <sc-if value="{{ signedIn }}"><section aria-label="Your brief" style="display:flex;flex-direction:column;gap:10px">
+              <div class="section-rule"><h6>Your brief</h6><span style="font-size:12px;color:var(--color-neutral-700)">From your Gmail and Calendar</span></div>
+              <sc-if value="{{ googleExpired }}"><p style="margin:0">Google access expired, reconnect. <a href="/api/google/sign-in">Reconnect</a></p></sc-if>
+              <sc-if value="{{ personalBriefPending }}"><p style="margin:0">Building your brief from Gmail, Calendar, and the workspace.</p></sc-if>
+              <sc-for list="{{ personalMeetings }}" as="item" hint-placeholder-count="1"><p style="margin:0;font-size:15px"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
+              <sc-for list="{{ personalFollowUps }}" as="item" hint-placeholder-count="1"><p style="margin:0;font-size:15px"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
+              <sc-for list="{{ personalNotOnSheet }}" as="item" hint-placeholder-count="0"><p style="margin:0;font-size:15px"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
+              <sc-for list="{{ personalDrafts }}" as="item" hint-placeholder-count="0"><p style="margin:0;font-size:15px"><strong>{{ item.title }}</strong> {{ item.detail }}</p></sc-for>
+            </section></sc-if>
+            <section aria-label="Priorities">
+              <div class="section-rule"><h6>Priorities</h6><span style="font-size:12px;color:var(--color-neutral-700)">{{ priorityOrderNote }}</span></div>
+              <sc-if value="{{ prioritiesEmpty }}"><p class="muted-copy" style="padding-top:12px">Nothing needs you from the collected marketing data right now.</p></sc-if>
+              <sc-for list="{{ priorities }}" as="p" hint-placeholder-count="3">
+              <article class="priority-card" data-priority-id="{{ p.id }}" aria-label="{{ p.title }}">
+                <div class="priority-number">{{ p.n }}</div>
+                <div class="priority-content">
+                  <h3>{{ p.title }}</h3>
+                  <div class="priority-context">
+                    <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
+                    <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
+                  </div>
+                  <p>{{ p.why }}</p>
+                  <p><strong>Next step:</strong> {{ p.next }}</p>
+                  <p class="priority-caveat">{{ p.caveat }}</p>
+                  <div class="priority-actions">
+                    <button onClick="{{ p.primaryGo }}" class="btn btn-primary">{{ p.primary }}</button>
+                    <sc-if value="{{ p.hasSecondary }}"><button onClick="{{ p.secondaryGo }}" class="btn btn-secondary">{{ p.secondary }}</button></sc-if>
+                  </div>
+                  <div class="priority-feedback" role="group" aria-label="Priority feedback">
+                    <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCount }}</span></button>
+                    <button class="quiet-control" onClick="{{ p.importantGo }}" aria-pressed="{{ p.important }}" aria-label="{{ p.starLabel }}" title="{{ p.starLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{ p.starFill }}" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9L12 3Z"></path></svg></button>
+                    <details class="priority-menu"><summary class="quiet-control" aria-label="More priority actions">•••</summary><div class="priority-menu-items"><button class="quiet-control" onClick="{{ p.lessGo }}">{{ p.lessActionLabel }}</button><sc-if value="{{ p.rated }}"><button class="quiet-control" onClick="{{ p.clearRating }}">Reset priority</button></sc-if></div></details>
+                  </div>
+                  <sc-if value="{{ p.commentsOpen }}">
+                    <section class="priority-comments" aria-label="Comments">
+                      <sc-for list="{{ p.comments }}" as="c">
+                        <div class="priority-comment" id="{{ c.anchorId }}">
+                          <div class="comment-meta"><span><strong>{{ c.authorName }}</strong> · {{ c.date }}</span><sc-if value="{{ c.mine }}"><button class="text-control" onClick="{{ c.edit }}">Edit comment</button></sc-if></div>
+                          <p class="comment-text">{{ c.text }}</p>
+                          <sc-if value="{{ c.hasTags }}"><p class="comment-tags">{{ c.tags }}</p></sc-if>
+                        </div>
+                      </sc-for>
+                      <label class="comment-label" for="{{ p.editorId }}">{{ p.editorLabel }}</label>
+                      <textarea id="{{ p.editorId }}" class="input" value="{{ p.commentText }}" onInput="{{ p.editCommentText }}" onKeyDown="{{ p.commentKeyDown }}" rows="3" maxlength="3000" placeholder="Add a comment. Type @ to mention a teammate." aria-controls="{{ p.mentionListId }}" aria-expanded="{{ p.hasSuggestions }}"></textarea>
+                      <sc-if value="{{ p.hasSuggestions }}"><div class="mention-suggestions" id="{{ p.mentionListId }}" role="listbox" aria-label="Mention a teammate"><sc-for list="{{ p.mentionSuggestions }}" as="person"><button class="mention-option" role="option" aria-selected="{{ person.selected }}" onClick="{{ person.choose }}"><strong>{{ person.name }}</strong><span>{{ person.email }}</span></button></sc-for></div></sc-if>
+                      <div class="comment-tag-controls">
+                        <sc-for list="{{ p.editTags }}" as="tag"><button class="feedback-control" onClick="{{ tag.remove }}" aria-label="{{ tag.removeLabel }}">@{{ tag.name }} ×</button></sc-for>
+                      </div>
+                      <div class="priority-actions"><button class="btn btn-primary" disabled="{{ p.commentEmpty }}" onClick="{{ p.saveComment }}">{{ p.saveCommentLabel }}</button><button class="btn btn-secondary" onClick="{{ p.cancelComment }}">Cancel</button></div>
+                      <sc-if value="{{ p.commentError }}"><p class="form-error" role="alert">{{ p.commentError }}</p></sc-if>
+                      <p class="priority-caveat">Comments and @mentions are saved in this browser. Nobody is notified.</p>
+                    </section>
+                  </sc-if>
                 </div>
+              </article>
               </sc-for>
-            </div>
-            <div class="table-scroll"><table class="table" style="font-size:14px">
-              <thead><tr><th>Source</th><th class="money">This week</th><th class="money">6-week average</th><th class="money">Quarter</th><th class="money">Cost / lead</th></tr></thead>
-              <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td class="money">{{ c.week }}</td><td class="money">{{ c.six }}</td><td class="money">{{ c.quarter }}</td><td class="money">{{ c.cpl }}</td></tr></sc-for></tbody>
-            </table></div>
-            <sc-if value="{{ marketingEmpty }}"><p class="muted-copy">{{ marketingEmptyNote }}</p></sc-if>
-            <sc-for list="{{ connectionLines }}" as="c"><p style="margin:8px 0 0;font-size:14px">{{ c.line }}</p></sc-for>
-            <sc-if value="{{ hasMarketingQueue }}"><div class="section-rule" style="margin-top:16px"><h6 style="margin:0">Marketing queue</h6></div>
-              <sc-for list="{{ marketingQueue }}" as="q"><p style="font-size:14px;margin:8px 0"><strong>{{ q.n }}. {{ q.title }}</strong> — {{ q.why }}</p></sc-for>
-            </sc-if>
-          </section>
+              <sc-if value="{{ hasLessPriorities }}">
+                <button class="btn btn-ghost less-priorities-toggle" onClick="{{ toggleLess }}" aria-expanded="{{ lessOpen }}"><span>{{ lessLabel }}</span><span aria-hidden="true">▾</span></button>
+                <sc-if value="{{ lessOpen }}"><sc-for list="{{ lessPriorities }}" as="p">
+              <article class="priority-card" data-priority-id="{{ p.id }}" aria-label="{{ p.title }}">
+                <div class="priority-number">{{ p.n }}</div>
+                <div class="priority-content">
+                  <h3>{{ p.title }}</h3>
+                  <div class="priority-context">
+                    <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
+                    <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
+                  </div>
+                  <p>{{ p.why }}</p>
+                  <p><strong>Next step:</strong> {{ p.next }}</p>
+                  <p class="priority-caveat">{{ p.caveat }}</p>
+                  <div class="priority-actions">
+                    <button onClick="{{ p.primaryGo }}" class="btn btn-primary">{{ p.primary }}</button>
+                    <sc-if value="{{ p.hasSecondary }}"><button onClick="{{ p.secondaryGo }}" class="btn btn-secondary">{{ p.secondary }}</button></sc-if>
+                  </div>
+                  <div class="priority-feedback" role="group" aria-label="Priority feedback">
+                    <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCount }}</span></button>
+                    <button class="quiet-control" onClick="{{ p.importantGo }}" aria-pressed="{{ p.important }}" aria-label="{{ p.starLabel }}" title="{{ p.starLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{ p.starFill }}" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9L12 3Z"></path></svg></button>
+                    <details class="priority-menu"><summary class="quiet-control" aria-label="More priority actions">•••</summary><div class="priority-menu-items"><button class="quiet-control" onClick="{{ p.lessGo }}">{{ p.lessActionLabel }}</button><sc-if value="{{ p.rated }}"><button class="quiet-control" onClick="{{ p.clearRating }}">Reset priority</button></sc-if></div></details>
+                  </div>
+                  <sc-if value="{{ p.commentsOpen }}">
+                    <section class="priority-comments" aria-label="Comments">
+                      <sc-for list="{{ p.comments }}" as="c">
+                        <div class="priority-comment" id="{{ c.anchorId }}">
+                          <div class="comment-meta"><span><strong>{{ c.authorName }}</strong> · {{ c.date }}</span><sc-if value="{{ c.mine }}"><button class="text-control" onClick="{{ c.edit }}">Edit comment</button></sc-if></div>
+                          <p class="comment-text">{{ c.text }}</p>
+                          <sc-if value="{{ c.hasTags }}"><p class="comment-tags">{{ c.tags }}</p></sc-if>
+                        </div>
+                      </sc-for>
+                      <label class="comment-label" for="{{ p.editorId }}">{{ p.editorLabel }}</label>
+                      <textarea id="{{ p.editorId }}" class="input" value="{{ p.commentText }}" onInput="{{ p.editCommentText }}" onKeyDown="{{ p.commentKeyDown }}" rows="3" maxlength="3000" placeholder="Add a comment. Type @ to mention a teammate." aria-controls="{{ p.mentionListId }}" aria-expanded="{{ p.hasSuggestions }}"></textarea>
+                      <sc-if value="{{ p.hasSuggestions }}"><div class="mention-suggestions" id="{{ p.mentionListId }}" role="listbox" aria-label="Mention a teammate"><sc-for list="{{ p.mentionSuggestions }}" as="person"><button class="mention-option" role="option" aria-selected="{{ person.selected }}" onClick="{{ person.choose }}"><strong>{{ person.name }}</strong><span>{{ person.email }}</span></button></sc-for></div></sc-if>
+                      <div class="comment-tag-controls">
+                        <sc-for list="{{ p.editTags }}" as="tag"><button class="feedback-control" onClick="{{ tag.remove }}" aria-label="{{ tag.removeLabel }}">@{{ tag.name }} ×</button></sc-for>
+                      </div>
+                      <div class="priority-actions"><button class="btn btn-primary" disabled="{{ p.commentEmpty }}" onClick="{{ p.saveComment }}">{{ p.saveCommentLabel }}</button><button class="btn btn-secondary" onClick="{{ p.cancelComment }}">Cancel</button></div>
+                      <sc-if value="{{ p.commentError }}"><p class="form-error" role="alert">{{ p.commentError }}</p></sc-if>
+                      <p class="priority-caveat">Comments and @mentions are saved in this browser. Nobody is notified.</p>
+                    </section>
+                  </sc-if>
+                </div>
+              </article>
+                </sc-for></sc-if>
+              </sc-if>
+              <p class="priority-caveat" style="margin-top:12px">{{ priorityNotice }}</p>
+            </section>
+            <section id="events-shows" aria-label="Events and shows">
+              <div class="section-rule"><h6>Events &amp; shows</h6><span style="font-size:12px;color:var(--color-neutral-700)">{{ showsSourceNote }}</span></div>
+              <sc-if value="{{ showsNotConnected }}"><p class="muted-copy" style="padding-top:12px">{{ showsNotConnectedNote }}</p></sc-if>
+              <sc-for list="{{ showsAhead }}" as="sh" hint-placeholder-count="2">
+                <article class="show-card" aria-label="{{ sh.name }}">
+                  <div class="show-head"><h3>{{ sh.name }}</h3><span class="show-when">{{ sh.phaseLabel }} · {{ sh.when }}</span></div>
+                  <p class="show-meta">{{ sh.meta }}</p>
+                  <p class="show-meta">{{ sh.attendees }}<sc-if value="{{ sh.hasCampaign }}"> · {{ sh.campaign }}</sc-if></p>
+                  <dl class="show-figures"><sc-for list="{{ sh.figures }}" as="f"><div><dt>{{ f.label }}</dt><dd>{{ f.value }}<span class="figure-note">{{ f.note }}</span></dd></div></sc-for></dl>
+                  <div class="show-checklist">
+                    <div><h4>Prep</h4><ul><sc-for list="{{ sh.prep }}" as="c"><li><span aria-label="{{ c.state }}">{{ c.mark }}</span><span>{{ c.label }}<small>{{ c.detail }}</small></span></li></sc-for></ul></div>
+                    <sc-if value="{{ sh.hasFollowUp }}"><div><h4>Follow-up</h4><ul><sc-for list="{{ sh.followUp }}" as="c"><li><span aria-label="{{ c.state }}">{{ c.mark }}</span><span>{{ c.label }}<small>{{ c.detail }}</small></span></li></sc-for></ul></div></sc-if>
+                  </div>
+                  <div class="priority-actions"><button class="btn btn-primary" onClick="{{ sh.linkedinGo }}" disabled="{{ sh.linkedinDisabled }}">{{ sh.linkedinLabel }}</button></div>
+                  <sc-if value="{{ sh.hasLinkedinError }}"><p class="form-error" role="alert">{{ sh.linkedinError }}</p></sc-if>
+                </article>
+              </sc-for>
+              <sc-if value="{{ hasShowsPast }}"><details class="past-shows"><summary>{{ showsPastLabel }}</summary>
+                <sc-for list="{{ showsPast }}" as="sh"><p><strong>{{ sh.name }}</strong> · {{ sh.pastLine }} <button class="text-control" onClick="{{ sh.linkedinGo }}" disabled="{{ sh.linkedinDisabled }}">{{ sh.linkedinLabel }}</button></p></sc-for>
+              </details></sc-if>
+              <sc-if value="{{ hasUnattributed }}"><p class="priority-caveat" style="margin-top:12px">{{ unattributedNote }}</p></sc-if>
+              <p class="priority-caveat" style="margin-top:8px">Posts are drafts. Nothing is posted to LinkedIn from here.</p>
+            </section>
+          </div>
+          <aside class="home-side" aria-label="Numbers and what is coming up">
+            <section id="marketing-numbers">
+              <div class="section-rule"><h6>Leads</h6><button class="text-control" style="font-size:12px" onClick="{{ goPipeline }}">All numbers</button></div>
+              <sc-for list="{{ marketingIntervals }}" as="m" hint-placeholder-count="3">
+                <div class="figure-row"><span>{{ m.label }}<span class="figure-note">MQL {{ m.mql }} · SQL {{ m.sql }} · {{ m.note }}</span></span><strong>{{ m.leads }}</strong></div>
+              </sc-for>
+              <sc-if value="{{ marketingEmpty }}"><p class="muted-copy">{{ marketingEmptyNote }}</p></sc-if>
+              <div class="table-scroll" style="margin-top:12px"><table class="table" style="font-size:13px">
+                <thead><tr><th>Source</th><th class="money">Week</th><th class="money">Quarter</th></tr></thead>
+                <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td class="money">{{ c.week }}</td><td class="money">{{ c.quarter }}</td></tr></sc-for></tbody>
+              </table></div>
+            </section>
+            <sc-if value="{{ hasHomeComingUp }}"><section>
+              <div class="section-rule"><h6>Coming up</h6><button class="text-control" style="font-size:12px" onClick="{{ goEventsShows }}">All shows</button></div>
+              <sc-for list="{{ homeComingUp }}" as="u"><button class="coming-row" onClick="{{ u.go }}"><span>{{ u.when }}</span><strong>{{ u.title }}</strong><span>{{ u.note }}</span></button></sc-for>
+            </section></sc-if>
+            <section class="reading-box"><h6>Reading the numbers</h6><sc-for list="{{ homeReading }}" as="r"><p>{{ r }}</p></sc-for><button class="text-control" style="color:var(--color-accent-700)" onClick="{{ goData }}">About this data →</button></section>
+          </aside>
+        </div>
         </sc-if>
         <sc-if value="{{ briefingEmpty }}">
           <p class="muted-copy">Loading the collection…</p>
@@ -927,11 +1080,12 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <details class="composer-details"><summary>Cc / Bcc</summary><div class="composer-addresses"><div class="field"><label for="draft-cc">Cc</label><input id="draft-cc" class="input" value="{{ draft.cc }}" onInput="{{ editCc }}" inputmode="email"></div><div class="field"><label for="draft-bcc">Bcc</label><input id="draft-bcc" class="input" value="{{ draft.bcc }}" onInput="{{ editBcc }}" inputmode="email"></div></div></details>
             </sc-if>
             <div class="field"><label for="draft-message">{{ messageLabel }}</label><textarea id="draft-message" class="input email-message" value="{{ draft.text }}" onInput="{{ editText }}" maxlength="100000"></textarea></div>
+            <sc-if value="{{ draft.hasCitations }}"><p class="muted-copy">Sources: {{ draft.citationsLine }}</p></sc-if>
             <details class="composer-details"><summary>Internal context and content mode</summary>
               <div class="composer-context"><div class="field"><label for="draft-internal">Internal notes</label><textarea id="draft-internal" class="input" value="{{ draft.internalNotes }}" onInput="{{ editInternalNotes }}"></textarea></div><div class="field"><label for="draft-rationale">Review context</label><textarea id="draft-rationale" class="input" value="{{ draft.rationale }}" onInput="{{ editRationale }}"></textarea></div>
-              <div class="content-modes"><label>Default content mode<select class="input" value="{{ contentMode }}" onChange="{{ setContentMode }}"><option value="cs">CS</option><option value="marketing">Marketing</option></select></label><label>This draft’s content mode<select class="input" value="{{ draftContentMode }}" onChange="{{ setDraftContentMode }}"><option value="default">Use default</option><option value="cs">CS</option><option value="marketing">Marketing</option></select></label></div><p class="content-mode-note">{{ contentModeNote }} Changing mode preserves your text.</p></div>
+              <div class="content-modes"><label>Default content mode<select class="input" value="{{ contentMode }}" onChange="{{ setContentMode }}"><option value="marketing">Marketing</option><option value="cs">CS</option></select></label><label>This draft’s content mode<select class="input" value="{{ draftContentMode }}" onChange="{{ setDraftContentMode }}"><option value="default">Use default</option><option value="marketing">Marketing</option><option value="cs">CS</option></select></label></div><p class="content-mode-note">{{ contentModeNote }} Changing mode preserves your text.</p></div>
             </details>
-            <div class="composer-actions"><sc-if value="{{ isEmailDraft }}"><button class="btn btn-primary" onClick="{{ sendDraft }}" disabled="{{ sendDisabled }}">{{ sendLabel }}</button><sc-if value="{{ canCreateGmailDraft }}"><button class="btn btn-secondary" onClick="{{ createGmailDraft }}">Create Gmail draft</button></sc-if><button class="btn btn-secondary" onClick="{{ generateEmail }}" disabled="{{ generateDisabled }}">{{ generateLabel }}</button><button class="btn btn-secondary" onClick="{{ copyEmail }}">Copy for Gmail</button></sc-if><button class="btn btn-secondary" onClick="{{ saveDraft }}" disabled="{{ saveDisabled }}">{{ saveLabel }}</button><sc-if value="{{ isCampaignDraft }}"><button class="btn btn-secondary" onClick="{{ copyCampaign }}">Copy for LemList</button></sc-if><button class="btn btn-secondary" onClick="{{ exportDraft }}">Export</button><label class="draft-status-label">Status<select class="input" value="{{ draft.status }}" onChange="{{ editStatus }}"><option>Draft</option><option>Ready for review</option><option>Archived</option></select></label></div>
+            <div class="composer-actions"><sc-if value="{{ isEmailDraft }}"><button class="btn btn-primary" onClick="{{ sendDraft }}" disabled="{{ sendDisabled }}">{{ sendLabel }}</button><sc-if value="{{ canCreateGmailDraft }}"><button class="btn btn-secondary" onClick="{{ createGmailDraft }}">Create Gmail draft</button></sc-if><button class="btn btn-secondary" onClick="{{ generateEmail }}" disabled="{{ generateDisabled }}">{{ generateLabel }}</button><button class="btn btn-secondary" onClick="{{ copyEmail }}">Copy for Gmail</button></sc-if><button class="btn btn-secondary" onClick="{{ saveDraft }}" disabled="{{ saveDisabled }}">{{ saveLabel }}</button><sc-if value="{{ isCampaignDraft }}"><button class="btn btn-secondary" onClick="{{ copyCampaign }}">Copy for LemList</button></sc-if><sc-if value="{{ isLinkedInDraft }}"><button class="btn btn-secondary" onClick="{{ copyLinkedIn }}">Copy for LinkedIn</button></sc-if><button class="btn btn-secondary" onClick="{{ exportDraft }}">Export</button><label class="draft-status-label">Status<select class="input" value="{{ draft.status }}" onChange="{{ editStatus }}"><option>Draft</option><option>Ready for review</option><option>Archived</option></select></label></div>
             <sc-if value="{{ sendConfirm }}"><div class="send-confirm" role="dialog" aria-label="Confirm send"><h6>Send this email?</h6><p><strong>From:</strong> {{ senderLabel }}<br><strong>To:</strong> {{ sendConfirm.to }}<br><sc-if value="{{ sendConfirm.cc }}"><strong>Cc:</strong> {{ sendConfirm.cc }}<br></sc-if><strong>Subject:</strong> {{ sendConfirm.subject }}</p><div class="send-confirm-body">{{ sendConfirm.body }}</div><div class="composer-actions"><button class="btn btn-primary" onClick="{{ confirmSend }}">Confirm send</button><button class="btn btn-secondary" onClick="{{ cancelSend }}">Cancel</button></div></div></sc-if>
             <sc-if value="{{ draftFeedback }}"><p class="{{ draftFeedbackClass }}" role="status">{{ draftFeedback }}</p></sc-if>
             <sc-if value="{{ draftSaveConflict }}"><div class="workspace-notice"><span>Your edits are kept. The saved draft changed in another session.</span><button class="text-control" onClick="{{ reloadWorkspaceDraft }}">Load saved version</button><button class="text-control" onClick="{{ saveDraftCopy }}">Save my edits as a copy</button></div></sc-if>
@@ -1018,7 +1172,7 @@ class Component extends DCLogic {
   memo(key, dep, fn) { this._memo = this._memo || {}; const m = this._memo[key]; if (m && m.dep === dep) return m.val; const val = fn(); this._memo[key] = { dep, val }; return val; }
   loadTranscript(id) { if (!id || (this.state.transcripts && this.state.transcripts[id] !== undefined)) return; if (!this._trPromise) this._trPromise = fetch('data/transcripts.json').then(r => r.json()); this._trPromise.then(all => this.setState(s => ({ transcripts: { ...(s.transcripts || {}), [id]: all[id] || null } }))); }
   syncPeriodInputs() { if (typeof document === 'undefined') return; const today = workspaceModel.phoenixToday(); const start = document.getElementById('period-start'); const end = document.getElementById('period-end'); if (start && document.activeElement !== start) start.value = this.state.start || '2026-08-01'; if (end && document.activeElement !== end) end.value = this.state.end || today; }
-  componentDidMount() { fetch('data/records.json').then(r => r.json()).then(records => { if (records && records.owners) workspaceModel.ownerCatalog = records.owners; this.setState({ records }); }).catch(e => this.setState({ recordsError: String(e) })); fetch('data/hollie.json').then(r => r.json()).then(hollie => this.setState({ hollie })).catch(() => this.setState({ hollie: null })); fetch('data/agent-brief.json').then(r => r.json()).then(agentBrief => this.setState({ agentBrief })).catch(() => this.setState({ agentBrief: null })); fetch('/api/session').then(r => r.json()).then(googleSession => { this.setState({ googleSession, gmailEmail: googleSession && googleSession.signedIn && !googleSession.expired ? googleSession.email : null }); if (googleSession && googleSession.signedIn) { fetch('/api/me/brief').then(r => r.json()).then(personalBrief => this.setState({ personalBrief })).catch(() => {}); fetch('/api/me/sends').then(r => r.json()).then(audit => this.setState({ sendAudit: (audit && audit.sends) || [] })).catch(() => {}); } }).catch(() => {}); this.syncPeriodInputs(); }
+  componentDidMount() { fetch('/api/session').then(r => r.json()).then(googleSession => { this.setState({ googleSession, gmailEmail: googleSession && googleSession.signedIn && !googleSession.expired ? googleSession.email : null }); if (googleSession && googleSession.signedIn) { fetch('/api/me/brief').then(r => r.json()).then(personalBrief => this.setState({ personalBrief })).catch(() => {}); fetch('/api/me/sends').then(r => r.json()).then(audit => this.setState({ sendAudit: (audit && audit.sends) || [] })).catch(() => {}); } }).catch(() => {}); this.syncPeriodInputs(); }
   componentDidUpdate() { this.syncPeriodInputs(); }
   hollieFeedback(itemId, action) { try { fetch('/api/hollie/feedback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ itemId, action }) }).catch(() => {}); } catch {} this.setState(s => ({ hollieDone: { ...(s.hollieDone || {}), [itemId]: action } })); }
   decideProposal(idx, decision) { try { fetch('/api/proposals/decide', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idx, decision }) }).catch(() => {}); } catch {} this.setState(s => ({ proposals: (s.proposals || []).map((p, i) => i === idx ? { ...p, status: decision } : p) })); }
@@ -1050,7 +1204,7 @@ class Component extends DCLogic {
     const st = this.state;
     const ink = 'var(--color-text)', bg = 'var(--color-bg)', accent = 'var(--color-accent)', muted = 'var(--color-neutral-700)', red = 'var(--color-accent-700)';
     const seg = (items, cur, key) => items.map(([id, label]) => ({ id, label, go: () => this.setState({ [key]: id }), selected: cur === id, bg: cur === id ? accent : 'transparent', fg: cur === id ? bg : ink }));
-    const navDefs = [['briefing', 'Briefing'], ['pipeline', 'Pipeline'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts']];
+    const navDefs = [['briefing', 'Today'], ['pipeline', 'Pipeline'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts']];
     const groupOf = { account: 'accounts', meeting: 'meetings' };
     const activeNav = groupOf[s] ?? s;
     const ev = key => e => { e && e.stopPropagation && e.stopPropagation(); this.setState({ evidence: key || 'doug-11' }); };
@@ -1272,7 +1426,6 @@ class Component extends DCLogic {
       };
     }) : [];
     const hollieQueue = hollieQueueAll;
-    const marketingQueue = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id] && q.audience === 'marketing' && !isTestItem(q.title)).map((q, i) => ({ n: i + 1, title: q.title, why: q.why })) : [];
     const viewerTomorrow = workspaceModel.addDays(viewerToday, 1);
     const seenSoon = new Set();
     const soonNow = [];
@@ -1383,7 +1536,7 @@ class Component extends DCLogic {
         };
         const banner = banners[mode];
         return { isMobile: mobile, topNavDisplay: mobile ? 'none' : 'flex', mainPadBottom: mobile ? '24px' : '56px', isLoading: mode === 'loading', notLoading: mode !== 'loading', bannerShown: !!banner, banner: banner || {}, draftConflict: mode === 'draft-conflict' && s === 'drafts', reloadDraft: () => this.setState({ systemState: 'normal', edits: {} }), keepMine: () => this.setState({ systemState: 'normal' }), skeleton: [{ w1: '70%', w2: '95%', w3: '60%' }, { w1: '55%', w2: '90%', w3: '40%' }, { w1: '65%', w2: '85%', w3: '55%' }, { w1: '50%', w2: '92%', w3: '35%' }],
-          mobileNav: [['briefing', 'Briefing'], ['pipeline', 'Pipeline'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts']].map(([id, label]) => ({ id, label, go: this.go(id), current: activeNav === id ? 'page' : undefined, line: activeNav === id ? accent : 'transparent', color: activeNav === id ? ink : muted, weight: activeNav === id ? 600 : 400 })) };
+          mobileNav: [['briefing', 'Today'], ['pipeline', 'Pipeline'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts']].map(([id, label]) => ({ id, label, go: this.go(id), current: activeNav === id ? 'page' : undefined, line: activeNav === id ? accent : 'transparent', color: activeNav === id ? ink : muted, weight: activeNav === id ? 600 : 400 })) };
       })(),
       navItems: navDefs.map(([id, label]) => ({ id, label, go: this.go(id), current: activeNav === id ? 'page' : undefined, line: activeNav === id ? accent : 'transparent', color: activeNav === id ? ink : muted, weight: activeNav === id ? 600 : 400 })),
       goBriefing: this.go('briefing'), goPipeline: this.go('pipeline'), goAccounts: this.go('accounts'), goAccount, goMeetings: this.go('meetings'), goMeeting, goDrafts, goData: this.go('data'), goDeals,
@@ -1393,19 +1546,18 @@ class Component extends DCLogic {
       showMarketingBrief: () => this.setState({ briefAudience: 'marketing' }), showSalesBrief: () => this.setState({ briefAudience: 'sales' }),
       marketingBriefBg: (st.briefAudience || 'marketing') === 'marketing' ? 'var(--color-text)' : 'transparent', marketingBriefFg: (st.briefAudience || 'marketing') === 'marketing' ? 'var(--color-bg)' : 'var(--color-text)',
       salesBriefBg: st.briefAudience === 'sales' ? 'var(--color-text)' : 'transparent', salesBriefFg: st.briefAudience === 'sales' ? 'var(--color-bg)' : 'var(--color-text)',
-      connectionLines: [], spendConnected: false, adsConnected: false, webConnected: false,
+      spendConnected: false, adsConnected: false, webConnected: false,
       showChannelLinkNote: false, channelLinkNote: '', channelFoot: 'Same definitions as the cards: leads by lead date, MQL by meetings booked, SQL by meetings held. A meeting with no lead source is listed as Unattributed so the columns add up to the cards.', lastNoteDisplay: 'table-cell',
       acct, mtg, coverageNote: REC.coverage ? 'This prototype loads ' + REC.coverage.primary + ' accounts (' + REC.coverage.companiesInExtract + ' CRM company records, ' + REC.coverage.foldedRelated + ' duplicates folded), ' + REC.coverage.contacts.toLocaleString('en-US') + ' contacts, ' + REC.coverage.notes + ' notes, ' + REC.coverage.calls + ' calls, ' + REC.coverage.meetings + ' calendar entries, ' + REC.coverage.tasks + ' tasks and ' + REC.coverage.fathomTotal + ' recordings (' + REC.coverage.unmatchedRecordings + ' with companies outside the extract), full transcripts for ' + (REC.coverage.transcripts || 0) + ' of them. ' + (REC.coverage.ownersArchived || 0) + ' of 54 CRM owners are archived and shown as (former). Email bodies were excluded. Stage names for numeric CRM stage ids are inferred from the owner sheets; the connector does not export the stage catalog.' : '',
       meetingsNote: st.records ? (new Set(allRecs.map(r => r.id)).size) + ' recordings · ' + (REC.unmatchedRecordings || []).length + ' with companies outside the 31 extracted accounts · CRM calendar entries for upcoming' : 'Loading meeting records…',
       evidenceOpen: !!st.evidence, openEvidence: goEvidence, ev: evVal, evReviewSample: ev('review-sample'), evRecordingSample: ev('recording-sample'), evTim13: ev('tim-13'), evDraftRefs: ev('draft-refs'), closeEvidence: () => this.setState({ evidence: false }), stop: e => e.stopPropagation(),
       priorities: [],
-      briefingIntro: workspaceModel.greeting() + '. The workspace leads with what changed and what needs your judgment. Drafts are created but never sent; nothing leaves this workspace without you.',
       isHollie: true,
       briefingEmpty: rankedDeals.length === 0, briefingMetrics, briefingDecisions,
       hasHollieOp: !!hop, noHollieOp: !hop,
       hollieGenNote: hop ? 'Assistant run ' + fmtD((hop.generatedAt || '').slice(0, 10)) + ' · ' + (hop.queue || []).length + ' items in queue' : '',
       hollieBriefCards, hollieAutonomy,
-      hollieQueue, marketingQueue, hasMarketingQueue: marketingQueue.length > 0, hollieQueueEmpty: hollieQueue.length === 0,
+      hollieQueue, hollieQueueEmpty: hollieQueue.length === 0,
       hollieQueueEmptyNote: hop ? 'Queue is clear — nothing new from the assistant since the last run.' : '',
       hollieNewCount: hollieQueue.filter(q => q.isNew).length,
       hollieNewNote: (() => { const n = hollieQueue.filter(q => q.isNew).length; return n > 0 ? n + ' new or updated since the last run — look for the · new tag.' : 'Nothing new since the last run.'; })(),
@@ -1558,7 +1710,7 @@ class Component extends DCLogic {
       draftFeedback: st.draftFeedback || null,
       draftFeedbackClass: st.draftFeedbackClass || 'form-success',
       get meetingsEmpty() { return this.meetingGroups.length === 0; },
-      readingRules: [{ title: 'Missing spend is not zero', text: 'August and September have no actuals entered. They show as not entered, never as underspend.' }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'New leads use the lead date. Marketing qualified means a meeting was booked. Sales qualified means a meeting was held (a recording, or a CRM meeting marked held). They are separate counts, not stages of one population.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. They are not counted as meetings booked or meetings held.' }, { title: 'Each source has its own date', text: 'The extract was generated from the company brain (HubSpot, Fathom, Sheets, GA4).' }],
+      readingRules: [{ title: 'Missing spend is not zero', text: workspaceModel.missingSpendText(st.marketing && st.marketing.spend) }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'New leads use the lead date. Marketing qualified means a meeting was booked. Sales qualified means a meeting was held (a recording, or a CRM meeting marked held). They are separate counts, not stages of one population.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. They are not counted as meetings booked or meetings held.' }, { title: 'Each source has its own date', text: 'The extract was generated from the company brain (HubSpot, Fathom, Sheets, GA4).' }],
       sources: [],
       definitions: [{ source: 'Inbound', lead: 'Gated content (excl. spam/jobs); simple email form', mql: 'Demo request, meeting booked, pricing, contact form', sql: 'Meeting happened' }, { source: 'Outbound', lead: 'Prospect replied with positive engagement', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'Events', lead: 'Gave us contact info / badge scanned', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'RFP', lead: 'Said they want to send an RFI/RFP', mql: 'Sent RFI/RFP', sql: 'Invitation to start demo' }]
     };

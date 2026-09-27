@@ -1,6 +1,6 @@
 /* Shared browser/import representation. Original source records stay unchanged. */
 const workspaceDomain = (() => {
-  const purposes = ['email', 'campaign', 'internal-note'];
+  const purposes = ['email', 'campaign', 'linkedin', 'internal-note'];
   const cleanTitle = value => String(value || '').replace(/ — editable, unsent draft$/, '');
   const purpose = d => purposes.includes(d.purpose) ? d.purpose : d.kind === 'Proposed correction' || d.type === 'Proposed correction' ? 'internal-note' : 'email';
   function document(d, index = 0) {
@@ -14,6 +14,7 @@ const workspaceDomain = (() => {
       supportRefs: d.supportRefs || (Array.isArray(d.refs) ? d.refs : []), status: ['Draft', 'Ready for review', 'Archived'].includes(d.status) ? d.status : 'Draft',
       version: Number.isSafeInteger(d.version) ? d.version : 0, updatedAt: d.updatedAt || null,
       history: Array.isArray(d.history) ? d.history : [], contentMode: d.contentMode || 'default',
+      citations: Array.isArray(d.citations) ? d.citations.map(String) : [],
     };
   }
   function seeds(verified, records, revisions) {
@@ -43,7 +44,7 @@ const workspaceDomain = (() => {
     const p = legacy.workspacePreferences || {};
     return {
       drafts: migrated,
-      preferences: { mode: p.mode === 'marketing' ? 'marketing' : 'cs', ratings: p.ratings || {}, draftModes: p.draftModes || {}, priorityContext: p.priorityContext || {} },
+      preferences: { mode: p.mode === 'cs' ? 'cs' : 'marketing', ratings: p.ratings || {}, draftModes: p.draftModes || {}, priorityContext: p.priorityContext || {} },
       comments: Object.entries(p.comments || {}).flatMap(([priorityId, comments]) => Array.isArray(comments) ? comments.map(c => ({ ...c, priorityId })) : []),
     };
   }

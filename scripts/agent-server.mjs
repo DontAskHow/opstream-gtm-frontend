@@ -29,6 +29,7 @@ import {
 import {
   GOOGLE_TOOL_SCHEMAS, isGoogleTool, runGoogleTool, buildPersonalBrief, gtmIndex, createGmailDraft, sendGmailMessage,
 } from './google-workspace.mjs';
+import { linkedInDraft } from './marketing-drafts.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
@@ -1067,6 +1068,30 @@ function onRequest(req, res) {
         console.error('[gmail-send] failed: ' + safeCode(err));
         res.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Gmail did not send this draft.' }));
       }
+      return;
+    }
+    if (url.pathname === '/api/drafts/linkedin' && req.method === 'POST') {
+      let raw = '';
+      for await (const chunk of req) { raw += chunk; if (raw.length > 4096) break; }
+      let body = {};
+      try { body = JSON.parse(raw || '{}'); } catch { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Invalid JSON.' })); return; }
+      let marketing = null;
+      try { marketing = readJson(path.join(dataDir, 'marketing.json')); } catch { marketing = null; }
+      const show = (((marketing || {}).shows || {}).items || []).find(s => s.id === String(body.showId || ''));
+      if (!show) {
+        res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'That show is not on the show calendar in this collection.' }));
+        return;
+      }
+      const existing = currentUser(req);
+      const token = existing && !existing.expired ? await ensureAccess(existing) : '';
+      const draft = await linkedInDraft({
+        show, user: existing, token, fetchImpl: hooks.fetchImpl, chat: hooks.callChatApi || callChatApi, model: MODEL,
+      });
+      if (draft.expired && existing) {
+        const stored = userSessions.get(existing.sid);
+        if (stored) stored.expired = true;
+      }
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(draft));
       return;
     }
     if (url.pathname === '/api/proposals/decide' && req.method === 'POST') {

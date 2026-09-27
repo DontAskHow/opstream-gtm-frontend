@@ -1,4 +1,4 @@
-// Public preview adapter: browser-local persistence and no provider effects.
+// Browser-local workspace store, signed-in Google state, and the confirmed Gmail send.
 let demoState;
 Component.prototype._workspaceApi=async function(path,body){
  if(!demoState){const seed=await fetch('/data/bootstrap.json').then(r=>r.json());try{demoState=JSON.parse(localStorage.getItem('gtm-public-demo-v1'))||seed;}catch{demoState=seed;}}
@@ -19,6 +19,10 @@ Component.prototype.renderVals=function(){
  v.signedInLabel=s.name||s.email||'';
  v.signedInEmail=s.email||'';
  v.signedInInitials=s.initials||'';
+ v.signedInPicture=/^https:\/\//.test(s.picture||'')?s.picture:'';
+ v.hasSignedInPicture=!!v.signedInPicture;
+ v.signedInPhotoStyle=v.signedInPicture?'background-image:url("'+v.signedInPicture.replace(/["\\)\s]/g,'')+'")':'';
+ v.signedInFirstName=String(s.name||'').trim().split(/\s+/)[0]||'';
  v.scopeSummary=s.scopeSummary||'';
  v.googleExpired=!!s.expired;
  v.profileOpen=!!this.state.profileOpen;
@@ -29,16 +33,17 @@ Component.prototype.renderVals=function(){
  v.personalNotOnSheet=(brief&&brief.notOnSheet)||[];
  v.personalDrafts=(brief&&brief.drafts)||[];
  if(!s.signedIn){
-  v.googleConnectionLabel='Email sending is disabled in this public workspace. Drafts stay in your browser and nothing is sent.';
-  v.googleConnectLabel='Sending unavailable';
-  v.googleConnectionDisabled=true;
+  v.googleConnectionLabel='Email sending is disabled in this public workspace. Sign in with Google to read your mail and calendar and to send a draft from your own Gmail after you confirm it.';
+  v.googleConnectLabel='Sign in with Google';
+  v.googleConnectionDisabled=false;
+  v.connectGoogle=()=>{window.location.href='/api/google/sign-in';};
  }else if(s.expired){
   v.googleConnectionLabel='Google access expired, reconnect';
   v.googleConnectLabel='Reconnect';
   v.googleConnectionDisabled=false;
   v.connectGoogle=()=>{window.location.href='/api/google/sign-in';};
  }else{
-  v.googleConnectionLabel='Connected as '+(s.email||s.name);
+  v.googleConnectionLabel='Connected as '+(s.email||s.name)+(s.canSend?'. A draft is sent only when you click Send on it and confirm.':'. Reconnect to allow sending from your Gmail.');
   v.googleConnectLabel='Reconnect';
   v.googleConnectionDisabled=false;
   v.connectGoogle=()=>{window.location.href='/api/google/sign-in';};
@@ -48,12 +53,16 @@ Component.prototype.renderVals=function(){
  v.slackConnectionDisabled=true;
  v.sendAudit=Array.isArray(this.state.sendAudit)?this.state.sendAudit:[];
  v.hasSendAudit=v.sendAudit.length>0;
+ const selected=this._currentWorkspaceDraft?this._currentWorkspaceDraft():null;
+ const receipt=selected?v.sendAudit.find(r=>r.draftId===selected.id):null;
+ v.hasSendReceipt=!!receipt;
+ v.sendReceiptLabel=receipt?'Sent from '+receipt.from+' · '+workspaceModel.formatDateTime(receipt.at)+'.':'';
  const canSend=!!(s.signedIn&&!s.expired&&s.canSend);
  if(canSend){
   v.gmailEmail=s.email||'';
   v.senderLabel=s.email||'';
   const current=this._currentWorkspaceDraft?this._currentWorkspaceDraft():null;
-  const emailDraft=current&&current.purpose!=='campaign'&&current.purpose!=='internal-note';
+  const emailDraft=current&&current.purpose==='email';
   const ready=!!(emailDraft&&String(current.recipients||'').trim()&&String(current.subject||current.title||'').trim()&&String(current.text||'').trim()&&current.id);
   v.sendDisabled=!ready||!!this.state.draftSending;
   v.sendLabel=this.state.draftSending?'Sending…':'Send via Gmail';

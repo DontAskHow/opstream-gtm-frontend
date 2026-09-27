@@ -2,47 +2,44 @@
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap');
 
 :root {
-  --color-bg: #ffffff;
-  --color-surface: #DDF0ED;
-  --color-text: #171C33;
-  --color-accent: #1AB396;
-  --color-accent-2: #1B80C8;
-  --color-divider: color-mix(in srgb, #0A1C17 28%, transparent);
+  --color-bg: #f3f2f2;
+  --color-surface: #eae9e9;
+  --color-text: #201e1d;
+  --color-accent: #ec3013;
+  --color-accent-2: #e15b47;
+  --color-divider: color-mix(in srgb, #201e1d 40%, transparent);
 
   /* Tonal ramps — generated in OKLCH on one shared lightness scale, so the
      same step of any role matches the others in visual value. */
-  --color-neutral-100: #ffffff;
-  --color-neutral-200: #DDF0ED;
-  --color-neutral-300: color-mix(in srgb, #0A1C17 20%, #ffffff);
-  --color-neutral-400: color-mix(in srgb, #0A1C17 35%, #ffffff);
-  --color-neutral-500: color-mix(in srgb, #0A1C17 50%, #ffffff);
-  --color-neutral-600: color-mix(in srgb, #0A1C17 65%, #ffffff);
-  --color-neutral-700: color-mix(in srgb, #0A1C17 78%, #ffffff);
-  --color-neutral-800: #0A1C17;
-  --color-neutral-900: #171C33;
+  --color-neutral-100: #f8f4f4;
+  --color-neutral-200: #eae7e7;
+  --color-neutral-300: #d7d3d3;
+  --color-neutral-400: #bab6b6;
+  --color-neutral-500: #9b9797;
+  --color-neutral-600: #7d7979;
+  --color-neutral-700: #605d5d;
+  --color-neutral-800: #444141;
+  --color-neutral-900: #2d2b2b;
 
-  --color-accent-100: #DDF0ED;
-  --color-accent-200: color-mix(in srgb, #1AB396 25%, #ffffff);
-  --color-accent-300: color-mix(in srgb, #1AB396 45%, #ffffff);
-  --color-accent-400: color-mix(in srgb, #1AB396 70%, #ffffff);
-  --color-accent-500: #1AB396;
-  --color-accent-600: #1AB396;
-  --color-accent-700: #0A1C17;
-  --color-accent-800: #0A1C17;
-  --color-accent-900: #171C33;
+  --color-accent-100: #fff2ef;
+  --color-accent-200: #ffe0d9;
+  --color-accent-300: #ffc4b8;
+  --color-accent-400: #ff9783;
+  --color-accent-500: #ff563c;
+  --color-accent-600: #dd2b0f;
+  --color-accent-700: #ae1800;
+  --color-accent-800: #7c1405;
+  --color-accent-900: #4d170e;
 
-  --color-accent-2-100: color-mix(in srgb, #1B80C8 10%, #ffffff);
-  --color-accent-2-200: color-mix(in srgb, #1B80C8 20%, #ffffff);
-  --color-accent-2-300: color-mix(in srgb, #1B80C8 40%, #ffffff);
-  --color-accent-2-400: color-mix(in srgb, #1B80C8 70%, #ffffff);
-  --color-accent-2-500: #1B80C8;
-  --color-accent-2-600: #1B80C8;
-  --color-accent-2-700: #171C33;
-  --color-accent-2-800: #171C33;
-  --color-accent-2-900: #171C33;
-  --color-rose: #F0806E;
-  --color-sunrise: #F3B31B;
-  --color-error: #ED4C5C;
+  --color-accent-2-100: #fff2ef;
+  --color-accent-2-200: #ffe0da;
+  --color-accent-2-300: #ffc4b9;
+  --color-accent-2-400: #ff9784;
+  --color-accent-2-500: #ef6853;
+  --color-accent-2-600: #c94b39;
+  --color-accent-2-700: #9e3526;
+  --color-accent-2-800: #71261b;
+  --color-accent-2-900: #471d16;
 
   --font-heading: "Archivo", system-ui, sans-serif;
   --font-heading-weight: 800;
@@ -95,7 +92,7 @@ h5 { font-size: 16px; }
 h6 { font-size: 13px; }
 h6 { letter-spacing: 0.08em; text-transform: uppercase; }
 p { margin: 0 0 var(--space-3); }
-a { color: var(--color-accent-700); text-underline-offset: 3px; }
+a { color: var(--color-accent); text-underline-offset: 3px; }
 img { display: block; max-width: 100%; }
 figure { margin: 0; }
 figcaption {
@@ -104,7 +101,7 @@ figcaption {
 }
 .text-muted { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
 :focus { outline: none; }
-:focus-visible { outline: 2px solid var(--color-accent-2); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
 
 /* — rules — */
@@ -126,13 +123,13 @@ figcaption {
 }
 .btn svg { display: block; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary { background: var(--color-accent); color: var(--color-text); }
-.btn-primary:hover { background: var(--color-accent-300); }
-.btn-primary:active { background: var(--color-accent-200); }
+.btn-primary { background: var(--color-accent); color: var(--color-bg); }
+.btn-primary:hover { background: var(--color-accent-600); }
+.btn-primary:active { background: var(--color-accent-700); }
 .btn-secondary { border-color: var(--color-divider); }
 .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .btn-secondary:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
-.btn-ghost { color: var(--color-accent-700); padding-inline: var(--space-1); }
+.btn-ghost { color: var(--color-accent); padding-inline: var(--space-1); }
 .btn-ghost:hover { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
 .btn-ghost:active { background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
 .btn-icon { width: 36px; height: 36px; padding: 0; }
@@ -184,7 +181,7 @@ textarea.input { min-height: 90px; resize: vertical; }
   display: flex; flex-direction: column; gap: var(--space-2);
   padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface);
 }
-.card-kicker { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent-700); }
+.card-kicker { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent); }
 .card-title {
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
   font-size: 17px; line-height: 1.2;
@@ -207,7 +204,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 .tag-accent { background: var(--color-accent-100); color: var(--color-accent-800); }
 .tag-accent-2 { background: var(--color-accent-2-100); color: var(--color-accent-2-800); }
 .tag-neutral { background: var(--color-neutral-100); color: var(--color-neutral-800); }
-.tag-outline { border: 1px solid var(--color-accent); color: var(--color-accent-700); }
+.tag-outline { border: 1px solid var(--color-accent); color: var(--color-accent); }
 
 /* — navigation — */
 .nav {
@@ -220,7 +217,7 @@ textarea.input { min-height: 90px; resize: vertical; }
   font-size: 18px; margin-right: auto;
 }
 .nav a { color: inherit; text-decoration: none; font-size: 14px; }
-.nav a:hover, .nav a[aria-current='page'] { color: var(--color-accent-700); }
+.nav a:hover, .nav a[aria-current='page'] { color: var(--color-accent); }
 
 /* — tables — */
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -252,3 +249,4 @@ textarea.input { min-height: 90px; resize: vertical; }
 }
 .dialog-body { font-size: 14px; opacity: 0.85; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+
