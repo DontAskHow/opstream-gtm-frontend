@@ -54,7 +54,7 @@ check('weighted', certifiedMetrics.weighted === 904750 && certifiedMetrics.weigh
 check('on hold', certifiedMetrics.onHoldCount === 15 && certifiedMetrics.onHoldAmount === 1300000 && certifiedMetrics.onHoldAmountLabel === '$1,300,000', [certifiedMetrics.onHoldCount, certifiedMetrics.onHoldAmount].join('/'));
 check('hubspot only', certifiedMetrics.hubspotOnlyCount === 1 && certifiedMetrics.hubspotOnlyAmount === 0, [certifiedMetrics.hubspotOnlyCount, certifiedMetrics.hubspotOnlyAmount].join('/'));
 check('renewals', certifiedMetrics.renewalCount === 74 && certifiedMetrics.renewalAmount === 3433665 && certifiedMetrics.renewalAmountLabel === '$3,433,665' && certifiedMetrics.renewalDuplicates === 3, [certifiedMetrics.renewalCount, certifiedMetrics.renewalAmount, certifiedMetrics.renewalDuplicates].join('/'));
-check('funnel', certifiedMetrics.leads === 383 && certifiedMetrics.mql === 280 && certifiedMetrics.sql === 118, [certifiedMetrics.leads, certifiedMetrics.mql, certifiedMetrics.sql].join('/'));
+check('funnel', certifiedMetrics.leads === 129 && certifiedMetrics.mql === 23 && certifiedMetrics.sql === 22, [certifiedMetrics.leads, certifiedMetrics.mql, certifiedMetrics.sql].join('/'));
 check('nxp owner', certifiedLargest.owner === 'Tim', JSON.stringify(certifiedLargest.owner));
 check('live largest still NXP', largest.company === 'NXP' && largest.amount === 500000 && largest.owner === 'Tim', JSON.stringify(largest));
 check('live open book sheet-authoritative', metrics.openCount === 32 && metrics.openAmount === 3960000 && metrics.weighted === 904750, [metrics.openCount, metrics.openAmount, metrics.weighted].join('/'));
@@ -84,10 +84,10 @@ check('context open total', certified.context.includes('OPEN PIPELINE: 32 deals,
 check('context on hold', certified.context.includes('ON HOLD: 15 deals, $1,300,000.'), 'missing on hold line');
 check('context hubspot only', certified.context.includes('IN HUBSPOT, NOT ON THE SHEET: 1 deal, $0.'), 'missing hubspot-only line');
 check('context renewals', certified.context.includes('RENEWALS: 74 current deals, $3,433,665.'), 'missing renewals line');
-check('legacy renewal not open', certified.context.includes('NOT IN THE OPEN BOOK (renewal): No company linked — Renewal, $50,000'), 'missing $50,000 renewal');
+check('legacy renewal not open', certified.context.includes('NOT IN THE OPEN BOOK (renewal): No company on the Sheet row — Renewal, $50,000'), 'missing $50,000 renewal');
 check('associated renewal company', certified.context.includes('NOT IN THE OPEN BOOK (renewal): Intuitive — Renewal, $350,000'), 'missing associated company');
 check('marketing brief in context', certified.context.includes('MARKETING BRIEF'), 'missing marketing brief');
-check('context funnel', certified.context.includes('383 leads / 280 MQL / 118 SQL'), 'missing funnel line');
+check('context funnel', certified.context.includes('129 leads / 23 MQL / 22 SQL'), 'missing funnel line');
 const mozilla = certified.deals.find(d => /Mozilla Firefox/.test(d.dealName || '') && d.amount === 105000);
 check('mozilla in the book', !!mozilla && mozilla.inOpenBook && mozilla.company === 'Mozilla' && mozilla.stage === 'Wider stakeholders' && mozilla.owner === 'Tim' && mozilla.closePassed === false, mozilla ? [mozilla.company, mozilla.stage, mozilla.owner, mozilla.inOpenBook].join('/') : 'missing');
 const passed = ['CrossCountry', 'Taboola', 'ImPact Biotech', 'UVeye'].map(name => certified.deals.find(d => (d.dealName || '').includes(name) && d.inOpenBook));

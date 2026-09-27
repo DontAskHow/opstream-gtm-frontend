@@ -1,5 +1,5 @@
 // Shared calculations for the exported snapshot and the browser controls.
-// Headline numbers (pipeline, funnel, quiet days, unworked leads) are computed
+// Headline numbers (pipeline, lead counts, quiet days, unworked leads) are computed
 // here and only here. Generators and the assistant describe these results;
 // they do not invent a second figure. Dates are America/Phoenix calendar dates.
 const workspaceModel = {
@@ -95,13 +95,32 @@ const workspaceModel = {
     if(/^owner name not connected$/i.test(stripped))return {label:'Owner name not connected', title:"Owner name isn't connected", key:'Owner name not connected', named:false};
     const book=this.ownerCatalog||{};
     const hit=book[stripped]||book[s]||book[String(stripped).toLowerCase()];
-    if(typeof hit==='string'&&hit.trim())return {label:hit.trim(), title:'', key:stripped, named:true};
+    if(typeof hit==='string'&&hit.trim())return {label:this.canonicalPerson(hit.trim()), title:'', key:stripped, named:true};
     if(/^\d+$/.test(stripped)||/^[a-f0-9-]{8,}$/i.test(stripped)){
       const digits=stripped.replace(/\D/g,'')||stripped;
       const n=Math.min(digitsWanted, digits.length);
       return {label:'Owner #\u2026'+digits.slice(-n), title:"Owner name isn't connected", key:stripped, named:false};
     }
-    return {label:stripped, title:'', key:stripped, named:true};
+    return {label:this.canonicalPerson(stripped), title:'', key:stripped, named:true};
+  },
+  // "Doug", "doug.daniels@opstream.ai" and "Doug Daniels" are one person when
+  // the collected directory has exactly one full name for them.
+  canonicalPerson(label) {
+    const raw=String(label||'').trim();
+    const names=[...new Set([...(this.people||[]).map(p=>p&&p.name),...Object.values(this.ownerCatalog||{})].filter(n=>typeof n==='string'&&n.trim()).map(n=>n.trim()))];
+    if(!raw||!names.length)return raw;
+    const low=raw.toLowerCase();
+    if(low.includes('@')){
+      const byEmail=(this.people||[]).find(p=>p&&String(p.email||'').toLowerCase()===low);
+      if(byEmail)return byEmail.name;
+      const local=low.split('@')[0].split(/[._-]+/)[0];
+      const full=names.filter(n=>n.toLowerCase().split(/\s+/)[0]===local&&/\s/.test(n));
+      return full.length===1?full[0]:raw;
+    }
+    if(/\s/.test(raw))return raw;
+    const full=names.filter(n=>/\s/.test(n)&&n.toLowerCase().split(/\s+/)[0]===low);
+    if(full.length===1)return full[0];
+    return raw.charAt(0).toUpperCase()+raw.slice(1).toLowerCase();
   },
   displayOwner(value) {
     return this.ownerInfo(value).label;
@@ -326,7 +345,7 @@ const workspaceModel = {
     if(raw&&!this.isPlaceholderName(raw)&&!this.isBrowserLabel(raw))return raw;
     const other=this.companyName(fallbackName);
     if(other&&!this.isPlaceholderName(other)&&!this.isBrowserLabel(other))return other;
-    return 'No company linked';
+    return 'No company on the Sheet row';
   },
   renewalStage(deal) {
     const raw=String((deal&&(deal.stageLabel||deal.stage))||'').trim();
@@ -465,12 +484,33 @@ const workspaceModel = {
       return {...o,companyRecord:company,lastEngagement:company?this.lastEngagement(company,today):null,daysQuiet:company?this.daysQuiet(company,today):null};
     }).filter(o=>o.daysQuiet==null||o.daysQuiet>=this.QUIET_DAYS);
   },
-  // Sheet lead tracker wins when it is present. Otherwise a lead is unworked
-  // until a meeting is booked (MQL date).
-  unworkedLeads(leads,sheetReview) {
-    const lt=sheetReview&&sheetReview.leadTracker;
-    if(lt&&typeof lt.unworked==='number'&&typeof lt.total==='number'&&lt.total>0)return {count:lt.unworked,source:'sheet'};
-    return {count:(leads||[]).filter(l=>!this.dateOnly(l.mql)).length,source:'leads'};
+  // One set of lead rows for every surface: the Lead Tracker when it is in the
+  // collection, otherwise HubSpot contacts. Subscribers and unnamed rows are not leads.
+  trackerRows(sheetReview,contacts) {
+    const sheet=(sheetReview&&sheetReview.leads)||[];
+    const base=sheet.length?sheet:(contacts||[]);
+    return base.filter(r=>{const note=String(r.note||'').trim().toLowerCase();const name=String(r.company||r.name||'').trim();return note!=='subscriber'&&!note.includes('newsletter')&&name&&!name.includes('@');})
+      .map(r=>({id:r.id,name:String(r.company||r.name).trim(),source:this.sourceLabel(r.source),owner:r.owner,lead:this.dateOnly(r.lead||r.leadDate),mql:this.dateOnly(r.mql),sql:this.dateOnly(r.sql),note:r.note}));
+  },
+  firstTouch(row) {
+    const days=[row.lead,row.mql,row.sql].filter(Boolean).sort();
+    return days[0]||null;
+  },
+  // Lead Tracker definitions: a lead counts on its first stage date; MQL and SQL on their own dates.
+  leadCounts(rows,start,end) {
+    const inR=v=>!!v&&v>=start&&v<=end;
+    const by=new Map();
+    const slot=name=>{if(!by.has(name))by.set(name,{channel:name,leads:0,mql:0,sql:0});return by.get(name);};
+    for(const r of rows||[]){
+      if(inR(this.firstTouch(r)))slot(r.source).leads++;
+      if(inR(r.mql))slot(r.source).mql++;
+      if(inR(r.sql))slot(r.source).sql++;
+    }
+    const sources=[...by.values()].sort((a,b)=>b.leads-a.leads||b.mql-a.mql||b.sql-a.sql||a.channel.localeCompare(b.channel));
+    return {leads:sources.reduce((n,c)=>n+c.leads,0),mql:sources.reduce((n,c)=>n+c.mql,0),sql:sources.reduce((n,c)=>n+c.sql,0),sources};
+  },
+  unworkedRows(rows) {
+    return (rows||[]).filter(r=>!r.mql);
   },
   activityFromRecords(records) {
     const meetings=[],recordings=[];
@@ -494,36 +534,6 @@ const workspaceModel = {
     for(const r of records?.unmatchedRecordings||[])addRecording(r,null);
     return {meetings,recordings};
   },
-  // Leads by lead date. MQL = a meeting booked. SQL = a meeting held
-  // (a recording, or a CRM meeting whose outcome says it was held).
-  funnel(leads,records,start,end) {
-    const inR=v=>this.inRange(v,start,end);
-    const leadCount=(leads||[]).filter(l=>inR(l.lead)).length;
-    const {meetings,recordings}=this.activityFromRecords(records);
-    const booked=meetings.filter(m=>inR(m.booked||m.start));
-    const heldKeys=new Set();
-    for(const r of recordings){const d=this.dateOnly(r.date);if(d&&inR(d))heldKeys.add((r.companyId||'')+'|'+d);}
-    for(const m of meetings){
-      const d=this.dateOnly(m.start);
-      if(!d||!inR(d))continue;
-      if(/complete|held|completed/i.test(m.outcome||''))heldKeys.add((m.companyId||'')+'|'+d+'|crm');
-    }
-    // A recording and a completed CRM meeting on the same company and day are one held meeting.
-    const sqlKeys=new Set();
-    for(const key of heldKeys){
-      const [company,day]=key.split('|');
-      sqlKeys.add(company+'|'+day);
-    }
-    return {leads:leadCount,mql:booked.length,sql:sqlKeys.size,booked,held:sqlKeys.size};
-  },
-  // One lead source for a company, or Unattributed when the company has none or several.
-  sourceForCompany(company,leads) {
-    if(!company)return 'Unattributed';
-    const id=String(company.id||'');
-    const matches=(leads||[]).filter(l=>(l.companyId&&String(l.companyId).replace(/^company:/,'')===id)||(l.name&&l.name===company.name));
-    const sources=[...new Set(matches.map(l=>this.sourceLabel(l.source)).filter(Boolean))];
-    return sources.length===1?sources[0]:'Unattributed';
-  },
   weekStart(today) {
     today=today||this.phoenixToday();
     const sinceMonday=(new Date(today+'T12:00:00Z').getUTCDay()+6)%7;
@@ -534,103 +544,36 @@ const workspaceModel = {
     if(!average)return Math.round(n).toLocaleString('en-US');
     return (Math.round(n*10)/10).toFixed(1);
   },
-  // Spend is recorded by month. A gap is not zero: if any month overlapping the
-  // range has no actual, the cost is not connected. Week and multi-week ranges
-  // are not a month, so they stay not connected rather than borrowing a month.
-  costPerLead(channel,leads,spend,start,end) {
-    const months=[];
-    let cursor=(start||'').slice(0,7);
-    const last=(end||'').slice(0,7);
-    if(!/^\d{4}-\d{2}$/.test(cursor)||!/^\d{4}-\d{2}$/.test(last)||!String(start).endsWith('-01'))return 'not connected';
-    while(cursor<=last){
-      months.push(cursor);
-      const [y,m]=cursor.split('-').map(Number);
-      cursor=m===12?(y+1)+'-01':y+'-'+String(m+1).padStart(2,'0');
-    }
-    const series=(spend&&spend.channelMonths||[]).find(c=>String(c.channel||'').toLowerCase()===String(channel||'').toLowerCase());
-    if(!series)return 'not connected';
-    let sum=0;
-    for(const month of months){
-      const row=(series.months||[]).find(x=>x.month===month);
-      if(!row||row.actual==null||row.actual==='')return 'not connected';
-      const n=Number(row.actual);
-      if(!Number.isFinite(n))return 'not connected';
-      sum+=n;
-    }
-    if(!leads)return '—';
-    return '$'+Math.round(sum/leads).toLocaleString('en-US');
-  },
-  marketingView(leads,records,spend,today) {
+  marketingView(rows,today) {
     today=today||this.phoenixToday();
-    const weekStart=this.weekStart(today);
     const quarter=this.periodBounds('quarter',null,null,today);
     const windows=[
-      {key:'week',label:'This week',start:weekStart,end:today,average:false,weeks:1},
-      {key:'six',label:'6-week average',start:this.addDays(weekStart,-35),end:today,average:true,weeks:6},
+      {key:'week',label:'Last 7 days',start:this.addDays(today,-6),end:today,average:false,weeks:1},
+      {key:'six',label:'6-week average',start:this.addDays(today,-41),end:today,average:true,weeks:6},
       {key:'quarter',label:'Quarter to date',start:quarter.start,end:quarter.end,average:false,weeks:1}
     ];
-    const blocks=windows.map(w=>{
-      const fun=this.funnel(leads,records,w.start,w.end);
-      const channels=this.channels(leads,records,w.start,w.end);
-      const div=w.average?w.weeks:1;
-      return {...w,range:this.formatDate(w.start)+' – '+this.formatDate(w.end),leads:fun.leads/div,mql:fun.mql/div,sql:fun.sql/div,leadsTotal:fun.leads,channels};
-    });
+    const blocks=windows.map(w=>({...w,counts:this.leadCounts(rows,w.start,w.end)}));
     const names=[];
-    for(const block of blocks)for(const c of block.channels)if(c.leads&&!names.includes(c.channel))names.push(c.channel);
-    const quarterBlock=blocks[2];
-    const sources=names.map(name=>{
-      const raw=block=>{
-        const row=block.channels.find(c=>c.channel===name);
-        return row?row.leads:0;
-      };
-      const quarterLeads=raw(quarterBlock);
-      return {
-        channel:name,
-        week:this.formatMetric(raw(blocks[0]),false),
-        six:this.formatMetric(raw(blocks[1])/blocks[1].weeks,true),
-        quarter:this.formatMetric(quarterLeads,false),
-        cpl:this.costPerLead(name,quarterLeads,spend,quarter.start,quarter.end)
-      };
-    });
+    for(const b of blocks)for(const c of b.counts.sources)if(!names.includes(c.channel))names.push(c.channel);
+    const cell=(b,name,k)=>{const row=b.counts.sources.find(c=>c.channel===name);return row?row[k]:0;};
+    const sources=names.map(name=>({
+      channel:name,
+      week:this.formatMetric(cell(blocks[0],name,'leads'),false),
+      six:this.formatMetric(cell(blocks[1],name,'leads')/6,true),
+      quarter:this.formatMetric(cell(blocks[2],name,'leads'),false),
+      quarterMql:cell(blocks[2],name,'mql'),quarterSql:cell(blocks[2],name,'sql')
+    })).sort((a,b)=>Number(b.quarter.replace(/,/g,''))-Number(a.quarter.replace(/,/g,''))||a.channel.localeCompare(b.channel));
     return {
       intervals:blocks.map(b=>({
-        key:b.key,label:b.label,range:b.range,
-        leads:this.formatMetric(b.leads,b.average),
-        mql:this.formatMetric(b.mql,b.average),
-        sql:this.formatMetric(b.sql,b.average),
-        note:b.average?'Per week across the last 6 weeks, through '+this.formatDate(b.end)+'. Not the six-week total.':b.key==='week'?'Monday through '+this.formatDate(b.end)+', America/Phoenix.':'Calendar quarter through '+this.formatDate(b.end)+'.',
-        cpl:b.key==='quarter'?'See each source':'not connected',
-        cplNote:b.key==='quarter'?'Quarter cost per lead is on the source table. A missing month is not connected, not zero.':'Spend is recorded by month, so a weekly cost per lead is not connected.'
+        key:b.key,label:b.label,range:this.formatDate(b.start)+' – '+this.formatDate(b.end),
+        leads:this.formatMetric(b.counts.leads/(b.average?6:1),b.average),
+        mql:this.formatMetric(b.counts.mql/(b.average?6:1),b.average),
+        sql:this.formatMetric(b.counts.sql/(b.average?6:1),b.average),
+        total:b.counts,
+        note:b.average?'Per week over the last 42 days. Not the six-week total.':b.key==='week'?this.formatDate(b.start)+' – '+this.formatDate(b.end):'Since '+this.formatDate(b.start)
       })),
       sources
     };
-  },
-  channels(leads,records,start,end) {
-    const inR=v=>this.inRange(v,start,end);
-    const by=new Map();
-    const row=src=>{const key=src||'Unattributed';if(!by.has(key))by.set(key,{channel:key,leads:0,mql:0,sql:0});return by.get(key);};
-    for(const l of leads||[])if(inR(l.lead))row(this.sourceLabel(l.source)).leads++;
-    const companies=records?.companies||[];
-    const find=id=>companies.find(c=>c.id===id);
-    const {meetings,recordings}=this.activityFromRecords(records);
-    for(const m of meetings){
-      if(!inR(m.booked||m.start))continue;
-      row(this.sourceForCompany(find(m.companyId),leads)).mql++;
-    }
-    const held=new Set();
-    const addHeld=(companyId,day)=>{
-      const key=(companyId||'')+'|'+day;
-      if(held.has(key))return;
-      held.add(key);
-      row(this.sourceForCompany(find(companyId),leads)).sql++;
-    };
-    for(const r of recordings){const d=this.dateOnly(r.date);if(d&&inR(d))addHeld(r.companyId,d);}
-    for(const m of meetings){
-      const d=this.dateOnly(m.start);
-      if(!d||!inR(d))continue;
-      if(/complete|held|completed/i.test(m.outcome||''))addHeld(m.companyId,d);
-    }
-    return [...by.values()].filter(r=>r.leads||r.mql||r.sql).sort((a,b)=>b.leads-a.leads||b.mql-a.mql||a.channel.localeCompare(b.channel));
   },
   compareLeads(a,b) {
     const left=this.date(a.lead),right=this.date(b.lead),tie=()=>a.name.localeCompare(b.name)||String(a.id).localeCompare(String(b.id));
@@ -736,7 +679,7 @@ const workspaceModel = {
     next.onSheet=true;
     if(ov.amount!=null&&next.amount!==ov.amount){next.hubspotAmount=next.amount; next.amount=ov.amount; diffs.push('amount');}
     const sheetClose=ov.close?this.dateOnly(ov.close)||ov.close:null;
-    if(sheetClose&&this.dateOnly(next.close)!==sheetClose){next.hubspotClose=next.close; next.close=sheetClose; diffs.push('close');}
+    if(sheetClose&&this.dateOnly(next.close)!==sheetClose){const hub=this.dateOnly(next.close);next.hubspotClose=next.close; next.close=sheetClose; const gap=hub?Math.abs(Date.parse(hub)-Date.parse(sheetClose))/86400000:null; if(gap==null||gap>2)diffs.push('close');}
     if(ov.stage){
       const current=String(next.stageLabel||next.stage||'');
       if(!current.toLowerCase().includes(String(ov.stage).toLowerCase())){
@@ -793,6 +736,33 @@ const workspaceModel = {
     if(/^(renewal|current agreement)$/i.test(name||''))return null;
     if(/\bkidde\b/i.test(deal||'')&&/\bcarrier\b/i.test(name||''))return 'Kidde Global Solutions';
     return name||null;
+  },
+  // Correct on any day: "starts tomorrow", "starts in 3 days", "on now", "ended 5 days ago".
+  relativeStart(start,end,today) {
+    today=today||this.phoenixToday();
+    if(!start)return 'date not set';
+    const last=end||start;
+    const ahead=-this.relativeDays(start,today);
+    if(start<=today&&today<=last)return last===today?'ends today':'on now, through '+this.formatShort(last);
+    if(last<today){const ago=this.relativeDays(last,today);return ago===1?'ended yesterday':'ended '+ago+' days ago';}
+    if(ahead===0)return 'starts today';
+    if(ahead===1)return 'starts tomorrow';
+    if(ahead<7)return 'starts in '+ahead+' days';
+    const nextWeek=this.addDays(this.weekStart(today),7);
+    if(start>=nextWeek&&start<this.addDays(nextWeek,7))return 'starts next week';
+    return 'starts '+this.formatShort(start);
+  },
+  formatShort(day) {
+    const d=this.dateOnly(day);
+    return d?new Date(d+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'}):'';
+  },
+  // $ with K or M, as the beta showed workbook amounts: $429K, $32.7K, $1.05M.
+  moneyK(value) {
+    if(value==null||value===''||!Number.isFinite(Number(value)))return '—';
+    const n=Math.abs(Number(value)),sign=Number(value)<0?'-':'';
+    const trim=t=>t.replace(/\.?0+$/,'');
+    const text=n>=1e6?trim((n/1e6).toFixed(2))+'M':n>=1e5?Math.round(n/1000)+'K':n>=1000?trim((n/1000).toFixed(1))+'K':String(Math.round(n));
+    return sign+'$'+text;
   },
   missingSpendText(spend) {
     const months=(spend&&spend.missingMonths)||[];

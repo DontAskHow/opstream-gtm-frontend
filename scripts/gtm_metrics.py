@@ -405,11 +405,72 @@ def stage_display(stage):
     return s or "No stage"
 
 
+def source_label(source):
+    s = str(source or "").strip()
+    if not s or re.match(r"^(hubspot|crm|integration|unknown|unknown source)$", s, flags=re.I):
+        return "Unknown source"
+    return s
+
+
+def tracker_rows(sheet_review=None, contacts=None):
+    """Lead Tracker rows when the sheet is in the collection, otherwise HubSpot contacts.
+
+    Newsletter subscribers and rows with no company name are not leads.
+    """
+    rows = (sheet_review or {}).get("leads") or []
+    out = []
+    for r in (rows if rows else (contacts or [])):
+        note = str(r.get("note") or "").strip().lower()
+        name = str(r.get("company") or r.get("name") or "").strip()
+        if note == "subscriber" or "newsletter" in note or not name or "@" in name:
+            continue
+        out.append({
+            "name": name,
+            "source": source_label(r.get("source")),
+            "owner": r.get("owner"),
+            "lead": date_only(r.get("lead") or r.get("leadDate")),
+            "mql": date_only(r.get("mql")),
+            "sql": date_only(r.get("sql")),
+            "note": r.get("note"),
+        })
+    return out
+
+
+def first_touch(row):
+    days = [d for d in (row.get("lead"), row.get("mql"), row.get("sql")) if d]
+    return min(days) if days else None
+
+
+def lead_counts(rows, start, end):
+    """Lead Tracker definitions: a lead counts on its first stage date; MQL and SQL on their own dates."""
+    by = {}
+
+    def slot(name):
+        return by.setdefault(name, {"channel": name, "leads": 0, "mql": 0, "sql": 0})
+
+    for r in rows or []:
+        ft = first_touch(r)
+        if ft and start <= ft <= end:
+            slot(r["source"])["leads"] += 1
+        if r.get("mql") and start <= r["mql"] <= end:
+            slot(r["source"])["mql"] += 1
+        if r.get("sql") and start <= r["sql"] <= end:
+            slot(r["source"])["sql"] += 1
+    sources = sorted(by.values(), key=lambda c: (-c["leads"], -c["mql"], -c["sql"], c["channel"]))
+    return {
+        "leads": sum(c["leads"] for c in sources),
+        "mql": sum(c["mql"] for c in sources),
+        "sql": sum(c["sql"] for c in sources),
+        "sources": sources,
+    }
+
+
+def unworked_rows(rows):
+    return [r for r in rows or [] if not r.get("mql")]
+
+
 def unworked_count(leads, sheet_review=None):
-    lt = (sheet_review or {}).get("leadTracker") or {}
-    if isinstance(lt.get("unworked"), (int, float)) and isinstance(lt.get("total"), (int, float)) and lt.get("total", 0) > 0:
-        return int(lt["unworked"])
-    return sum(1 for l in (leads or []) if not date_only(l.get("mql")))
+    return len(unworked_rows(tracker_rows(sheet_review, leads)))
 
 
 def commit_versus_target(commit, target):
@@ -627,28 +688,6 @@ def activity_from_records(records):
     return meetings, recordings
 
 
-def funnel(leads, records, start, end):
-    lead_count = sum(1 for lead in (leads or []) if in_range(lead.get("lead"), start, end))
-    meetings, recordings = activity_from_records(records)
-    booked = [m for m in meetings if in_range(m.get("booked") or m.get("start"), start, end)]
-    held = set()
-    for recording in recordings:
-        day = date_only(recording.get("date"))
-        if day and in_range(day, start, end):
-            held.add("%s|%s" % (recording.get("companyId") or "", day))
-    for meeting in meetings:
-        day = date_only(meeting.get("start"))
-        if not day or not in_range(day, start, end):
-            continue
-        if re.search(r"complete|held|completed", meeting.get("outcome") or "", flags=re.I):
-            held.add("%s|%s|crm" % (meeting.get("companyId") or "", day))
-    sql_keys = set()
-    for key in held:
-        company, day = key.split("|", 2)[:2]
-        sql_keys.add("%s|%s" % (company, day))
-    return {"leads": lead_count, "mql": len(booked), "sql": len(sql_keys)}
-
-
 def pipeline_totals(opportunities, today):
     deals = [o for o in (opportunities or []) if is_open_pipeline(o, today)]
     open_amount = 0.0
@@ -718,7 +757,7 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
     held = on_hold_book(annotated)
     unlisted = hubspot_only_book(annotated, today)
     start, end = quarter_bounds(today)
-    counts = funnel(verified.get("leads") or [], records, start, end)
+    counts = lead_counts(tracker_rows(sheet_review, verified.get("leads")), start, end)
     prelim_owners = []
     companies_for = []
     for opp in annotated:
@@ -806,6 +845,24 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
     }
 
 
+def money_k(value):
+    """$ with K or M, as the beta showed workbook amounts: $429K, $32.7K, $1.05M."""
+    if value is None:
+        return "—"
+    n = float(value)
+    sign = "-" if n < 0 else ""
+    n = abs(n)
+    if n >= 1_000_000:
+        text = ("%.2f" % (n / 1_000_000)).rstrip("0").rstrip(".") + "M"
+    elif n >= 100_000:
+        text = "%dK" % round(n / 1000)
+    elif n >= 1000:
+        text = ("%.1f" % (n / 1000)).rstrip("0").rstrip(".") + "K"
+    else:
+        text = "%d" % round(n)
+    return sign + "$" + text
+
+
 def parse_money(value):
     if value is None or value == "":
         return None
@@ -874,10 +931,14 @@ def apply_sheet_deal(deal, overrides):
         nxt["amount"] = ov["amount"]
         diffs.append("amount")
     sheet_close = date_only(ov.get("close")) if ov.get("close") else None
-    if sheet_close and date_only(nxt.get("close")) != sheet_close:
+    hub_close = date_only(nxt.get("close"))
+    if sheet_close and hub_close != sheet_close:
         nxt["hubspotClose"] = nxt.get("close")
         nxt["close"] = sheet_close
-        diffs.append("close")
+        # The sheet export sits a day or two off HubSpot; only a real slip is a difference.
+        gap = days_between(sheet_close, hub_close) if hub_close else None
+        if gap is None or abs(gap) > 2:
+            diffs.append("close")
     if ov.get("stage"):
         current = str(nxt.get("stageLabel") or nxt.get("stage") or "")
         if ov["stage"].lower() not in current.lower():

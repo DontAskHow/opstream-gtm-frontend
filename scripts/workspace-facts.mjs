@@ -147,7 +147,7 @@ export function computeFacts(verified, records, today, sheetReview) {
   const held = model.onHoldBook(annotated);
   const unlisted = model.hubspotOnlyBook(annotated, today);
   const bounds = model.periodBounds('quarter', null, null, today);
-  const funnel = model.funnel(verified?.leads || [], records, bounds.start, bounds.end);
+  const funnel = model.leadCounts(model.trackerRows(sheetReview, verified?.leads || []), bounds.start, bounds.end);
   const index = companyIndex(records);
   const quietByCompany = new Map();
   const quietFor = company => {
@@ -250,13 +250,14 @@ export function computeFacts(verified, records, today, sheetReview) {
   lines.push('IN HUBSPOT, NOT ON THE SHEET: ' + metrics.hubspotOnlyCount + ' ' + (metrics.hubspotOnlyCount === 1 ? 'deal' : 'deals') + ', ' + metrics.hubspotOnlyAmountLabel + '. These are not in the open pipeline total.');
   lines.push('RENEWALS: ' + metrics.renewalCount + ' current deals, ' + metrics.renewalAmountLabel + '. These are customer renewals, not new business. They are not in the open pipeline, the commit, or the largest open deal. ' + metrics.renewalDuplicates + ' legacy Renewal placeholders are not added because that company already has a current Renewal Agreement. ' + metrics.renewalPastClose + ' more are past their close date and are not in this total.');
   lines.push('QUARTER ' + bounds.start + ' – ' + bounds.end + ': ' + funnel.leads + ' leads / ' + funnel.mql + ' MQL / ' + funnel.sql + ' SQL.');
-  const marketing = model.marketingView(verified?.leads || [], records, verified?.report?.spend, today);
+  lines.push('UNWORKED LEADS (no MQL date on the Lead Tracker): ' + model.unworkedRows(model.trackerRows(sheetReview, verified?.leads || [])).length + '.');
+  const marketing = model.marketingView(model.trackerRows(sheetReview, verified?.leads || []), today);
   lines.push('MARKETING BRIEF (America/Phoenix ' + today + '). Repeat these figures. Do not invent another weekly count.');
   for (const interval of marketing.intervals || []) {
     lines.push('- ' + interval.label + ': ' + interval.leads + ' leads, MQL ' + interval.mql + ', SQL ' + interval.sql + '. ' + interval.note);
   }
   for (const source of marketing.sources || []) {
-    lines.push('- SOURCE ' + source.channel + ': this week ' + source.week + ', 6-week average ' + source.six + ', quarter ' + source.quarter + ', cost per lead ' + source.cpl + '.');
+    lines.push('- SOURCE ' + source.channel + ': last 7 days ' + source.week + ', 6-week average ' + source.six + ', quarter ' + source.quarter + '.');
   }
   const byAmount = (a, b) => (b.amount || 0) - (a.amount || 0) || String(a.company).localeCompare(String(b.company));
   const describe = d => d.tag + ': ' + d.company + ' — ' + (d.dealName || d.company) + ', ' + d.amountLabel + ', stage ' + d.stage + ', owner ' + d.owner + ', close ' + (d.close || 'not entered') + (d.closePassed ? ', close date passed' : '') + ', quiet days ' + (d.daysQuiet == null ? 'n/a' : d.daysQuiet) + '.';
