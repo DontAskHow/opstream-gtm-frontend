@@ -3,7 +3,9 @@
 
 Reads ~/workspace/brain/brain.db (HubSpot objects + associations, Fathom
 meetings/transcripts, findings, lemlist campaigns, sheets, GA4) and writes
-the six JSON files in the exact shapes scripts/synthetic-data.cjs produces.
+the JSON files next to this script, under out/data. build.cjs runs this script,
+and the agent server reads those files. The database itself is filled by the
+separate sheets sync; this script does not talk to HubSpot, Sheets, or Fathom.
 
 Honesty rules: never invent names, dates, or stage labels. Where the brain
 lacks something (stage catalog, days-in-stage, MQL/SQL dates, an owner
@@ -17,11 +19,13 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gtm_metrics import date_only, is_open_pipeline, phoenix_today, probability_fraction, stage_display
 
-REPO = os.path.expanduser('~/workspace/opstream-gtm-frontend')
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.expanduser('~/workspace/brain/brain.db')
-OUT = os.path.join(REPO, 'out', 'data')
-SNAPSHOT = 'brain-2026-09-25'
-TODAY = '2026-09-25'
+OUT = os.path.join(ROOT, 'out', 'data')
+# Upcoming versus past meetings follow the Phoenix calendar on the day this
+# file is generated, not a date frozen into the script.
+TODAY = phoenix_today()
+SNAPSHOT = 'brain-' + TODAY
 NOW_ISO = datetime.now(timezone.utc).isoformat()
 
 CLOSED_STAGES = {'closedwon', 'closedlost'}

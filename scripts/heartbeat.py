@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Dashboard heartbeat — the agent periodically tends the GTM workspace.
 
-Runs inside the build (after agent-brief.py) and on every scheduled refresh.
+Runs when build.cjs calls it, after agent-brief.py. This repository does not
+start it on a timer.
 It does three things:
 
 1. HEALTH CHECK — verifies the product is alive and complete: data freshness
@@ -379,6 +380,7 @@ def main():
             "leads": book.get("leads"),
             "mql": book.get("mql"),
             "sql": book.get("sql"),
+            "collectedAt": book.get("collectedAt"),
         },
         "firstBeat": not bool(prev_state),
     }
@@ -391,6 +393,7 @@ def main():
         "- Ground EVERY claim in the data below. Never invent companies, people, dates, or amounts.\n"
         "- Quiet-day figures are already computed (daysQuiet). Repeat those numbers; do not calculate another.\n"
         "- openBook is the page's open pipeline. It excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Repeat openBook counts, amounts, and largestOpenDeal. A renewal is not an open deal and is not the largest open deal.\n"
+        "- collectedAt is when these files were generated. Repeat it. Do not present the figures as newer than that collection.\n"
         "- Owner labels are already resolved. A label like Owner #… means the name is not connected. Do not invent a person's name.\n"
         "- It is " + greeting() + " in America/Phoenix. Match that time of day if you greet anyone.\n"
         "- Be specific and actionable: name the deal/company, the number, the implication.\n"

@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ASSISTANT_TOOL_NAMES, loadWorkspace, runAssistantTool } from './workspace-facts.mjs';
+import { ASSISTANT_TOOL_NAMES, dataRevision, loadWorkspace, needsReload, runAssistantTool } from './workspace-facts.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const facts = loadWorkspace(path.join(root, 'out', 'data'));
@@ -38,6 +38,12 @@ check('open count', metrics.openCount === 83, String(metrics.openCount));
 check('open amount', metrics.openAmount === 4736300 && metrics.openAmountLabel === '$4,736,300', metrics.openAmount + ' ' + metrics.openAmountLabel);
 check('weighted', metrics.weighted === 1212860 && metrics.weightedLabel === '$1,212,860', metrics.weighted + ' ' + metrics.weightedLabel);
 check('funnel', metrics.leads === 383 && metrics.mql === 279 && metrics.sql === 118, [metrics.leads, metrics.mql, metrics.sql].join('/'));
+check('collected timestamp', !!metrics.collectedAt && facts.context.includes('DATA COLLECTED:') && facts.context.includes(metrics.collectedAt) && String(metrics.collectedLabel).includes('Phoenix'), metrics.collectedLabel || 'missing');
+const dataDir = path.join(root, 'out', 'data');
+const revA = dataRevision(dataDir);
+const revB = dataRevision(dataDir);
+check('revision stable', revA === revB && revA.includes('records.json:'), revA.slice(0, 80));
+check('reload when files change', needsReload('', revA) && needsReload(revA, revA + ':changed') && !needsReload(revA, revA), 'needsReload mismatch');
 
 const kidde = JSON.parse(runAssistantTool('lookup_deals', { query: 'Kidde Global Solutions' }, facts));
 const renewal = (kidde.deals || []).find(d => /Renewal Agreement - 2027/.test(d.dealName || '') && d.amount === 514800);
@@ -72,6 +78,7 @@ book = snapshot_metrics(ver, rec)
 kidde = [d for d in book["deals"] if "Renewal Agreement - 2027" in (d.get("dealName") or "") and d.get("amount") == 514800]
 print(json.dumps({
   "today": book["today"],
+  "collectedAt": book.get("collectedAt"),
   "openCount": book["openCount"],
   "openAmount": book["openAmount"],
   "weighted": book["weighted"],
@@ -90,6 +97,7 @@ check('python funnel', pyBook.leads === 383 && pyBook.mql === 279 && pyBook.sql 
 check('python largest', pyBook.largest && pyBook.largest.company === 'NXP' && pyBook.largest.amount === 500000 && pyBook.largest.owner === largest.owner, JSON.stringify(pyBook.largest));
 check('python kidde', pyBook.kidde.length === 1 && pyBook.kidde[0].inOpenBook === false && pyBook.kidde[0].reason === 'renewal', JSON.stringify(pyBook.kidde));
 check('python date', pyBook.today === facts.today, pyBook.today + ' vs ' + facts.today);
+check('python collected', pyBook.collectedAt === metrics.collectedAt, String(pyBook.collectedAt));
 
 const report = {
   ok: failures.length === 0,
@@ -98,6 +106,7 @@ const report = {
   largestOpenDeal: { company: largest.company, dealName: largest.dealName, amount: largest.amountLabel, owner: largest.owner },
   openPipeline: { deals: metrics.openCount, open: metrics.openAmountLabel, weighted: metrics.weightedLabel },
   funnel: { leads: metrics.leads, mql: metrics.mql, sql: metrics.sql },
+  collected: { at: metrics.collectedAt, label: metrics.collectedLabel },
   kiddeRenewal: renewal ? { dealName: renewal.dealName, amount: renewal.amountLabel, inOpenBook: renewal.inOpenBook, reason: renewal.reason } : null,
   pythonMatchesPage: failures.filter(f => f.startsWith('python')).length === 0,
   failures,

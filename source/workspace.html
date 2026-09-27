@@ -1060,8 +1060,8 @@ class Component extends DCLogic {
     const REC = st.records || { companies: [] };
     // Honest collection stamp for every "collected …" string below.
     const genAt = (st.records || {}).generatedAt;
-    const collectedShort = genAt ? workspaceModel.formatDate(genAt) : '—';
-    const collectedLong = genAt ? workspaceModel.formatDateTime(genAt) : collectedShort;
+    const collectedShort = genAt ? workspaceModel.formatDateTime(genAt) : '—';
+    const collectedLong = collectedShort;
     const fmtD = d => workspaceModel.formatDate(d);
     const fmtDT = d => workspaceModel.formatDateTime(d);
     const money = n => n === null || n === undefined ? 'no amount' : '$' + Math.round(n).toLocaleString('en-US');

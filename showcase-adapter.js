@@ -28,6 +28,15 @@ Component.prototype.componentDidMount = function () {
   addEventListener('resize',this._showcaseResize);
   addEventListener('keydown',this._showcaseKey);
   this._loadVerified();
+  if (!this._collectionWatch) {
+    this._collectionWatch = setInterval(() => {
+      if (this.state.checking || !this.state.records) return;
+      fetch('/api/data-stamp', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(j => {
+        const current = this.state.records && this.state.records.generatedAt;
+        if (j && j.generatedAt && current && j.generatedAt !== current) this._loadVerified();
+      }).catch(() => {});
+    }, 60000);
+  }
   fetch('/api/gmail/status').then(r=>r.json()).then(g=>{if(g.connected)this.setState({gmailEmail:g.email});}).catch(()=>{});
 };
 Component.prototype.componentDidUpdate = function (...args) {
@@ -57,8 +66,9 @@ Component.prototype._saveBrowserState = function (retry=false) {
 Component.prototype.renderVals = function () {
   const props=this.props;this.props={...props,mobile:innerWidth<400};
   let v;try{v=showcaseOriginal.render.call(this);}finally{this.props=props;}
-  // The review is rebuilt by the scheduled 6-hour collection; there is no
-  // on-demand refresh in this workspace, so offer no button for one.
+  // There is no on-demand rebuild in the browser. Check for updates reloads
+  // the files already on the server. A background watch does the same when
+  // records.json carries a new generatedAt.
   v.reviewRequested=false;v.refreshReview=null;v.refreshLabel='';
   v.checkLabel=this.state.checking?'Checking…':'Check for updates';
   v.checkNote=this.state.showcaseCheck||'';

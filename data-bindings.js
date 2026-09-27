@@ -22,7 +22,7 @@ Component.prototype._loadVerified = async function () {
       const banner=document.getElementById('topBanner');
       if(banner){
         const isDemo=/synthetic|demo/i.test(verified.snapshotId||'');
-        const cDate=records.generatedAt?workspaceModel.formatDate(records.generatedAt):'';
+        const cDate=records.generatedAt?workspaceModel.formatDateTime(records.generatedAt):'';
         banner.textContent=isDemo
           ? 'PUBLIC DEMO · All data is synthetic · Changes stay in your browser · Email and Slack are disabled'
           : 'Company data · HubSpot, Fathom, Sheets, GA4'+(cDate?' · collected '+cDate:'')+' · Drafts stay in your browser · Nothing is sent without approval';
@@ -74,8 +74,8 @@ Component.prototype.renderVals = function () {
   try{
     const gen=s.records&&s.records.generatedAt?s.records.generatedAt:(d&&d.meta&&d.meta.generatedAt)||'';
     const cdt=gen?new Date(gen):null;
-    v.collectedShort=gen?workspaceModel.formatDate(gen):'';
-    v.collectedLong=gen?workspaceModel.formatDateTime(gen):'';
+    v.collectedShort=gen?workspaceModel.formatDateTime(gen):'';
+    v.collectedLong=v.collectedShort;
     const todayPhx=workspaceModel.phoenixToday();
     const weekStart=workspaceModel.addDays(todayPhx,-((new Date(todayPhx+'T12:00:00Z').getUTCDay()+6)%7));
     v.weekOf='Week of '+workspaceModel.formatDate(weekStart);

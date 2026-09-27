@@ -10,6 +10,29 @@ const model = require('../workspace-model.cjs');
 
 export const DATA_TOOL_NAMES = ['get_pipeline_metrics', 'lookup_deals'];
 
+// Files the assistant context is built from. A request reloads when any of
+// these change on disk. Missing files still count, so a later write reloads.
+export const CONTEXT_FILES = ['verified.json', 'records.json', 'hollie.json', 'agent-brief.json', 'crm-proposals.json'];
+
+export function dataRevision(dataDir) {
+  return CONTEXT_FILES.map(name => {
+    try {
+      const st = fs.statSync(path.join(dataDir, name));
+      return name + ':' + st.mtimeMs + ':' + st.size;
+    } catch {
+      return name + ':missing';
+    }
+  }).join('|');
+}
+
+export function needsReload(previous, current) {
+  return !previous || previous !== current;
+}
+
+export function collectedLabel(generatedAt) {
+  return generatedAt ? model.formatDateTime(generatedAt) : null;
+}
+
 export const ASSISTANT_TOOL_NAMES = [
   'get_pipeline_metrics',
   'lookup_deals',
@@ -150,6 +173,8 @@ export function computeFacts(verified, records, today) {
     leads: funnel.leads,
     mql: funnel.mql,
     sql: funnel.sql,
+    collectedAt: records?.generatedAt || null,
+    collectedLabel: collectedLabel(records?.generatedAt),
     largest: largest ? {
       company: largest.company,
       dealName: largest.dealName,
@@ -165,7 +190,8 @@ export function computeFacts(verified, records, today) {
   };
 
   const lines = [];
-  lines.push('WORKSPACE DATA (real records from the company brain: HubSpot, Fathom, Sheets; generated ' + (records?.generatedAt || 'unknown') + '). Never invent records; say when something is not in the data.');
+  lines.push('DATA COLLECTED: ' + (metrics.collectedLabel || 'unknown') + ' (source timestamp ' + (metrics.collectedAt || 'unknown') + '). This is when the files on disk were generated. Repeat this timestamp when you give current figures. Do not describe the figures as newer than this collection.');
+  lines.push('WORKSPACE DATA (real records from the company brain: HubSpot, Fathom, Sheets). Never invent records; say when something is not in the data.');
   lines.push('OPEN BOOK METRICS (America/Phoenix date ' + today + '). ' + metrics.definition + ' These figures are already computed. Repeat them. Do not calculate another open-pipeline total. A renewal, current agreement, On Hold, Disqualified, or past-close deal is not an open deal, even when its amount is larger.');
   if (metrics.largest) {
     const g = metrics.largest;
@@ -219,6 +245,8 @@ function metricsPayload(facts) {
     leads: m.leads,
     mql: m.mql,
     sql: m.sql,
+    collectedAt: m.collectedAt,
+    collectedLabel: m.collectedLabel,
   };
 }
 

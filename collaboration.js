@@ -209,7 +209,7 @@ Component.prototype.renderVals = function() {
   v.slackTestDisabled=!!s.slackTestBusy||['sent','sending','unknown'].includes(slack.test?.status);
   v.slackTestLabel=s.slackTestBusy?'Sending test…':slack.test?.status==='failed'?'Retry test DM':'Send test DM to installer';
   v.slackTestReceipt=slack.test?(slack.test.status==='sent'?'Test DM accepted by Slack · '+slack.test.providerId:slack.test.error||'Test DM is in progress. Reload to check its outcome.'):'';
-  v.refreshNote='The review refreshes automatically every 6 hours from the collected data. Latest review: '+v.collectedShort+'. Saved work stays in this browser.';
+  v.refreshNote='A newer collection on the server reloads this page. Latest collection: '+(v.collectedLong||v.collectedShort||'not recorded')+'. Saved work stays in this browser.';
   if(!s.verified)return v;
   if(s.screen==='meeting'){
     const recording=[...s.records.companies.flatMap(c=>c.recordings),...s.records.unmatchedRecordings].find(r=>r.id===s.meetingId);

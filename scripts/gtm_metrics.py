@@ -552,6 +552,7 @@ def snapshot_metrics(verified, records, today=None):
         "leads": counts["leads"],
         "mql": counts["mql"],
         "sql": counts["sql"],
+        "collectedAt": (records or {}).get("generatedAt"),
         "openDeals": open_deals,
         "deals": deals,
     }

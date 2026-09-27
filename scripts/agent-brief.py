@@ -116,6 +116,7 @@ def main():
             "leads": book.get("leads"),
             "mql": book.get("mql"),
             "sql": book.get("sql"),
+            "collectedAt": book.get("collectedAt"),
         }
 
     data_dump = {
@@ -140,6 +141,7 @@ def main():
         "- Ground EVERY claim in the data below. Never invent companies, people, dates, amounts, or meetings.\n"
         "- Numbers in briefCounts, openBook, and goal status lines are already computed. Repeat them exactly. Do not call a larger commit 'short' of a smaller forecast.\n"
         "- openBook is the page's open pipeline. It excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Repeat the largest open deal and the open totals. A larger renewal or current agreement is not the largest open deal; if you mention one, say it is not in the open book.\n"
+        "- collectedAt is when these files were generated. Repeat it. Do not present the figures as newer than that collection.\n"
         "- Owner labels in openBook are already resolved. A label like Owner #… means the name is not connected. Do not invent a person's name.\n"
         "- The greeting must start with \"" + greeting() + "\" because that is the time of day in America/Phoenix. Do not say a different time of day.\n"
         "- If something is unknown, say so or omit it — never fill gaps with guesses.\n"

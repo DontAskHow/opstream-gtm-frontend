@@ -17,7 +17,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
-import { DATA_TOOL_SCHEMAS, loadWorkspace, runAssistantTool } from './workspace-facts.mjs';
+import { DATA_TOOL_SCHEMAS, collectedLabel, dataRevision, loadWorkspace, needsReload, runAssistantTool } from './workspace-facts.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
@@ -132,6 +132,7 @@ const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 
 let CTX = '';
 let FACTS = null;
+let revision = '';
 function buildContext() {
   try {
     const verified = readJson(path.join(dataDir, 'verified.json'));
@@ -190,11 +191,22 @@ function buildContext() {
     } catch {}
     CTX = lines.join('\n');
     try { fs.writeFileSync('/tmp/agent-ctx-size.txt', String(CTX.length)); } catch {}
+    return true;
   } catch (e) {
     CTX = 'Workspace data unavailable: ' + e.message;
+    FACTS = null;
+    return false;
   }
 }
-buildContext();
+// Read the files for this request. Keep the parsed context only while the
+// watched files still have the same mtime and size they had when it was built.
+function ensureContext() {
+  const next = dataRevision(dataDir);
+  if (!needsReload(revision, next) && FACTS) return FACTS;
+  if (buildContext()) revision = next;
+  return FACTS;
+}
+ensureContext();
 
 const SYSTEM = `You are the GTM Workspace assistant for Opstream — the marketing lead runs marketing and this workspace is their autonomous copilot.
 
@@ -206,7 +218,7 @@ AUTONOMY (hard rules — never break these):
 - Say "drafted" or "proposed" — never "sent".
 
 Answer using only the workspace data. Be concise and concrete: names, numbers, dates.
-The open book is already computed in the OPEN BOOK METRICS lines and in get_pipeline_metrics. It excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Repeat those figures. A larger renewal, current agreement, on-hold, disqualified, or past-close amount is not the largest open deal. If you mention one, name that reason and say it is not in the open book. Owner labels that start with "Owner #…" mean the name is not connected; do not invent a person's name. Quiet-day figures in the data are already computed; repeat them.
+The open book is already computed in the OPEN BOOK METRICS lines and in get_pipeline_metrics. It excludes past close dates, renewals, current agreements, Disqualified, and On Hold. Repeat those figures. A larger renewal, current agreement, on-hold, disqualified, or past-close amount is not the largest open deal. If you mention one, name that reason and say it is not in the open book. Owner labels that start with "Owner #…" mean the name is not connected; do not invent a person's name. Quiet-day figures in the data are already computed; repeat them. The DATA COLLECTED line is the timestamp of the files on disk. Repeat it when you give current pipeline or lead figures.
 Format your answer as a compact HTML fragment using only <p>, <ul>, <ol>, <li>, <strong>, <em>, <br>. Output raw HTML only, never markdown — markdown is displayed to the user as literal asterisks and dashes. No code fences, no <h1>.
 
 You can also take actions with tools:
@@ -420,6 +432,7 @@ function briefingToolContent() {
 }
 
 async function askOpenAI(message, history) {
+  ensureContext();
   const messages = [
     { role: 'system', content: SYSTEM + '\n\n' + CTX },
     ...history.filter(m => m && m.role && m.content).slice(-8),
@@ -545,6 +558,7 @@ function serveStatic(req, res) {
   res.setHeader('Content-Type', types[ext] || 'application/octet-stream');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Vary', 'Accept-Encoding');
+  if (ext === '.html' || ext === '.json') res.setHeader('Cache-Control', 'no-store');
   if (compressible.has(ext) && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
     res.setHeader('Content-Encoding', 'gzip');
     fs.createReadStream(file).pipe(zlib.createGzip()).pipe(res);
@@ -556,6 +570,23 @@ function serveStatic(req, res) {
 const server = http.createServer((req, res) => {
   (async () => {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/api/data-stamp' && req.method === 'GET') {
+      // generatedAt from records.json, re-read only when the file changes.
+      // The page uses this to reload after a newer collection lands on disk.
+      let generatedAt = null;
+      try {
+        const file = path.join(dataDir, 'records.json');
+        const st = fs.statSync(file);
+        const key = st.mtimeMs + ':' + st.size;
+        if (!serveStatic.stamp || serveStatic.stamp.key !== key) {
+          generatedAt = JSON.parse(fs.readFileSync(file, 'utf8')).generatedAt || null;
+          serveStatic.stamp = { key, generatedAt };
+        } else generatedAt = serveStatic.stamp.generatedAt;
+      } catch { generatedAt = null; }
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        .end(JSON.stringify({ generatedAt, label: collectedLabel(generatedAt) }));
+      return;
+    }
     if (url.pathname === '/api/ask' && req.method === 'POST') {
       let raw = '';
       for await (const chunk of req) { raw += chunk; if (raw.length > 200000) break; }
