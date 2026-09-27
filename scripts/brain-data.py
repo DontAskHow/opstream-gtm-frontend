@@ -365,50 +365,78 @@ def main():
     # ---------- build companies ----------
     companies = []
     n_contacts = n_notes = 0
+    def domain_root(domain):
+        d = clean_domain(domain) or ''
+        return re.sub(r'^www\.', '', d).split('.')[0].lower() if d else ''
+
+    def squash(text):
+        return re.sub(r'[^a-z0-9]', '', str(text or '').lower())
+
+    def is_domain(text):
+        return bool(text and re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', str(text), re.I))
+
+    def contact_names(links):
+        names = set()
+        for oid in links.get('contacts', []):
+            op, _ = objects['contacts'].get(oid, (None, None))
+            full = squash('%s%s' % ((op or {}).get('firstname') or '', (op or {}).get('lastname') or ''))
+            if full:
+                names.add(full)
+        return names
+
+    def not_a_customer_name(text, links):
+        """Opstream itself or one of the company's own contacts is not the customer."""
+        low = squash(text)
+        return not low or low in ('opstream', 'opstreamai') or low in contact_names(links)
+
     def company_display_name(p, cid, links):
-        """Reconcile a human company name. HubSpot sometimes stores a bare
-        domain as the company name; when that happens, try the meeting and
-        recording titles linked to the company (e.g. 'Allied World - Demo'
-        reveals the real name behind 'awacservices.com')."""
+        """A human company name. HubSpot sometimes stores a domain, a browser
+        string, Opstream itself or a contact's name. Then prefer a linked deal
+        title that matches the domain or a contact's company, then the contacts'
+        company property, then linked meeting titles."""
         raw = clean_company_name(p.get('name'))
-        domainish = bool(raw and re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', raw, re.I))
-        browser = is_browser_label(raw)
-        if raw and not domainish and not browser:
+        if raw and not is_domain(raw) and not is_browser_label(raw) and not not_a_customer_name(raw, links):
             return raw
-        # A browser user-agent string is not the company. Associated contacts
-        # sometimes store the real name on their company property.
-        if browser:
-            votes = []
-            for oid in links.get('contacts', []):
-                op, _ = objects['contacts'].get(oid, (None, None))
-                if not op:
-                    continue
-                cn = clean_company_name(op.get('company'))
-                if cn and not is_browser_label(cn) and not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', cn, re.I):
-                    votes.append(cn)
-            if votes and len(set(votes)) == 1:
-                return votes[0]
-        # Name is a bare domain (or missing) — look at linked titles.
-        candidates = []
+        root = domain_root(p.get('domain')) or (raw.split('.')[0].lower() if is_domain(raw) else '')
+        votes = []
+        for oid in links.get('contacts', []):
+            op, _ = objects['contacts'].get(oid, (None, None))
+            cn = clean_company_name((op or {}).get('company'))
+            if cn and not is_browser_label(cn) and not is_domain(cn) and not not_a_customer_name(cn, links):
+                votes.append(cn)
+        heads = []
+        for oid in links.get('deals', []):
+            dp, _ = objects['deals'].get(oid, (None, None))
+            head = clean_company_name(re.split(r'\s[-–—|]\s', str((dp or {}).get('dealname') or ''), maxsplit=1)[0])
+            if head and not is_domain(head) and not is_browser_label(head) and not not_a_customer_name(head, links) \
+               and head.lower() not in ('renewal', 'current agreement'):
+                heads.append(head)
+        matching = [h for h in heads if root and len(root) > 2 and root in squash(h)]
+        if matching:
+            return sorted(set(matching), key=lambda h: (-sum(ch.isupper() for ch in h), -matching.count(h), h))[0]
+        vote_keys = {squash(v) for v in votes}
+        voted = [h for h in heads if squash(h) in vote_keys]
+        if voted:
+            return sorted(set(voted), key=lambda h: (-sum(ch.isupper() for ch in h), -voted.count(h), h))[0]
+        if votes and len(set(votes)) == 1:
+            return votes[0]
         for oid in links.get('meetings', []):
             op, _ = objects['meetings'].get(oid, (None, None))
-            t = op.get('hs_meeting_title') if op else None
-            if t:
-                candidates.append(t)
-        for rid in links.get('recordings', []):
-            # recordings are keyed separately; skip — meetings cover it
-            pass
-        for t in candidates:
-            # Only trust "Company - Description" format titles; the head before
-            # the separator is the company name. Skip generic titles.
+            t = (op or {}).get('hs_meeting_title') or ''
+            pair = re.match(r'^\s*opstream\s*<>\s*(.+?)(\s+(weekly|sync|check-in|call|meeting))?\s*$', t, re.I)
+            if pair and not not_a_customer_name(pair.group(1), links):
+                return clean_company_name(pair.group(1))
+            # Only trust "Company - Description" titles; the head is the company.
             parts = re.split(r'\s[-–—|:/]\s', t, maxsplit=1)
             if len(parts) < 2:
                 continue
             head = parts[0].strip()
-            if head and len(head) > 2 and not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', head, re.I) \
+            if head and len(head) > 2 and not is_domain(head) and not not_a_customer_name(head, links) \
                and head.lower() not in ('sync', 'stand-up', 'standup', 'weekly', 'check-in', 'checkin', 'intro', 'demo', 'call', 'meeting'):
                 return clean_company_name(head)
-        return raw or 'Company not named in HubSpot'
+        if raw and not not_a_customer_name(raw, links):
+            return raw
+        return root.capitalize() if root else 'Company not named in HubSpot'
 
     for cid in sorted(scoped_company_ids):
         p, fetched = objects['companies'].get(cid, ({}, None))

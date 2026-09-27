@@ -87,7 +87,8 @@ Component.prototype.renderVals=function(){
         if(who&&who!=='Unassigned'&&!/^Owner #/.test(who)){dealOwner=who;break;}
       }
     }
-    item.owner=unnamed?(dealOwner||companyOwner||'—'):companyOwner;
+    const sheetDeal=item.dealId?((s.sheetReview&&s.sheetReview.deals)||[]).find(d=>String(d.id)===String(item.dealId).replace(/^deal-/,'')):null;
+    item.owner=sheetDeal&&sheetDeal.owner?workspaceModel.displayOwner(sheetDeal.owner):unnamed?(dealOwner||companyOwner||'—'):companyOwner;
     item.lastInteraction=last?workspaceModel.formatDate(last)+' · '+workspaceModel.relativeLabel(last, workspaceModel.phoenixToday()):'—';
     item.important=!!saved.important;
     item.importantLabel=saved.important?'Important':'Mark important';
