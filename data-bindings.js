@@ -166,7 +166,7 @@ Component.prototype.renderVals = function () {
   else v.scopeNote='The period '+period+' applies to new leads, meetings booked and meetings held. Open pipeline is the current book. All dates are America/Phoenix.';
   const query=(s.search||'').trim().toLowerCase(),owner=s.owner||'Everyone',todayPhx=workspaceModel.phoenixToday();
   const accountRows=opportunities.map(o=>{
-    const company=this._verifiedAccount(o.companyId)||this._verifiedAccount(o.name);
+    const company=workspaceModel.companyForOpportunity(o,s.records);
     const last=company?workspaceModel.lastEngagement(company,todayPhx):null;
     const quietDays=company?workspaceModel.daysQuiet(company,todayPhx):null;
     return {...o,owner:workspaceModel.displayOwner(o.owner||company?.owner),lastEngagement:last,quietDays,companyRecord:company};

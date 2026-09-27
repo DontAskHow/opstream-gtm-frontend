@@ -97,6 +97,17 @@ const workspaceModel = {
     const blob=[deal?.name,deal?.dealName,deal?.company,deal?.title,deal?.rationale].filter(Boolean).join(' ');
     return /mozilla firefox|system verification test/i.test(blob);
   },
+  // The extract sometimes files one deal on two companies. Prefer the company whose name is the opportunity name.
+  companyForOpportunity(opportunity,records) {
+    if(!opportunity)return null;
+    const companies=records?.companies||[];
+    const holders=companies.filter(c=>(c.deals||[]).some(d=>d&&d.id===opportunity.id));
+    const named=holders.find(c=>c.name===opportunity.name);
+    if(named)return named;
+    if(holders.length===1)return holders[0];
+    const id=String(opportunity.companyId||'').replace(/^company:/,'');
+    return companies.find(c=>c.id===id)||holders[0]||companies.find(c=>c.name===opportunity.name)||null;
+  },
   // Older snapshots stored the company name on the opportunity and left the CRM deal name only on the record.
   // The same generator divided an already-fractional stage probability by 100, so every value sits at or below 0.02.
   annotateOpportunities(opportunities,records) {
@@ -242,7 +253,7 @@ const workspaceModel = {
   quietDeals(opportunities,records,today) {
     today=today||this.phoenixToday();
     const companies=records?.companies||[];
-    const find=o=>companies.find(c=>c.id===String(o.companyId||'').replace(/^company:/,'')||c.name===o.name);
+    const find=o=>this.companyForOpportunity(o,{companies});
     return this.pipelineTotals(opportunities,today).deals.map(o=>{
       const company=find(o);
       return {...o,companyRecord:company,lastEngagement:company?this.lastEngagement(company,today):null,daysQuiet:company?this.daysQuiet(company,today):null};
