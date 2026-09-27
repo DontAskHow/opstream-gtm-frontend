@@ -199,3 +199,112 @@ export async function persistStateFile(appRoot, name, body) {
   try { await putObject(cfg, key, Buffer.isBuffer(body) ? body : Buffer.from(body)); }
   catch (err) { console.error('[state] keep local copy; remote save failed: ' + (err.message || err)); }
 }
+
+export class SecretError extends Error {
+  constructor(code) {
+    const safe = /^[A-Za-z0-9]+$/.test(String(code || '')) ? String(code) : 'Error';
+    super(safe);
+    this.code = safe;
+  }
+}
+
+function secretRegion() {
+  const cfg = loadRefreshConfig(process.cwd());
+  return (cfg && cfg.region) || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-2';
+}
+
+function secretErrorCode(buf) {
+  try {
+    const parsed = JSON.parse(buf.toString('utf8'));
+    const raw = String(parsed.__type || 'Error').split('#').pop();
+    if (/^[A-Za-z0-9]+$/.test(raw)) return raw;
+  } catch { /* type name only */ }
+  return 'Error';
+}
+
+function signV4({ service, host, region, method, canonicalUri, extraHeaders, payload, creds }) {
+  const payloadHash = sha256(payload);
+  const amzdate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const datestamp = amzdate.slice(0, 8);
+  const headerMap = new Map();
+  headerMap.set('host', host);
+  headerMap.set('x-amz-content-sha256', payloadHash);
+  headerMap.set('x-amz-date', amzdate);
+  if (creds.sessionToken) headerMap.set('x-amz-security-token', creds.sessionToken);
+  for (const [name, value] of Object.entries(extraHeaders || {})) {
+    headerMap.set(name.toLowerCase(), String(value).trim());
+  }
+  const names = [...headerMap.keys()].sort();
+  const canonicalHeaders = names.map((name) => name + ':' + headerMap.get(name) + '\n').join('');
+  const signedHeaders = names.join(';');
+  const canonicalRequest = [method, canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
+  const scope = datestamp + '/' + region + '/' + service + '/aws4_request';
+  const stringToSign = ['AWS4-HMAC-SHA256', amzdate, scope, sha256(canonicalRequest)].join('\n');
+  let key = hmac('AWS4' + creds.secretAccessKey, datestamp);
+  key = hmac(key, region);
+  key = hmac(key, service);
+  key = hmac(key, 'aws4_request');
+  const signature = crypto.createHmac('sha256', key).update(stringToSign).digest('hex');
+  const headers = {};
+  for (const name of names) headers[name] = headerMap.get(name);
+  headers.Authorization = 'AWS4-HMAC-SHA256 Credential=' + creds.accessKeyId + '/' + scope
+    + ', SignedHeaders=' + signedHeaders + ', Signature=' + signature;
+  return headers;
+}
+
+function smHttps(action, payload, creds, region) {
+  const host = 'secretsmanager.' + region + '.amazonaws.com';
+  const body = Buffer.from(JSON.stringify(payload));
+  const headers = signV4({
+    service: 'secretsmanager',
+    host,
+    region,
+    method: 'POST',
+    canonicalUri: '/',
+    extraHeaders: {
+      'content-type': 'application/x-amz-json-1.1',
+      'x-amz-target': 'secretsmanager.' + action,
+    },
+    payload: body,
+    creds,
+  });
+  return new Promise((resolve, reject) => {
+    const req = https.request({ method: 'POST', host, path: '/', headers }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve(buf);
+        else reject(new SecretError(secretErrorCode(buf)));
+      });
+    });
+    req.on('error', () => reject(new SecretError('Network')));
+    req.write(body);
+    req.end();
+  });
+}
+
+async function smCall(action, payload, deps) {
+  if (deps.request) return deps.request(action, payload);
+  const region = deps.region || secretRegion();
+  const creds = deps.creds || await imdsCreds();
+  return smHttps(action, payload, creds, region);
+}
+
+export async function getSecretString(secretId, deps = {}) {
+  const buf = await smCall('GetSecretValue', { SecretId: secretId }, deps);
+  const parsed = JSON.parse(buf.toString('utf8'));
+  return typeof parsed.SecretString === 'string' ? parsed.SecretString : '';
+}
+
+export async function putSecretString(secretId, value, deps = {}) {
+  if (typeof value !== 'string' || !value) throw new SecretError('EmptySecret');
+  try {
+    await smCall('PutSecretValue', { SecretId: secretId, SecretString: value }, deps);
+  } catch (err) {
+    if (!err || err.code !== 'ResourceNotFoundException') {
+      throw new SecretError(err && err.code ? err.code : 'Error');
+    }
+    await smCall('CreateSecret', { Name: secretId, SecretString: value }, deps);
+  }
+}

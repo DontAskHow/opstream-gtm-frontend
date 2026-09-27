@@ -48,15 +48,25 @@ CONNECTOR_TO_SECRET = {
     "fathom": "fathom-token",
     "custom.otterly": "otterly-token",
     "otterly": "otterly-token",
-    "custom.google-analytics": "ga4-credential",
-    "google.analytics": "ga4-credential",
-    "custom.google": "ga4-credential",
-    "custom.lemlist": "lemlist-api-key",
-    "lemlist": "lemlist-api-key",
-    "google_sheets": "google-sheets-credential",
-    "google-sheets": "google-sheets-credential",
-    "google-sheets-credential": "google-sheets-credential",
+    "custom.google-analytics": "google-sheets-refresh-token",
+    "google.analytics": "google-sheets-refresh-token",
+    "custom.google": "google-sheets-refresh-token",
+    "custom.lemlist": "lemlist-token",
+    "lemlist": "lemlist-token",
+    "google_sheets": "google-sheets-refresh-token",
+    "google-sheets": "google-sheets-refresh-token",
+    "google-sheets-refresh-token": "google-sheets-refresh-token",
 }
+
+# Scopes granted by /admin/connect-sheets. Refreshing with this same set
+# keeps Google from rejecting the token as invalid_scope.
+GOOGLE_USER_SCOPES = (
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/analytics.readonly",
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+)
 
 HOST_SCOPES = {
     "sheets.googleapis.com": "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -246,6 +256,67 @@ def materialize_token(raw: str, scope: str | None) -> str:
 
 def access_token_for(connector_names, scope: str | None = None) -> str:
     return materialize_token(get_surrogate(*connector_names), scope)
+
+
+class _HttpResult:
+    def __init__(self, status: int, data: bytes):
+        self.status = status
+        self.data = data if isinstance(data, bytes) else bytes(data or b"")
+
+
+class _StdlibRequest:
+    """google-auth transport that uses urllib. No token is logged."""
+
+    def __call__(self, url, method="GET", body=None, headers=None, timeout=None, **kwargs):
+        data = body.encode("utf-8") if isinstance(body, str) else body
+        req = urllib.request.Request(url, data=data, headers=dict(headers or {}), method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or 30) as resp:
+                return _HttpResult(resp.status, resp.read())
+        except urllib.error.HTTPError as exc:
+            return _HttpResult(exc.code, exc.read())
+
+
+def google_access_token(scopes=None, credentials_cls=None, request=None) -> str:
+    """Access token for the owner's Google account.
+
+    Reads opstream-gtm/google-sheets-refresh-token plus the OAuth client id
+    and secret. There is no service account. A missing secret or a rejected
+    refresh raises NeedsConnection without the token or the provider error.
+    """
+    scope_list = tuple(scopes or GOOGLE_USER_SCOPES)
+    cache_key = ("google-user", " ".join(scope_list))
+    cached = _TOKEN_CACHE.get(cache_key)
+    if cached and cached[0] > time.time() + 60:
+        return cached[1]
+    refresh = _read_secret_string("google-sheets-refresh-token")
+    client_id = _read_secret_string("google-oauth-client-id")
+    client_secret = _read_secret_string("google-oauth-client-secret")
+    try:
+        if credentials_cls is None:
+            from google.oauth2.credentials import Credentials as credentials_cls
+        creds = credentials_cls(
+            token=None,
+            refresh_token=refresh,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=list(scope_list),
+        )
+        creds.refresh(request if request is not None else _StdlibRequest())
+    except NeedsConnection:
+        raise
+    except Exception:
+        raise NeedsConnection("Google refresh token was rejected. Not touching watermarks.")
+    access = getattr(creds, "token", None)
+    if not access:
+        raise NeedsConnection("Google refresh did not return an access token")
+    expires = time.time() + 3300
+    expiry = getattr(creds, "expiry", None)
+    if expiry is not None and hasattr(expiry, "timestamp"):
+        expires = expiry.timestamp()
+    _TOKEN_CACHE[cache_key] = (expires, access)
+    return access
 
 
 def authed_request(

@@ -5,10 +5,11 @@ Re-pulls the spreadsheets already tracked in sheets_data (all tabs) and
 replaces their rows. Read-only against the Google Sheets API
 (spreadsheets.get, then one values.batchGet per spreadsheet).
 
-Auth is opstream-gtm/google-sheets-credential: a service-account JSON, an
-OAuth refresh-token JSON, or a bearer token. The refresh job skips this
-script when that secret is not present. A Google OAuth secret stored under
-a different name is not used here.
+Auth is the owner's Google account: opstream-gtm/google-sheets-refresh-token
+plus opstream-gtm/google-oauth-client-id and opstream-gtm/google-oauth-client-secret.
+There is no service account. A missing secret exits 3 and does not move the
+watermark. The refresh job also skips this script when the refresh token
+secret is not present.
 """
 
 import json
@@ -19,22 +20,20 @@ import urllib.request
 from common import (
     NeedsConnection,
     RateLimiter,
-    access_token_for,
     db_connect,
+    google_access_token,
     run_main,
     set_sync_state,
     now_iso,
 )
 
 SOURCE = "sheets"
-SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
-CONNECTORS = ("google_sheets", "google-sheets-credential")
 pace = RateLimiter(1.0)
 
 
 def _sheets_get(url: str):
     pace.wait()
-    token = access_token_for(CONNECTORS, SHEETS_SCOPE)
+    token = google_access_token()
     req = urllib.request.Request(url, headers={
         "Accept": "application/json",
         "Authorization": "Bearer " + token,
@@ -98,6 +97,7 @@ def _tab_from_range(rng: str) -> str:
 
 
 def main_sync(log):
+    google_access_token()
     con = db_connect()
     try:
         sheets = con.execute(

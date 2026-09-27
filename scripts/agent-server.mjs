@@ -18,7 +18,8 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { DATA_TOOL_SCHEMAS, collectedLabel, computeFacts, dataRevision, needsReload, runAssistantTool } from './workspace-facts.mjs';
-import { persistStateFile, pollPublished } from './published-swap.mjs';
+import { persistStateFile, pollPublished, getSecretString, putSecretString } from './published-swap.mjs';
+import { createSheetsConnect, plainPage, REFRESH_SECRET_ID } from './sheets-connect.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
@@ -48,6 +49,32 @@ const getOAuthRedirectUri = (req) => {
   const proto = req.headers['x-forwarded-proto'] || req.headers['cloudfront-forwarded-proto'] || 'http';
   return `${proto}://${host}/api/gmail/oauth/callback`;
 };
+
+let googleClientPromise = null;
+function loadGoogleOAuthClient() {
+  if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
+    return Promise.resolve({ clientId: GOOGLE_CLIENT_ID, clientSecret: GOOGLE_CLIENT_SECRET });
+  }
+  if (!googleClientPromise) {
+    googleClientPromise = (async () => {
+      const clientId = String(await getSecretString('opstream-gtm/google-oauth-client-id') || '').trim();
+      const clientSecret = String(await getSecretString('opstream-gtm/google-oauth-client-secret') || '').trim();
+      if (!clientId || !clientSecret) throw new Error('oauth client missing');
+      return { clientId, clientSecret };
+    })().catch((err) => {
+      googleClientPromise = null;
+      throw err;
+    });
+  }
+  return googleClientPromise;
+}
+
+const sheetsConnect = createSheetsConnect({
+  loadClient: loadGoogleOAuthClient,
+  saveRefreshToken(token) {
+    return putSecretString(REFRESH_SECRET_ID, token);
+  },
+});
 
 // Session management: get or create session ID from cookie
 const getSessionId = (req, res) => {
@@ -658,6 +685,16 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));
       return;
     }
+    if (url.pathname === '/admin/connect-sheets' && req.method === 'GET') {
+      try {
+        const started = await sheetsConnect.start(getOAuthRedirectUri(req));
+        res.writeHead(302, { Location: started.url, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }).end();
+      } catch {
+        res.writeHead(500, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+          .end(plainPage('Sheets was not connected', 'The Google OAuth client could not be loaded.'));
+      }
+      return;
+    }
     if (url.pathname === '/api/gmail/oauth/start' && req.method === 'GET') {
       // Starts per-user Gmail OAuth flow. Returns { authUrl } for the frontend
       // to open. User signs in as themselves (not the server owner).
@@ -686,10 +723,23 @@ const server = http.createServer((req, res) => {
     }
     if (url.pathname === '/api/gmail/oauth/callback' && req.method === 'GET') {
       // Google redirects here after user signs in. Exchanges code for tokens.
+      // A state this server issued as sheets:… stores a Sheets refresh token
+      // and does not start a Gmail session.
       const code = url.searchParams.get('code');
-      const state = url.searchParams.get('state');
+      const state = url.searchParams.get('state') || '';
       const error = url.searchParams.get('error');
-      
+      if (state.startsWith('sheets:')) {
+        const result = await sheetsConnect.callback({
+          code, state, error, redirectUri: getOAuthRedirectUri(req),
+        });
+        res.writeHead(result.status, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
+        }).end(result.html);
+        return;
+      }
+
       if (error) {
         res.writeHead(302, { Location: '/?view=drafts&gmail=error' }).end();
         return;

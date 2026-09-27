@@ -11,6 +11,9 @@ stats/competitors. Read-only against the Otterly API.
 NOTE: Otterly's public API surface is small and has changed before. Endpoint
 candidates are tried in order; if none match, the script logs clearly and
 exits non-zero WITHOUT touching watermarks so a human can review.
+
+Auth: Secrets Manager opstream-gtm/otterly-token. A missing or rejected token
+exits 3 and does not move watermarks.
 """
 
 import json

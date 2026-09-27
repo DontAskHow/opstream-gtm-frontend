@@ -8,6 +8,9 @@ and transcript_fts.
 Read-only against the Fathom API. Gentle pacing (2 req/s max).
 Watermark format in sync_state (source='fathom'): ISO-8601 timestamp of the
 latest recording_start_time seen (legacy 'start..end' ranges are parsed).
+
+Auth: Secrets Manager opstream-gtm/fathom-token, sent only to api.fathom.ai.
+A missing or rejected token exits 3 and does not move watermarks.
 """
 
 import json

@@ -48,11 +48,11 @@ const env = {
 const first = execFileSync('python3', ['refresh/run.py'], { cwd: root, env, encoding: 'utf8' });
 console.log(first.slice(-800));
 const expectedSkips = [
-  ['sheets_sync.py', 'google-sheets-credential'],
+  ['sheets_sync.py', 'google-sheets-refresh-token'],
   ['hubspot_sync.py', 'hubspot-token'],
   ['fathom_sync.py', 'fathom-token'],
-  ['ga4_sync.py', 'ga4-credential'],
-  ['lemlist_sync.py', 'lemlist-api-key'],
+  ['ga4_sync.py', 'google-sheets-refresh-token'],
+  ['lemlist_sync.py', 'lemlist-token'],
   ['otterly_sync.py', 'otterly-token'],
 ];
 for (const [script, secret] of expectedSkips) {
@@ -67,7 +67,28 @@ const publishedRecords = path.join(fsRoot, latest.prefix, 'records.json');
 check('published records', fs.existsSync(publishedRecords), publishedRecords);
 const snap = JSON.parse(fs.readFileSync(path.join(fsRoot, latest.prefix, 'verified.json'), 'utf8')).snapshotId;
 check('not synthetic', snap && !/synthetic/i.test(snap), snap);
-const firstRun = latest.runId;
+
+const tokenMarker = 'do-not-log-this-refresh-token';
+fs.mkdirSync(path.join(fsRoot, 'secrets'), { recursive: true });
+fs.writeFileSync(path.join(fsRoot, 'secrets', 'google-sheets-refresh-token'), tokenMarker);
+let exit3Log = '';
+let exit3Failed = false;
+try {
+  exit3Log = execFileSync('python3', ['refresh/run.py'], {
+    cwd: root,
+    env: { ...env, AWS_EC2_METADATA_DISABLED: 'true' },
+    encoding: 'utf8',
+  });
+} catch (err) {
+  exit3Failed = true;
+  exit3Log = String(err.stdout || '') + String(err.stderr || '');
+}
+check('exit 3 does not fail the job', !exit3Failed, exit3Log.slice(-400));
+check('sheets needs connection', exit3Log.includes('skipping sheets_sync.py because it needs a connection (exit 3)'), 'sheets');
+check('ga4 needs connection', exit3Log.includes('skipping ga4_sync.py because it needs a connection (exit 3)'), 'ga4');
+check('refresh token not logged', !exit3Log.includes(tokenMarker), 'token appeared');
+const latestPathAfter = JSON.parse(fs.readFileSync(latestPath, 'utf8'));
+const firstRun = latestPathAfter.runId;
 
 fs.rmSync(dbPath);
 let failed = false;

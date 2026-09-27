@@ -10,6 +10,10 @@ Long text fields truncated at 8000 chars (backfill convention).
 
 Watermark format in sync_state (source='hubspot'): JSON object mapping
 object_type -> ISO-8601 modified-date watermark.
+
+Auth: Secrets Manager opstream-gtm/hubspot-token (private app, read-only CRM,
+portal 21303277). A missing or rejected token exits 3 and does not move
+watermarks.
 """
 
 import json

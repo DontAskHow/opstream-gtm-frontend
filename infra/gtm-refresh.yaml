@@ -56,6 +56,9 @@ Resources:
                 Resource:
                   - arn:aws:s3:::opstream-gtm-data-080403790510
                   - arn:aws:s3:::opstream-gtm-data-080403790510/*
+              # GetSecretValue on opstream-gtm/* covers the refresh token,
+              # hubspot-token, fathom-token, lemlist-token, otterly-token,
+              # and the Google OAuth client id and secret.
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
@@ -199,6 +202,18 @@ Resources:
               - s3:GetObject
               - s3:PutObject
             Resource: arn:aws:s3:::opstream-gtm-data-080403790510/state/*
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource:
+              - arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/google-oauth-client-id-*
+              - arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/google-oauth-client-secret-*
+          - Effect: Allow
+            Action:
+              - secretsmanager:CreateSecret
+              - secretsmanager:PutSecretValue
+            Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/google-sheets-refresh-token-*
 
 Outputs:
   RepositoryUri:

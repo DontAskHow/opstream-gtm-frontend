@@ -6,7 +6,8 @@ exposes them). Read-only against the Lemlist API (api.lemlist.com).
 
 Auth: Lemlist accepts the API key as the ?access_token= query parameter
 (documented at developer.lemlist.com). The key is the secret
-opstream-gtm/lemlist-api-key and is sent only to api.lemlist.com.
+opstream-gtm/lemlist-token and is sent only to api.lemlist.com.
+A missing secret exits 3 and does not move the watermark.
 """
 
 import json

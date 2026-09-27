@@ -168,16 +168,18 @@ class S3Store(Store):
         return resp.get("SecretString") or ""
 
 
-# Canonical scripts live in refresh/brain-sync. A Google OAuth secret under
-# another name is not treated as the Sheets credential.
+# Canonical scripts live in refresh/brain-sync. Sheets and GA4 share the
+# owner's refresh token. The OAuth client id and secret are injected beside
+# it and are not a substitute for that token.
 SYNC_SCRIPTS = [
-    ("sheets_sync.py", "google-sheets-credential"),
+    ("sheets_sync.py", "google-sheets-refresh-token"),
     ("hubspot_sync.py", "hubspot-token"),
     ("fathom_sync.py", "fathom-token"),
-    ("ga4_sync.py", "ga4-credential"),
-    ("lemlist_sync.py", "lemlist-api-key"),
+    ("ga4_sync.py", "google-sheets-refresh-token"),
+    ("lemlist_sync.py", "lemlist-token"),
     ("otterly_sync.py", "otterly-token"),
 ]
+GOOGLE_CLIENT_SECRETS = ("google-oauth-client-id", "google-oauth-client-secret")
 VENDORED_SYNC = ROOT / "refresh" / "brain-sync"
 
 
@@ -314,10 +316,18 @@ def main():
         env = os.environ.copy()
         env["BRAIN_DB"] = str(db_path)
         env["GTM_SECRET_" + secret.upper().replace("-", "_")] = store.secret_value(secret)
+        if script in ("sheets_sync.py", "ga4_sync.py"):
+            for extra in GOOGLE_CLIENT_SECRETS:
+                if store.secret_exists(extra):
+                    env["GTM_SECRET_" + extra.upper().replace("-", "_")] = store.secret_value(extra)
         try:
             run_step([sys.executable, str(path)], env, ROOT)
             ran.append(script)
-        except SystemExit:
+        except SystemExit as exc:
+            if exc.code == 3:
+                log("WARNING: skipping %s because it needs a connection (exit 3). Watermarks untouched." % script)
+                skipped.append("%s (needs connection)" % script)
+                continue
             log("sync failed: " + script + ". Publishing nothing.")
             return 1
     if ran:

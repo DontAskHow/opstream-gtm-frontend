@@ -7,7 +7,7 @@ Bucket: `opstream-gtm-data-080403790510` in `us-east-2`, account `080403790510`.
 ## What the container does
 
 1. Download `data/brain/brain.db` and operator state from `state/`.
-2. Run the vendored scripts in `refresh/brain-sync/` (`sheets_sync.py`, `hubspot_sync.py`, `fathom_sync.py`, `ga4_sync.py`, `lemlist_sync.py`, `otterly_sync.py`). These are the canonical syncs. `common.py` reads Secrets Manager (`opstream-gtm/<name>`) instead of the vault CLI. A missing secret is a logged warning (`skipping <script> because secret opstream-gtm/<name> is not present`) and that script is skipped. The job then prints `sync summary: ran …` and `sync summary: skipped …`. A Google OAuth secret stored under a different name is not used as the Sheets credential. The container does not download `code/brain-sync/` from S3 over these copies.
+2. Run the vendored scripts in `refresh/brain-sync/` (`sheets_sync.py`, `hubspot_sync.py`, `fathom_sync.py`, `ga4_sync.py`, `lemlist_sync.py`, `otterly_sync.py`). These are the canonical syncs. `common.py` reads Secrets Manager (`opstream-gtm/<name>`) instead of the vault CLI. A missing secret is a logged warning (`skipping <script> because secret opstream-gtm/<name> is not present`) and that script is skipped. Sheets and GA4 both use `opstream-gtm/google-sheets-refresh-token` plus the OAuth client id and secret. A script that starts and exits 3 is logged (`needs a connection (exit 3)`) and skipped; the existing snapshot is still published. Exit 1 publishes nothing. The job then prints `sync summary: ran …` and `sync summary: skipped …`. The container does not download `code/brain-sync/` from S3 over these copies.
 3. Upload `brain.db` back only when a sync actually succeeded. If every sync was skipped, the database already in the bucket is left unchanged and the build continues.
 4. Run the same chain the 6-hour dashboard job described: `brain-data.py`, then `sheet-review.py`, then `align-run.py` (which runs `hollie-operator.py` and writes one run id). If `openai-api-key` exists, `agent-brief.py` and `heartbeat.py` call OpenAI directly with `gpt-6-luna`. Then esbuild bundles `evidence-renderer.mjs`. The container does not restart Elastic Beanstalk and does not send a chat message. The Monday operator review stays a separate weekly pass; it is not a second scheduler here. The old schedules are copied in `refresh/crons/`.
 5. If `brain.db` is missing, or the snapshot id is synthetic, the process exits non-zero and does not write `published/LATEST.json`.
@@ -32,20 +32,36 @@ About **$1.70 a month**. There is no NAT gateway and no email subscription. A NA
 
 Do these in account `080403790510`, region **US East (Ohio)**.
 
-### 1. Secrets Manager
+### 1. Google authorization and other secrets
 
-Console → Secrets Manager → Store a new secret → Other type of secret → Plaintext.
+Sheets and GA4 use the owner's Google account (`zackkaufman39@gmail.com`), which already has the tracked spreadsheets and GA4 property `304508954`. There is no service account.
 
-Create these only when you have the credential. The job skips a sync until the secret exists. `openai-api-key` is already there.
+The OAuth client is already in Secrets Manager, the same client the dashboard's Gmail connect uses:
+
+- `opstream-gtm/google-oauth-client-id`
+- `opstream-gtm/google-oauth-client-secret`
+
+One-time connect, after the dashboard is deployed and the Beanstalk role has the policy from step 4. Open:
+
+`https://<dashboard-host>/admin/connect-sheets`
+
+Google asks for read-only scopes `spreadsheets.readonly`, `drive.metadata.readonly`, and `analytics.readonly`, plus `openid` and `userinfo.email` so the success page can name the account. The request sets `access_type=offline` and `prompt=consent`. The callback is the Gmail path that is already registered, with a `sheets:` state this server issued:
+
+`https://<dashboard-host>/api/gmail/oauth/callback`
+
+In Google Cloud console, project `opstream-marketing-dashboard`, that exact redirect URI must be on this OAuth client. If the dashboard host is not listed, add that URI. Do not add a second callback path. The server's example public base is `https://d1l47t29dh34cq.cloudfront.net`, so the connect URL there is `https://d1l47t29dh34cq.cloudfront.net/admin/connect-sheets` and the redirect URI is `https://d1l47t29dh34cq.cloudfront.net/api/gmail/oauth/callback`. If the live host differs, use that host with these same paths. `OAUTH_PUBLIC_BASE_URL`, when it is already set, picks the host. This setup does not add environment properties.
+
+The callback stores the refresh token as `opstream-gtm/google-sheets-refresh-token` (create, or a new version). It is not logged and it is not written to disk or S3. The browser shows a plain page with the email that authorized.
+
+Create the other secrets only when you have the credential (Console → Secrets Manager → Other type of secret → Plaintext). The job skips a sync until the secret exists. `openai-api-key` is already there. GA4 uses the Google refresh token above. There is no `ga4-credential` secret and no `lemlist-api-key` secret.
 
 | Secret name | Plaintext |
 | --- | --- |
-| `opstream-gtm/google-sheets-credential` | the Google service-account JSON |
-| `opstream-gtm/hubspot-token` | the HubSpot private app token |
-| `opstream-gtm/fathom-token` | the Fathom API token |
-| `opstream-gtm/lemlist-api-key` | the Lemlist API key |
-| `opstream-gtm/otterly-token` | the Otterly token |
-| `opstream-gtm/ga4-credential` | the GA4 service-account JSON |
+| `opstream-gtm/google-sheets-refresh-token` | written by `/admin/connect-sheets` |
+| `opstream-gtm/hubspot-token` | HubSpot private app token, read-only CRM, portal 21303277 |
+| `opstream-gtm/fathom-token` | Fathom API token |
+| `opstream-gtm/lemlist-token` | Lemlist API key |
+| `opstream-gtm/otterly-token` | Otterly token |
 
 Leave the encryption key as the default `aws/secretsmanager` key.
 
@@ -86,7 +102,7 @@ CloudShell's Docker disk is small. If the build fails for space, use the CloudSh
 
 The stack output `EbPolicyArn` is a managed policy. Console → IAM → Roles → `aws-elasticbeanstalk-ec2-role` → Add permissions → Attach policies → `opstream-gtm-eb-published-read`.
 
-That role can then read `published/*` and read/write `state/*`. Do not add environment properties on the Beanstalk environment. The bucket name is already in `refresh-config.json` inside the application zip.
+That role can then read `published/*`, read and write `state/*`, read `opstream-gtm/google-oauth-client-id` and `opstream-gtm/google-oauth-client-secret`, and create or update `opstream-gtm/google-sheets-refresh-token`. The Fargate task role has `secretsmanager:GetSecretValue` on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*`, which includes that refresh token and the other sync secrets. Do not add environment properties on the Beanstalk environment. The bucket name is already in `refresh-config.json` inside the application zip.
 
 ### 5. Run it once
 
