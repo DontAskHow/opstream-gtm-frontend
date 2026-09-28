@@ -309,14 +309,14 @@ async function checkAccounts(page) {
   check('Taboola owner matches Accounts', owner && taboola.includes(owner.trim().split(' ')[0]), owner + ' | ' + taboola.slice(0, 60));
   await goView(page, 'Meetings');
   const options = await page.locator('main select').first().locator('option').allInnerTexts();
-  const firsts = options.filter(o => !/^Owner #/.test(o)).map(o => o.split(' ')[0].toLowerCase());
+  const firsts = options.filter(o => o !== 'Unassigned').map(o => o.split(' ')[0].toLowerCase());
   check('meeting owners are not duplicated', firsts.length === new Set(firsts).size, options.join(', '));
   await goView(page, 'Pipeline');
   const pipe = await page.locator('main').innerText();
   const rule = (pipe.match(/Open pipeline is the [^\n]+/) || [''])[0];
   check('pipeline states its rule', new RegExp('Open pipeline is the ' + facts.openCount + ' active new-business rows').test(rule) && /Not included: \d+ renewals and customer expansions \(\$[\d.]+[KM]/.test(rule) && /\d+ On Hold/.test(rule), rule);
   check('accounts state the same rule', /Open pipeline is the \d+ active new-business rows/.test(text));
-  check('renewals are collapsed', /Show the \d+ renewal rows/.test(pipe) && !/No company linked|Scott McKenna/.test(pipe));
+  check('renewals are collapsed', /Show the \d+ renewals/.test(pipe) && !/No company linked|Scott McKenna/.test(pipe));
 }
 
 await publicRun(1440, 'desktop');
@@ -335,10 +335,10 @@ for (const [width, tag] of [[1440, 'desktop'], [390, 'mobile']]) {
   const context = await browser.newContext();
   await context.addCookies([{ name: 'gtm_user', value: sid, url: base }]);
   const { page, errors } = await openPage(context, width);
-  await page.locator('header', { hasText: 'Signed in as' }).waitFor();
+  await page.locator('header .signed-in-user').waitFor();
   await page.locator('section[aria-label="Your brief"]').waitFor();
   const header = await page.locator('header').innerText();
-  check(tag + ' header names the signed-in person', /Signed in as\s+Hollie Farrahi/.test(header));
+  check(tag + ' header names the signed-in person', /Hollie Farrahi/.test(header) && /hollie@opstream\.ai/.test(header) && /Sign out/.test(header) && !/Shared view/.test(header));
   const photo = await page.locator('header .header-photo').getAttribute('style');
   check(tag + ' header shows the Google photo', String(photo || '').includes(PHOTO));
   const main = await page.locator('main').innerText();

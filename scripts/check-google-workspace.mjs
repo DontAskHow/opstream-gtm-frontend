@@ -281,12 +281,12 @@ check('cannot send as another user', zackSend.status === 200 && zackJson.send.fr
 workspaceModel.ownerCatalog = { '384787270': 'Hollie Farrahi', 'hollie.farrahi@opstream.ai': 'Hollie Farrahi' };
 check('meeting owner name', workspaceModel.displayOwner('Owner 384787270') === 'Hollie Farrahi');
 check('meeting email owner', workspaceModel.displayOwner('hollie.farrahi@opstream.ai') === 'Hollie Farrahi');
-check('unknown owner stays numbered', workspaceModel.displayOwner('Owner 999001').startsWith('Owner #'));
+check('an owner id with no name reads Unassigned', workspaceModel.displayOwner('Owner 999001') === 'Unassigned' && workspaceModel.displayOwner('999001') === 'Unassigned');
 const py = execFileSync('python3', ['-c', `
 import sys
 sys.path.insert(0, "scripts")
 from gtm_metrics import owner_info
-info = owner_info("Owner 384787270", 4, {"384787270": "Hollie Farrahi"})
+info = owner_info("Owner 384787270", {"384787270": "Hollie Farrahi"})
 print(info["label"])
 `], { cwd: root, encoding: 'utf8' }).trim();
 check('python owner catalog', py === 'Hollie Farrahi');

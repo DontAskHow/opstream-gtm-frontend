@@ -108,7 +108,7 @@ from gtm_metrics import snapshot_metrics
 ver = json.load(open("out/data/verified.json"))
 rec = json.load(open("out/data/records.json"))
 review = json.load(open("out/data/sheet-review.json"))
-book = snapshot_metrics(ver, rec, today="2026-09-27", sheet_review=review)
+book = snapshot_metrics(ver, rec, today="${facts.today}", sheet_review=review)
 kidde = [d for d in book["deals"] if "Renewal Agreement - 2027" in (d.get("dealName") or "") and d.get("amount") == 514800]
 print(json.dumps({
   "today": book["today"],

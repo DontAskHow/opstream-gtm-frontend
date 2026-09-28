@@ -23,18 +23,21 @@ Open http://127.0.0.1:4173. The build writes static files to `out/`.
 
 The demo stores changes only in the current browser. Email, Slack and authentication are disabled. The production backend, databases, credentials, company snapshots, transcripts, original draft text, deployment settings and private Git history are excluded. Production API integration code remains in `collaboration.js`; the demo adapter substitutes local behavior.
 
-`source/workspace.html` is the assembled, data-cleaned UI template. The standalone HTML fragments and CSS are also retained for reference; the build uses the assembled template. `draft-history.js` is a retained legacy helper, not loaded by the current build.
+`source/workspace.html` is the assembled, data-cleaned UI template. The standalone HTML fragments and CSS are also retained for reference; the build uses the assembled template.
 
 The existing runtime loads React 18, React DOM, Babel and Archivo from their public CDNs, so viewing requires internet access. Their upstream licenses apply. No new project license is granted by this publication.
 
 ## Verification
 
-With the preview running:
+End-to-end suites (Google, HubSpot, LemList, Otterly and OpenAI are mocked at the HTTP boundary; nothing leaves the machine):
 
 ```sh
-npx playwright install chromium
-node scripts/verify-preview.cjs
+npm run build
+node scripts/check-cta-buttons.mjs      # every Today, Events, Pipeline, Accounts, Meetings and Drafts button
+node scripts/check-v13.mjs              # identity header, owner names, stale-run guard, v13 review fixes, banned terms
+node scripts/check-marketing-home.mjs
+python3 scripts/check-source-syncs.py   # refresh/run.py against mocked source APIs
 npm run security:scan
 ```
 
-Alternatively set `BROWSER_PATH` to an installed Chrome/Edge executable. See `verification/README.md` for the recorded results and limitations.
+Set `CHROME_PATH` to a Chrome executable if it is not at `/usr/local/bin/google-chrome`.

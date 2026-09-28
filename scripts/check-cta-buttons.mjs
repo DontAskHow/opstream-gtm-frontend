@@ -120,23 +120,27 @@ const noRepeats = to => { const xs = to.split(',').map(x => x.trim().toLowerCase
 await home();
 const p1 = card('mkt:shows-soon');
 await shot('p1-shows-this-week', priority('mkt:shows-soon'));
-check('P1 primary names the DPW Amsterdam meetings', /^Book the 6 DPW Amsterdam meetings$/.test(p1.primary.label), p1.primary.label);
+const openAsks = dpwAms.requestRows.filter(r => !r.mql);
+check('P1 primary names the DPW Amsterdam meetings', p1.primary.label === 'Book the ' + openAsks.length + ' DPW Amsterdam meetings' && openAsks.length >= 6, p1.primary.label);
+check('P1 next step names every company asking to meet', openAsks.every(r => p1.next.includes(r.company)), p1.next);
+check('the Novonesis “DWP app” request is a DPW Amsterdam meeting request', openAsks.some(r => r.company === 'Novonesis'));
 await priority('mkt:shows-soon').getByRole('button', { name: p1.primary.label }).click();
 await page.locator('.draft-show-line').waitFor();
 let f = await draftFields();
 const meetSeeds = seeds.filter(d => d.showId === 'show:dpw-amsterdam' && d.purpose === 'event');
-check('P1 opens exactly the 6 DPW Amsterdam meeting drafts', f.list.length === 6 && f.list.every(t => / · meeting at DPW Amsterdam$/.test(t)) && /Drafts for DPW Amsterdam: 6 event follow-ups/.test(f.showLine), f.list.join(' | ') + ' / ' + f.showLine);
+check('P1 opens exactly the DPW Amsterdam meeting drafts', f.list.length === openAsks.length && f.list.every(t => / · (meeting at|LinkedIn message for) DPW Amsterdam$/.test(t)) && f.showLine.includes('Drafts for DPW Amsterdam: ' + openAsks.length + ' event follow-ups'), f.list.join(' | ') + ' / ' + f.showLine);
 check('P1 meeting drafts: one per requester', meetSeeds.length === dpwAms.requestRows.filter(r => !r.mql).length);
-await page.locator('.draft-list-item', { hasText: 'Vanatge Towers' }).click();
+await page.locator('.draft-list-item', { hasText: 'Vantage Towers' }).click();
 f = await draftFields();
-const vanatge = dpwAms.requestRows.find(r => r.company === 'Vanatge Towers');
+const vanatge = dpwAms.requestRows.find(r => r.company === 'Vantage Towers');
+check('the tracker typo “Vanatge” shows as Vantage Towers', !!vanatge && !JSON.stringify(dpwAms).includes('Vanatge') && f.subject === 'Meeting at DPW Amsterdam: Vantage Towers', f.subject);
 check('DPW draft To is the Lead Tracker contact email', f.to === vanatge.email && emailsOnly(f.to), f.to);
 check('DPW draft greets the contact by name', f.text.startsWith('Hi ' + vanatge.contact.split(' ')[0] + ','), f.text.split('\n')[0]);
 check('DPW draft has booth and time-slot lines', /booth \[booth number\]/.test(f.text) && /Wed Sep 30 at \[time\] or Thu Oct 1 at \[time\]/.test(f.text), f.text);
 check('DPW draft is signed by the lead owner', /\nDoug Daniels\nOpstream$/.test(f.text), f.text.slice(-40));
 await shot('dpw-meeting-draft-filled');
 const noEmail = meetSeeds.filter(d => !d.recipients);
-check('DPW drafts with no email say so', noEmail.every(d => /No contact email for .* in the Lead Tracker or HubSpot/.test(d.rationale)), noEmail.map(d => d.company).join(', '));
+check('DPW requesters with no email get a LinkedIn message and a search link', noEmail.length >= 1 && noEmail.every(d => d.channel === 'linkedin' && /LinkedIn message/.test(d.subject) && /No contact email for .* in the Lead Tracker or HubSpot/.test(d.rationale) && (d.links || [])[0]?.url.startsWith('https://www.linkedin.com/search/results/people/')), noEmail.map(d => d.company).join(', '));
 check('DPW drafts never put a name in To', meetSeeds.every(d => !d.recipients || emailsOnly(d.recipients)));
 
 await home();
@@ -195,7 +199,7 @@ check('P3 See spend opens Pipeline › Spend', /perf=spend/.test(page.url()), pa
 // ---- P4 · show leads stuck ----
 await home();
 const p4 = card('mkt:show-followups');
-check('P4 targets the show with the most leads', p4.primary.target.id === 'show:dpw-new-york' && /DPW New York follow-ups \(49 leads\)/.test(p4.primary.label), p4.primary.label);
+check('P4 targets the show with the most leads', p4.primary.target.id === 'show:dpw-new-york' && p4.primary.label === 'Open the DPW New York follow-ups (' + dpwNy.leads.count + ' leads)', p4.primary.label);
 await shot('p4-show-followups', priority('mkt:show-followups'));
 await priority('mkt:show-followups').getByRole('button', { name: p4.primary.label }).click();
 await page.locator('.draft-show-line').waitFor();
@@ -203,6 +207,7 @@ f = await draftFields();
 check('P4 opens the drafts filtered to DPW New York', /Drafts for DPW New York/.test(f.showLine) && f.list.length >= 1 && f.list.every(t => /DPW New York/.test(t)), f.showLine + ' / ' + f.list.join(' | '));
 check('P4 draft is a LemList campaign', /purpose=campaign/.test(page.url()) && /\{\{firstName\}\}/.test(f.text) && /\{\{companyName\}\}/.test(f.text));
 check('P4 uses re-engagement wording for a June show', !/while it is fresh/i.test(f.text) && /back in June/.test(f.text), f.text.slice(0, 120));
+check('P4 campaign draft is signed by a named lead owner', /\nBest,\n[A-Z][a-z]+ [A-Z][a-z]+\nOpstream$/.test(f.text), f.text.slice(-60));
 await page.getByRole('button', { name: 'Show all drafts' }).click();
 check('the show filter clears', (await page.locator('.draft-show-line').count()) === 0);
 await home();
@@ -211,7 +216,9 @@ await page.waitForTimeout(300);
 const pastOpen = await page.locator('#past-shows').evaluate(d => d.open);
 const lit = await page.locator('#past-shows [data-highlight="true"]').evaluateAll(ps => ps.map(p => p.id));
 check('P4 opens Past shows', pastOpen === true);
-check('P4 highlights DPW New York and Data in Procurement', lit.length === 2 && lit.includes('show-dpw-new-york') && lit.includes('show-data-in-procurement'), lit.join(','));
+const p4ids = p4.secondary.target.ids.map(id => 'show-' + id.replace(/^show:/, ''));
+check('P4 highlights the shows it names', lit.length === p4ids.length && p4ids.every(id => lit.includes(id)) && lit.includes('show-dpw-new-york'), lit.join(','));
+check('Data in Procurement no longer claims the WIP and DPW leads', !(shows.find(s => s.id === 'show:data-in-procurement')?.leadRows || []).some(r => /Faegre|Honeywell|Novonesis/.test(r.company)));
 const nyBox = await page.locator('#show-dpw-new-york').evaluate(el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: innerHeight, y: scrollY }; });
 check('P4 scrolls the highlighted shows into view', nyBox.y > 0 && nyBox.top >= 0 && nyBox.bottom <= nyBox.h, JSON.stringify(nyBox));
 await shot('p4-past-shows-highlighted');
@@ -219,10 +226,15 @@ await home();
 const nyCsv = await download(() => priority('mkt:show-followups').getByRole('button', { name: 'Download DPW New York leads (CSV)' }).click());
 const nyLines = csvRows(nyCsv.text);
 const withEmail = nyLines.slice(1).filter(r => r[2]);
-check('P4 CSV is LemList-ready with the show\'s leads', nyLines[0].slice(0, 4).join(',') === 'firstName,lastName,email,companyName' && nyLines.length === dpwNy.leads.count + 1 && withEmail.every(r => /@/.test(r[2])), nyLines.length - 1 + ' rows, ' + withEmail.length + ' with email');
-await priority('mkt:show-followups').getByRole('button', { name: /Open the Data in Procurement follow-ups/ }).click();
-await page.locator('.draft-show-line').waitFor();
-check('P4 also opens the Data in Procurement follow-up', /Drafts for Data in Procurement/.test((await draftFields()).showLine));
+const nyCampaign = dpwNy.leadRows.filter(r => !r.flags?.hot && !r.flags?.dead);
+const nyUnique = new Set(nyCampaign.map(r => String(r.email || '').toLowerCase() || r.company + '|' + (r.contact || ''))).size;
+check('P4 CSV is LemList-ready: each person once, no hot or dead leads', nyLines[0].slice(0, 4).join(',') === 'firstName,lastName,email,companyName' && nyLines.length === nyUnique + 1 && nyUnique < dpwNy.leads.count && new Set(withEmail.map(r => r[2].toLowerCase())).size === withEmail.length, nyLines.length - 1 + ' rows, ' + nyUnique + ' unique of ' + dpwNy.leads.count);
+const second = (p4.more || []).find(m => m.target.kind === 'event-followup');
+if (second) {
+  await priority('mkt:show-followups').getByRole('button', { name: second.label }).click();
+  await page.locator('.draft-show-line').waitFor();
+  check('P4 also opens the other show\'s follow-up', (await draftFields()).showLine.includes('Drafts for ' + shows.find(s => s.id === second.target.id).name));
+} else check('P4 names only the shows with stuck leads', p4.secondary.target.ids.length === 1);
 
 // ---- P5 / P6 · lead stages ----
 await home();
@@ -241,9 +253,9 @@ check('P6 shows about 190 leads, not the whole tracker', card('mkt:unworked-by-s
 
 // ---- Events & shows ----
 await home();
-await page.locator('#show-dpw-amsterdam').getByRole('button', { name: 'Open meeting request drafts (6)' }).click();
+await page.locator('#show-dpw-amsterdam').getByRole('button', { name: 'Open meeting request drafts (' + openAsks.length + ')' }).click();
 await page.locator('.draft-show-line').waitFor();
-check('show card opens its meeting drafts', /Drafts for DPW Amsterdam: 6 event follow-ups/.test((await draftFields()).showLine));
+check('show card opens its meeting drafts', (await draftFields()).showLine.includes('Drafts for DPW Amsterdam: ' + openAsks.length + ' event follow-ups'));
 await home();
 const calLink = await page.locator('#show-dpw-amsterdam a', { hasText: /show calendar/ }).getAttribute('href');
 check('show card links to its show-calendar row', calLink === dpwAms.sheetRow.url, calLink);
@@ -257,7 +269,7 @@ for (const s of stale) {
 }
 check('past-show posts never publish lead counts', seeds.filter(d => d.purpose === 'linkedin').every(d => !/shared their details|\d+ people/.test(d.text)));
 check('no seeded post for a stale show', !seeds.some(d => d.purpose === 'linkedin' && stale.some(s => s.id === d.showId)));
-await page.locator('#show-dpw-new-york').getByRole('button', { name: /Open the follow-up for 49 leads/ }).click();
+await page.locator('#show-dpw-new-york').getByRole('button', { name: 'Open the follow-up for ' + dpwNy.leads.count + ' leads' }).click();
 await page.locator('.draft-show-line').waitFor();
 check('past-show row opens its follow-up', /Drafts for DPW New York/.test((await draftFields()).showLine));
 
@@ -357,7 +369,7 @@ check('prep link opens Today › Sales & CS meeting prep', (await page.getByRole
 // ---- Drafts: Generate with AI, Gmail, LemList ----
 await home();
 await priority('mkt:shows-soon').getByRole('button', { name: p1.primary.label }).click();
-await page.locator('.draft-list-item', { hasText: 'Vanatge Towers' }).click();
+await page.locator('.draft-list-item', { hasText: 'Vantage Towers' }).click();
 check('signed out: no disabled "Sign in with Google to send" button', (await page.getByRole('button', { name: 'Sign in with Google to send' }).count()) === 0);
 check('signed out: Copy for Gmail is the primary button', (await page.locator('.composer-actions .btn-primary').first().innerText()) === 'Copy for Gmail');
 const compose = new URL(await page.getByRole('link', { name: /Open in Gmail/ }).getAttribute('href'));
@@ -374,7 +386,7 @@ await page.getByRole('button', { name: 'Generate with AI' }).click();
 await page.locator('.form-success, .form-error', { hasText: /AI draft generated|Could not generate/ }).first().waitFor();
 f = await draftFields();
 const sent = chats.slice(asks).find(c => c.response_format?.type === 'json_object');
-check('Generate with AI asks for JSON with the company and recipients', !!sent && !sent.tools && /Company: Vanatge Towers/.test(sent.messages[1].content) && sent.messages[1].content.includes('To: ' + before.to), sent ? sent.messages[1].content.slice(0, 160) : 'no request');
+check('Generate with AI asks for JSON with the company and recipients', !!sent && !sent.tools && /Company: Vantage Towers/.test(sent.messages[1].content) && sent.messages[1].content.includes('To: ' + before.to), sent ? sent.messages[1].content.slice(0, 160) : 'no request');
 check('Generate with AI: one-line reply keeps subject and body apart', f.subject === 'Meeting at DPW Amsterdam' && /^Hi Nadine,/.test(f.text), JSON.stringify([f.subject, f.text.slice(0, 40)]));
 emailReply = () => JSON.stringify({ subject: 'DPW Amsterdam: time at booth [booth number]', body: 'Hi Nadine,\n\nWould Wed Sep 30 at [time] work?\n\nDoug Daniels' });
 await page.getByRole('button', { name: 'Generate with AI' }).click();

@@ -14,7 +14,7 @@ const LIMIT_KB = 250 * 1024;
 
 fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
 fs.mkdirSync(path.join(dir, 'out', 'data'), { recursive: true });
-for (const rel of ['workspace-model.cjs', 'scripts/agent-server.mjs', 'scripts/workspace-facts.mjs', 'scripts/published-swap.mjs', 'scripts/sheets-connect.mjs', 'scripts/google-identity.mjs', 'scripts/google-workspace.mjs', 'scripts/marketing-drafts.mjs', 'scripts/email-draft.mjs']) {
+for (const rel of ['workspace-model.cjs', 'scripts/agent-server.mjs', 'scripts/workspace-facts.mjs', 'scripts/published-swap.mjs', 'scripts/sheets-connect.mjs', 'scripts/google-identity.mjs', 'scripts/google-workspace.mjs', 'scripts/marketing-drafts.mjs', 'scripts/email-draft.mjs', 'scripts/term-scrub.mjs']) {
   fs.copyFileSync(path.join(root, rel), path.join(dir, rel));
 }
 fs.writeFileSync(path.join(dir, 'out', 'index.html'), '<!doctype html><title>memory</title>');
