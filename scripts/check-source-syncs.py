@@ -101,7 +101,11 @@ def otterly(req, url, q, path):
                                       "shareOfVoice": 12, "brandCoverage": 48, "domainCoverage": 12.5},
                           "detectedBrands": [{"name": "Zip", "mentions": 30}]})
     if path == "/v1/reports/brand/rep1/prompts":
-        return Resp(200, {"items": [{"id": "p%d" % i} for i in range(39)], "paging": {"nextCursor": None, "hasMore": False}})
+        if SCENARIO == "prompts400" or not all(q.get(k) for k in ("startDate", "endDate", "country")) or "cursor" in q:
+            raise err(url, 400, {"message": "Validation failed", "issues": ["startDate, endDate and country are required"]})
+        limit, offset = min(int(q.get("limit", ["25"])[0]), 20), int(q.get("offset", ["0"])[0])
+        return Resp(200, {"items": [{"id": "p%d" % i} for i in range(offset, min(offset + limit, 39))],
+                          "paging": {"limit": limit, "offset": offset, "hasMore": offset + limit < 39}})
     raise err(url, 404, {"message": "not found"})
 
 def lemlist(req, url, path):
@@ -234,6 +238,7 @@ check("fathom stores meetings, summaries and transcripts",
 check("fathom watermark is the newest created_at", rows("select watermark from sync_state where source='fathom'")[0][0] == "2026-09-27T16:00:00Z")
 otterly_calls = [c for c in calls if c["host"] in ("api.otterly.ai", "data.otterly.ai")]
 check("otterly only calls data.otterly.ai", otterly_calls and all(c["host"] == "data.otterly.ai" for c in otterly_calls))
+check("otterly pages prompts by offset", sum(1 for c in otterly_calls if c["path"].endswith("/prompts")) == 2)
 check("otterly reads the documented routes", {c["path"] for c in otterly_calls} == {
     "/v1/accounts/info", "/v1/workspaces", "/v1/reports/brand", "/v1/reports/brand/rep1/stats", "/v1/reports/brand/rep1/prompts"},
     sorted({c["path"] for c in otterly_calls}))
@@ -285,6 +290,16 @@ check("pulse names source, route and status",
       and "GET /v1/reports/brand answered HTTP 500" in details.get("Otterly was not refreshed", "")
       and "last good data" in details.get("Fathom was not refreshed", ""), details)
 check("no key in the logs after refusals", not any(v in out for v in KEYS.values()))
+
+proc, calls, latest = refresh("prompts400")
+out = proc.stdout + proc.stderr
+kept = json.loads(rows("select stats_json from otterly_reports where report_id='rep1'")[0][0])
+check("an Otterly prompts 400 still publishes the report's stats", proc.returncode == 0 and kept["summary"].get("brandCoverage") == 48
+      and kept["promptCount"] is None and "/reports/brand/{reportId}/prompts answered HTTP 400" in (kept.get("promptsError") or ""), kept)
+mk = published(latest, "marketing.json")
+by = {s["source"]: s for s in mk["sources"]}
+check("otterly counts as refreshed when only prompts fail", (by.get("otterly") or {}).get("ok") is True and mk["ai"].get("brandCoverage") == 48, by.get("otterly"))
+check("the sync note says prompts were not read", "prompts not read for 1 report(s), stats published" in rows("select note from sync_state where source='otterly'")[0][0])
 
 print(json.dumps({"ok": not failures, "failures": failures}, indent=2))
 sys.exit(1 if failures else 0)

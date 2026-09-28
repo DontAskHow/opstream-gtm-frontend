@@ -8,7 +8,12 @@ spec at data.otterly.ai/v1/openapi.json). Bearer auth. Read-only.
   GET /v1/workspaces                         workspaces the key can read
   GET /v1/reports/brand                      brand reports (cursor paging)
   GET /v1/reports/brand/{id}/stats           last 30 days, report's first country
-  GET /v1/reports/brand/{id}/prompts         prompt count per report
+  GET /v1/reports/brand/{id}/prompts         prompts in the same window and country;
+                                             startDate, endDate and country are required,
+                                             paged by offset (a multiple of limit)
+
+The prompts list is optional: when it fails, the report's stats still publish
+and the failure is kept on the report and in the sync note.
 
 Quota rule: check API usage first. Over 50% of the period's requests used, or
 usage unknown, skips the refresh (recorded, not an error).
@@ -39,6 +44,7 @@ CONNECTORS = ["custom.otterly", "otterly"]
 QUOTA_THRESHOLD = 0.50
 STATS_DAYS = 30
 MAX_PAGES = 20
+PROMPT_PAGE = 50
 pace = RateLimiter(1.0)
 
 
@@ -66,6 +72,22 @@ def _all(path: str, route: str, params: dict | None = None):
     return items
 
 
+def _prompts(rid: str, window: dict):
+    items, offset, limit = [], 0, PROMPT_PAGE
+    for _page in range(MAX_PAGES):
+        payload = _get(f"/reports/brand/{rid}/prompts", dict(window, offset=offset, limit=limit),
+                       "/reports/brand/{reportId}/prompts")
+        batch = payload.get("items") or []
+        items.extend(batch)
+        paging = payload.get("paging") or {}
+        if not paging.get("hasMore") or not batch:
+            break
+        # The server may cap limit; the next offset must be a multiple of the limit it used.
+        limit = int(paging.get("limit") or limit)
+        offset = int(paging.get("offset") or offset) + limit
+    return items
+
+
 def main_sync(log):
     info = _get("/accounts/info")
     used, limit = info.get("apiRequestsUsedCount"), info.get("apiRequestsMaxCount")
@@ -84,7 +106,7 @@ def main_sync(log):
     end = datetime.now(timezone.utc).date()
     start = end - timedelta(days=STATS_DAYS - 1)
     fetched_at = now_iso()
-    stored = []
+    stored, prompt_failures = [], []
     con = db_connect()
     try:
         for r in reports:
@@ -92,10 +114,14 @@ def main_sync(log):
             if not rid:
                 continue
             country = ((r.get("countries") or ["us"])[0] or "us").lower()
-            stats = _get(f"/reports/brand/{rid}/stats",
-                         {"startDate": start.isoformat(), "endDate": end.isoformat(), "country": country},
-                         "/reports/brand/{reportId}/stats")
-            prompts = _all(f"/reports/brand/{rid}/prompts", "/reports/brand/{reportId}/prompts")
+            window = {"startDate": start.isoformat(), "endDate": end.isoformat(), "country": country}
+            stats = _get(f"/reports/brand/{rid}/stats", window, "/reports/brand/{reportId}/stats")
+            try:
+                prompts, prompts_error = _prompts(rid, window), None
+            except SourceError as exc:
+                prompts, prompts_error = None, str(exc)
+                prompt_failures.append(rid)
+                log.warning("report %s: prompts not read (%s); publishing its stats without them", rid, exc)
             kept = {
                 "id": stats.get("id") or rid,
                 "status": stats.get("status"),
@@ -105,7 +131,8 @@ def main_sync(log):
                 "detectedBrands": (stats.get("detectedBrands") or [])[:30],
                 "country": country,
                 "window": {"startDate": start.isoformat(), "endDate": end.isoformat()},
-                "promptCount": len(prompts),
+                "promptCount": len(prompts) if prompts is not None else None,
+                "promptsError": prompts_error,
                 "workspace": workspaces.get(r.get("workspaceId")),
                 "reportTitle": r.get("reportTitle"),
             }
@@ -118,12 +145,15 @@ def main_sync(log):
                  json.dumps(kept, ensure_ascii=False), fetched_at),
             )
             stored.append(rid)
-            log.info("report %s (%s) stored: %s prompts", rid, r.get("brand"), len(prompts))
+            log.info("report %s (%s) stored: %s prompts", rid, r.get("brand"),
+                     len(prompts) if prompts is not None else "no")
         con.commit()
     finally:
         con.close()
     note = "%d brand reports from %d workspaces; API requests %d/%d before this run" % (
         len(stored), len(workspaces), used, limit)
+    if prompt_failures:
+        note += "; prompts not read for %d report(s), stats published" % len(prompt_failures)
     set_sync_state(SOURCE, fetched_at, note)
     return note
 
