@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gtm_metrics import date_only, first_touch, phoenix_today, tracker_rows
+import source_health
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("OUT_DATA") or (ROOT / "out" / "data"))
@@ -548,6 +549,7 @@ def main():
         "ads": ads(db),
         "web": web(db),
         "team": team(db),
+        "sources": source_health.read(db) if db is not None else [],
     }
     (DATA / "marketing.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     items = result["shows"].get("items") or []

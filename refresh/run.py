@@ -10,6 +10,7 @@ would fall back to synthetic data.
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import traceback
@@ -217,6 +218,25 @@ GOOGLE_CLIENT_SECRETS = ("google-oauth-client-id", "google-oauth-client-secret")
 VENDORED_SYNC = ROOT / "refresh" / "brain-sync"
 
 
+def record_outcome(db_path, source, detail, since=None):
+    """A sync that never ran, or exited without recording why. Keeps last_ok_at."""
+    con = sqlite3.connect(str(db_path))
+    try:
+        con.execute("""CREATE TABLE IF NOT EXISTS sync_outcomes(
+            source TEXT PRIMARY KEY, at TEXT, ok INTEGER, route TEXT, http INTEGER, detail TEXT, last_ok_at TEXT)""")
+        row = con.execute("SELECT at FROM sync_outcomes WHERE source=?", (source,)).fetchone()
+        if since and row and row[0] and row[0] >= since:
+            return
+        con.execute(
+            "INSERT INTO sync_outcomes(source, at, ok, route, http, detail, last_ok_at) VALUES(?,?,0,NULL,NULL,?,NULL) "
+            "ON CONFLICT(source) DO UPDATE SET at=excluded.at, ok=0, route=NULL, http=NULL, detail=excluded.detail",
+            (source, datetime.now(timezone.utc).isoformat(), detail),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
 def run_step(cmd, env, cwd):
     log("run " + " ".join(cmd))
     proc = subprocess.run(cmd, env=env, cwd=str(cwd))
@@ -335,17 +355,21 @@ def main():
 
     sync_dir = install_vendored_sync(os.environ.get("REFRESH_SYNC_DIR") or (work / "brain-sync"))
     ran = []
+    failed = []
     skipped = []
     for script, secret in SYNC_SCRIPTS:
         path = Path(sync_dir) / script
         secret_id = "opstream-gtm/" + secret
+        source = script.replace("_sync.py", "")
         if not path.is_file():
             log("WARNING: skipping %s because the vendored script is missing" % script)
             skipped.append("%s (script missing)" % script)
+            record_outcome(db_path, source, "the refresh image has no %s" % script)
             continue
         if not store.secret_exists(secret):
             log("WARNING: skipping %s because secret %s is not present" % (script, secret_id))
             skipped.append("%s (%s missing)" % (script, secret_id))
+            record_outcome(db_path, source, "secret %s is not in Secrets Manager" % secret_id)
             continue
         env = os.environ.copy()
         env["BRAIN_DB"] = str(db_path)
@@ -358,6 +382,7 @@ def main():
             for extra in GOOGLE_CLIENT_SECRETS:
                 if store.secret_exists(extra):
                     env["GTM_SECRET_" + extra.upper().replace("-", "_")] = store.secret_value(extra)
+        started = datetime.now(timezone.utc).isoformat()
         try:
             run_step([sys.executable, str(path)], env, ROOT)
             ran.append(script)
@@ -365,18 +390,15 @@ def main():
             if exc.code == 3:
                 log("WARNING: skipping %s because it needs a connection (exit 3). Watermarks untouched." % script)
                 skipped.append("%s (needs connection)" % script)
-                continue
-            log("sync failed: " + script + ". Publishing nothing.")
-            return 1
-    if ran:
-        log("sync summary: ran " + ", ".join(ran))
-    else:
-        log("sync summary: ran none")
-    if skipped:
-        log("sync summary: skipped " + "; ".join(skipped))
-    else:
-        log("sync summary: skipped none")
-    if ran:
+            else:
+                # One source failing keeps its last good data; the rest of the refresh continues.
+                log("WARNING: %s failed (exit %s). Its last good data stays; the refresh continues." % (script, exc.code))
+                failed.append(script)
+            record_outcome(db_path, source, "exited %s without recording a reason" % exc.code, since=started)
+    log("sync summary: ran " + (", ".join(ran) if ran else "none"))
+    log("sync summary: failed " + (", ".join(failed) if failed else "none"))
+    log("sync summary: skipped " + ("; ".join(skipped) if skipped else "none"))
+    if ran or failed:
         store.put_file(brain_key, db_path)
         log("uploaded brain.db")
     else:

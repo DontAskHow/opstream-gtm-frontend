@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import source_health
 from draft_seeds import build as build_draft_seeds
 from gtm_metrics import (commit_for_close_month, commit_versus_target, date_only,
                          is_junk_name, snapshot_age_hours, snapshot_metrics)
@@ -166,7 +167,7 @@ def main():
         "model": "facts",
         "summary": "Collection health only. Pipeline figures are in the morning brief.",
         "health": {"snapshotAgeHours": age_h, "asOf": day, "collectedAt": collected},
-        "insights": [{
+        "insights": source_health.insights(marketing.get("sources")) + [{
             "title": "Snapshot age",
             "detail": ("Collected %s. The age is worked out when the page opens."
                        % (phoenix_clock(collected) or "at an unrecorded time")),
