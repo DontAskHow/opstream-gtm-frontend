@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gtm_metrics import greeting, phoenix_today, snapshot_metrics
+from gtm_metrics import greeting, phoenix_prose, phoenix_today, snapshot_metrics
 from openai_direct import chat_completion, complete_json
 import source_health
 
@@ -65,6 +65,12 @@ def load_json(path):
             return json.load(f)
     except Exception:
         return None
+
+
+def plain_time(text):
+    """Phoenix times instead of ISO stamps, and no greeting: the brief on the same page greets once."""
+    text = phoenix_prose(text, phoenix_today())
+    return re.sub(r"^\s*good (?:morning|afternoon|evening)[,!.]?\s*(?:hollie[,!.]?\s*)?", "", text, flags=re.I).strip()
 
 
 def call_openai(payload):
@@ -246,14 +252,15 @@ def build_fixes(missing_amount_deals, quiet_deals):
         "You turn GTM workspace problems into concrete, ready-to-use fixes. "
         "Standing rules: never invent amounts, dates, contacts, or email addresses.\n\n"
         "For each problem, produce exactly one fix:\n"
-        "- quiet big deal: type 'draft'. Write the actual follow-up email — draftSubject "
-        "and draftText (under 180 words), grounded in the deal's stage and daysQuiet. "
-        "daysQuiet is already computed; repeat it. These deals are in the open book. "
-        "Maximum 3 drafts; pick the biggest amounts.\n"
+        "- quiet big deal: type 'draft'. This is an INTERNAL note from Hollie to the deal's owner "
+        "(the owner field), never an email to the customer. Address the owner by first name, say the deal "
+        "has been quiet for daysQuiet days (already computed; repeat it) at its stage and amount, and ask "
+        "them to re-engage or update the Sheet. draftSubject is '<Company> – quiet for N days'. "
+        "draftText under 120 words. Set owner to the owner field. Maximum 3; pick the biggest amounts.\n"
         "- deals missing amounts: a SINGLE type 'ask' fix listing the deals by name, "
         "asking who owns backfilling them. Never guess an amount.\n"
         "Reply with strict JSON only: {\"fixes\": [{\"type\": \"draft|ask\", "
-        "\"title\": \"...\", \"detail\": \"...\", \"company\": \"...\", \"deal\": \"...\", "
+        "\"title\": \"...\", \"detail\": \"...\", \"company\": \"...\", \"deal\": \"...\", \"owner\": \"...\", "
         "\"draftSubject\": \"...\", \"draftText\": \"...\", "
         "\"question\": \"...\"}]}. Maximum 4 fixes. Omit fields that do not apply."
     )
@@ -291,6 +298,7 @@ def build_fixes(missing_amount_deals, quiet_deals):
             "detail": str(fx.get("detail") or "")[:400],
             "company": str(fx.get("company") or "")[:120],
             "deal": str(fx.get("deal") or "")[:160],
+            "owner": str(fx.get("owner") or "")[:80],
             "field": str(fx.get("field") or "")[:80],
             "currentValue": str(fx.get("currentValue") or "")[:200],
             "proposedValue": str(fx.get("proposedValue") or "")[:200],
@@ -415,7 +423,7 @@ def main():
         + json.dumps(data_dump, ensure_ascii=False)[:15000]
         + "\n\nRespond with strict JSON: {"
         '"insights": [{"title": "...", "detail": "...", "priority": "high|medium|low", "kind": "risk|opportunity|health|resolved|info"}] (3-5, fewer if quiet), '
-        '"summary": "one sentence on the overall pulse"'
+        '"summary": "one sentence on the overall pulse, no greeting, times in America/Phoenix"'
         "}"
     )
 
@@ -451,8 +459,8 @@ def main():
                 log("dropped an insight that contradicts the open book: " + text[:120])
                 continue
             out.append({
-                "title": str(ins["title"])[:160],
-                "detail": str(ins.get("detail") or "")[:500],
+                "title": plain_time(str(ins["title"]))[:160],
+                "detail": plain_time(str(ins.get("detail") or ""))[:500],
                 "priority": pr,
                 "kind": kind,
             })
@@ -487,7 +495,7 @@ def main():
     out = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "model": MODEL,
-        "summary": str(parsed.get("summary") or "")[:300],
+        "summary": plain_time(str(parsed.get("summary") or ""))[:300],
         "health": health,
         "insights": source_health.insights((load_json(os.path.join(DATA, "marketing.json")) or {}).get("sources")) + insights,
         "state": {"queueIds": qids, "mismatchKeys": mmkeys},

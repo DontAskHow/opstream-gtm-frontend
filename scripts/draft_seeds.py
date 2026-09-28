@@ -116,7 +116,7 @@ def linkedin_search(company):
     return "https://www.linkedin.com/search/results/people/?keywords=" + re.sub(r"\s+", "%20", str(company).strip()) + "%20procurement"
 
 
-def linkedin_text(show):
+def linkedin_text(show, today=None):
     where = (" in " + show["location"]) if show.get("location") else ""
     tag = "#" + re.sub(r"[^A-Za-z0-9]", "", show["name"])
     if show.get("phase") == "past":
@@ -128,11 +128,23 @@ def linkedin_text(show):
         ])
     booth = "booth" in str(show.get("package") or "").lower()
     return "\n".join([
-        "Opstream will be at %s%s, %s." % (show["name"], where, show.get("dateLabel") or ""),
-        "Come and find us at our booth." if booth else "Let us know if you will be there too.",
+        (("We're at %s%s this week, %s." if today and show.get("start") and show["start"] <= today <= (show.get("end") or show["start"])
+          else "Opstream will be at %s%s, %s.") % (show["name"], where, show.get("dateLabel") or "")),
+        ("Come and find us at our booth." if booth else "Let us know if you will be there too.") if not (today and show.get("start") and show["start"] <= today)
+        else ("Come and find us at our booth." if booth else "Say hello if you are here too."),
         "If you are thinking about how procurement teams work with AI, we would like to hear what you are working on. Send me a message to set up a time.",
         "", tag + " #procurement",
     ])
+
+
+def people_sentence(pc):
+    """'41 people; 40 with an email go to LemList; 1 held back (hot lead)', the same words as the show card."""
+    if not pc:
+        return "no people counted"
+    text = "%d %s; %d with an email go to LemList" % (pc["people"], "person" if pc["people"] == 1 else "people", pc["withEmail"])
+    if pc.get("held"):
+        text += "; %d held back (%s)" % (pc["held"], "hot lead" if pc.get("heldHot") == pc["held"] else "hot or dead lead")
+    return text
 
 
 def seed(sid, purpose, title, subject, text, rationale, company="No company linked", recipients="", mode="marketing",
@@ -155,7 +167,7 @@ def build(marketing, hollie, records, today):
             continue
         out.append(seed(
             "linkedin:" + s["id"], "linkedin", "LinkedIn post · " + s["name"], "LinkedIn post · " + s["name"],
-            linkedin_text(s),
+            linkedin_text(s, today),
             "Drafted from the show calendar row. Use Draft LinkedIn post on the show to add your mail, calendar and documents.",
             extra={"showId": s["id"], "citations": ["Dashboard: %s on the show calendar (budget workbook)" % s["name"]]}))
         notes = [r.get("note") for r in (s.get("leadRows") or []) + (s.get("requestRows") or [])]
@@ -200,8 +212,9 @@ def build(marketing, hollie, records, today):
         owners = sorted({r["owner"] for r in rows if r.get("owner")})
         lead_owner = max(owners, key=lambda o: sum(1 for r in rows if r.get("owner") == o)) if owners else ""
         signoff = "\n\nBest,\n" + signature(lead_owner or "Hollie", records)
-        why = "%d Lead Tracker rows tie to %s; %d reached MQL, %d in this campaign have a contact email. Lead owners: %s." % (
-            led["count"], s["name"], led.get("mql") or 0, len(emails), ", ".join(owners) or "none")
+        pc = s.get("people") or {}
+        why = "%s: %s. %d reached MQL. Lead owners: %s." % (
+            s["name"], people_sentence(pc), led.get("mql") or 0, ", ".join(owners) or "none")
         if hot:
             why += " Left out and sent to their owners instead: %s (the note shows buying intent)." % ", ".join(
                 "%s (%s)" % (r["company"], r.get("owner") or "no owner") for r in hot)
@@ -230,7 +243,7 @@ def build(marketing, hollie, records, today):
         if not stale:
             out.append(seed(
                 "linkedin:" + s["id"], "linkedin", "LinkedIn post · " + s["name"], "LinkedIn post · " + s["name"],
-                linkedin_text(s), "Drafted from the show calendar row.",
+                linkedin_text(s, today), "Drafted from the show calendar row.",
                 extra={"showId": s["id"], "citations": ["Dashboard: %s on the show calendar (budget workbook)" % s["name"]]}))
     recording = (marketing or {}).get("webinarRecording")
     webinar = (marketing or {}).get("webinar") or {}

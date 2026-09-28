@@ -37,6 +37,7 @@ REPORTS = {
     "sessions_30d": {
         "dateRanges": [{"startDate": "30daysAgo", "endDate": "today"}],
         "metrics": [{"name": "sessions"}, {"name": "totalUsers"}, {"name": "screenPageViews"}],
+        "dimensionFilter": WWW_ONLY,
     },
     "channels_90d": {
         "dateRanges": [{"startDate": "90daysAgo", "endDate": "today"}],

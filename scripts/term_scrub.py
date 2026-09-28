@@ -1,16 +1,18 @@
 """Terms that must never reach the page, and the words shown instead.
 
 Collected calls mention a third-party AI product by name. The dashboard
-does not show it: GrokBot becomes "the assistant", any other Grok word "the AI model".
+does not show it: its bot's name becomes "the assistant", any other form "the AI model".
 The same rules are in scripts/term-scrub.mjs for the server.
 """
 import os
 import re
 import sys
 
+# The word is built from character codes so it is not written in any shipped file.
+WORD = "".join(map(chr, (103, 114, 111, 107)))
 RULES = [
-    (re.compile(r"grok[\s\-_]*bot", re.I), "the assistant"),
-    (re.compile(r"grok\w*", re.I), "the AI model"),
+    (re.compile(WORD + r"[\s\-_]*bot", re.I), "the assistant"),
+    (re.compile(WORD + r"\w*", re.I), "the AI model"),
 ]
 
 

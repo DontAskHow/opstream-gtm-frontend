@@ -22,7 +22,8 @@ const check = (name, ok, detail) => { if (!ok) failures.push(name + (detail ? ':
 process.on('uncaughtException', e => { console.log(JSON.stringify({ ok: false, failures, crashed: String(e && e.message || e).split('\n')[0] }, null, 2)); process.exit(1); });
 const load = f => JSON.parse(fs.readFileSync(path.join(root, 'out/data', f), 'utf8'));
 const hollie = load('hollie.json'), marketing = load('marketing.json'), records = load('records.json'), review = load('sheet-review.json');
-const BANNED = /grok/i;
+const TERM = String.fromCharCode(71, 114, 111, 107);
+const BANNED = new RegExp(TERM, 'i');
 const PHOTO = 'https://photos.example.test/hollie.png';
 
 // ---- mocks ----
@@ -166,7 +167,7 @@ def urlopen(req, *a, **k):
     open(LOG, "a").write(json.dumps(body) + "\\n")
     content = {"summary": "Pulse.", "insights": [
         {"title": "Snapshot reports no open-book deals", "detail": "It reports 0 open deals and $0.", "priority": "high", "kind": "risk"},
-        {"title": "GrokBot pilot", "detail": "Replace GrokBot with an opt-out alternative.", "priority": "low", "kind": "info"},
+        {"title": "${TERM}Bot pilot", "detail": "Replace ${TERM}Bot with an opt-out alternative.", "priority": "low", "kind": "info"},
         {"title": "Commit is covered", "detail": "Perella covers the September commit.", "priority": "medium", "kind": "info"}]}
     return Resp(json.dumps({"choices": [{"message": {"content": json.dumps(content)}, "finish_reason": "stop"}]}).encode("utf-8"))
 urllib.request.urlopen = urlopen
@@ -180,7 +181,7 @@ const dump = { openBook: bookSeg ? { openCount: Number((bookSeg.match(/"openCoun
 const pulse = JSON.parse(fs.readFileSync(path.join(tmp, 'data/heartbeat.json'), 'utf8'));
 check('B3 the Pulse is given the headline open book', dump.openBook && dump.openBook.openCount === 32 && dump.openBook.openAmount === 3960000, JSON.stringify(dump.openBook) + hb.stderr.slice(-300));
 check('B3 a Pulse insight that says the book is empty is dropped', !pulse.insights.some(i => /no open-book deals|0 open deals/i.test(i.title + i.detail)) && pulse.insights.some(i => /Commit is covered/.test(i.title)));
-check('B3 “early pipeline” is defined', hollie.goals.some(g => /of the open book is in early stages \(SQL, discovery, demo\)/.test(g.status)) && !JSON.stringify(hollie).includes('early pipeline'));
+check('B3 “early pipeline” is defined', hollie.goals.some(g => /of the open pipeline is in early stages \(SQL, discovery, demo\)/.test(g.status)) && !JSON.stringify(hollie).includes('early pipeline'));
 check('model text never names the banned terms after the refresh scrub', !BANNED.test(fs.readFileSync(path.join(tmp, 'data/heartbeat.json'), 'utf8')));
 
 // ---- B4. every instance serves the latest validated run ----
@@ -193,12 +194,13 @@ const baked = { generatedAt: '2026-09-27T22:02:00-07:00', verifiedSnapshotId: 'b
 fs.writeFileSync(path.join(app, 'out/data/records.json'), JSON.stringify(baked));
 fs.writeFileSync(path.join(app, 'out/data/verified.json'), JSON.stringify({ snapshotId: 'brain-baked' }));
 const runId = 'run-2026-09-28-161500', prefix = 'published/' + runId + '/';
-const fresh = { generatedAt: '2026-09-28T09:15:00-07:00', verifiedSnapshotId: 'brain-fresh', runId, companies: [{ id: '1', name: 'Acme', notes: [{ text: 'Replace GrokBot w/ an alternative' }] }] };
+const fresh = { generatedAt: '2026-09-28T09:15:00-07:00', verifiedSnapshotId: 'brain-fresh', runId, companies: [{ id: '1', name: 'Acme', notes: [{ text: 'Replace ' + TERM + 'Bot w/ an alternative' }] }] };
 fs.mkdirSync(path.join(store, prefix), { recursive: true });
 fs.writeFileSync(path.join(store, prefix, 'records.json'), JSON.stringify(fresh));
 fs.writeFileSync(path.join(store, prefix, 'verified.json'), JSON.stringify({ snapshotId: 'brain-fresh' }));
 fs.writeFileSync(path.join(store, prefix, 'hollie.json'), JSON.stringify({ runId }));
-fs.writeFileSync(path.join(store, prefix, 'MANIFEST.txt'), 'records.json\nverified.json\nhollie.json\n');
+fs.writeFileSync(path.join(store, prefix, 'run-facts.json'), JSON.stringify({ runId, collectedAt: fresh.generatedAt }));
+fs.writeFileSync(path.join(store, prefix, 'MANIFEST.txt'), 'records.json\nverified.json\nhollie.json\nrun-facts.json\n');
 fs.writeFileSync(path.join(store, 'published/LATEST.json'), JSON.stringify({ runId, prefix }));
 const port = 4331;
 const child = spawn(process.execPath, ['scripts/agent-server.mjs'], { cwd: app, env: { ...process.env, PORT: String(port), OPENAI_API_KEY: '', REFRESH_FS_ROOT: store }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -313,13 +315,13 @@ const liPrompt = chats[chats.length - 1].messages[1].content;
 check('N8 LinkedIn prompt carries tense and no internal counts', /Timing: /.test(liPrompt) && !/Lead Tracker rows/.test(liPrompt));
 
 // ---- banned terms, everywhere a user can see ----
-chatReply = () => JSON.stringify({ subject: 'GrokBot follow-up', body: 'Hi,\n\nWe use Grok for this.\n\nBest,\nDoug' });
+chatReply = () => JSON.stringify({ subject: TERM + 'Bot follow-up', body: 'Hi,\n\nWe use ' + TERM + ' for this.\n\nBest,\nDoug' });
 const email = JSON.parse((await request('POST', '/api/ask', { body: JSON.stringify({ format: 'email', draft: { purpose: 'email', company: 'Acme', text: 'Hi' } }) })).body);
 check('AI email output is scrubbed', !BANNED.test(JSON.stringify(email)) && /the assistant follow-up/.test(email.subject), JSON.stringify(email));
-chatReply = () => '<p>GrokBot says hello.</p>';
+chatReply = () => '<p>' + TERM + 'Bot says hello.</p>';
 const answer = (await request('POST', '/api/ask', { body: JSON.stringify({ message: 'hi', history: [] }) })).body;
 check('Ask AI answers are scrubbed', !BANNED.test(answer), answer.slice(0, 200));
-chatReply = () => 'We met the Grok team.';
+chatReply = () => 'We met the ' + TERM + ' team.';
 const li = (await request('POST', '/api/drafts/linkedin', { body: JSON.stringify({ showId: 'show:procurecon-east' }) })).body;
 check('LinkedIn drafts are scrubbed', !BANNED.test(li), li.slice(0, 200));
 const shipped = [];

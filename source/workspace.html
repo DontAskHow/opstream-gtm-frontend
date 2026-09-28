@@ -149,7 +149,11 @@ select.input{min-height:44px}
 .show-checklist ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 .show-checklist li{display:grid;grid-template-columns:18px minmax(0,1fr);gap:6px;font-size:14px;line-height:1.45}
 .show-checklist li small{display:block;color:var(--color-neutral-700);font-size:12px}
-[data-highlight="true"]{background:var(--color-accent-50,#e8f7f3);box-shadow:inset 3px 0 0 var(--color-accent);padding-left:10px!important;scroll-margin-top:80px}.show-card{scroll-margin-top:80px}.lead-tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.02em;padding:1px 6px;border-radius:999px;background:#eef2f1;color:var(--color-neutral-800)}.lead-tag-hot{background:#e6f6f2;color:#0f766e}.past-hot{display:block;margin-top:4px;font-size:13px;color:#0f766e;font-weight:600}.draft-links{display:flex;flex-wrap:wrap;gap:8px;margin:0}.past-actions{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:4px}.leads-table td:nth-child(2){min-width:210px}.leads-table td:nth-child(2) a{word-break:normal;overflow-wrap:normal}.leads-table td:nth-child(3){white-space:nowrap}
+[data-highlight="true"]{background:var(--color-accent-50,#e8f7f3);box-shadow:inset 3px 0 0 var(--color-accent);padding-left:10px!important;scroll-margin-top:80px}.show-card{scroll-margin-top:80px}.lead-tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.02em;padding:1px 6px;border-radius:999px;background:#eef2f1;color:var(--color-neutral-800)}.lead-tag-hot{background:#e6f6f2;color:#0f766e}.kpi-block{display:flex;flex-direction:column;gap:12px;margin-bottom:32px}.kpi-asof{font-size:12px;color:var(--color-neutral-700);margin-left:8px}.kpi-print{margin-left:auto;font-size:12px;padding:4px 10px}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 20px}.kpi-card{border-top:2px solid var(--color-accent);padding-top:8px}.kpi-label{font-size:12px;color:var(--color-neutral-700)}.kpi-value{font-family:var(--font-heading);font-weight:800;font-size:26px;font-variant-numeric:tabular-nums}.kpi-note{font-size:12px;color:var(--color-neutral-700);line-height:1.4}
+.kpi-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px 24px}.kpi-tables caption{text-align:left;font-size:12px;font-weight:700;padding:4px 0;color:var(--color-neutral-800)}
+@media print{body *{visibility:hidden}#topBanner{display:none}.kpi-block,.kpi-block *{visibility:visible}.kpi-block{position:absolute;left:0;top:0;width:100%;margin:0}.kpi-print{display:none}.kpi-value{font-size:20px}}
+.past-hot{display:block;margin-top:4px;font-size:13px;color:#0f766e;font-weight:600}.draft-links{display:flex;flex-wrap:wrap;gap:8px;margin:0}.past-actions{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:4px}.leads-table td:nth-child(2){min-width:210px}.leads-table td:nth-child(2) a{word-break:normal;overflow-wrap:normal}.leads-table td:nth-child(3){white-space:nowrap}
 .past-shows summary{cursor:pointer;font-size:14px;padding:12px 0}.past-shows p{margin:0;padding:8px 0;border-bottom:1px solid var(--color-divider);font-size:14px}
 .header-photo{display:inline-block;width:28px;height:28px;border-radius:50%;background-size:cover;background-position:center;background-color:var(--color-surface)}
 .shared-view-label{font-size:12px;font-weight:600;color:#0f766e;background:#e6f6f2;border:1px solid #bfe6dc;border-radius:999px;padding:3px 10px;margin-right:4px}.signed-in-user{display:inline-flex;align-items:center;gap:10px}.signed-in-button{display:inline-flex;align-items:center;gap:8px;font:inherit;font-size:13px;background:none;border:0;padding:4px 0;cursor:pointer;color:inherit;text-align:left}.signed-in-text{display:flex;flex-direction:column;line-height:1.2}.signed-in-name{font-weight:700}.signed-in-email{font-size:12px;color:var(--color-neutral-700)}.signed-in-signout{font-size:13px;font-weight:600;color:var(--color-accent-700);text-decoration:underline;text-underline-offset:3px}
@@ -249,6 +253,18 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           </sc-if>
         </div>
         <sc-if value="{{ briefMarketing }}" hint-placeholder-val="{{ true }}">
+        <section class="kpi-block" id="kpi-block" aria-label="The numbers">
+          <div class="section-rule"><h6>The numbers</h6><span class="kpi-asof">{{ kpiAsOf }}</span><button class="btn btn-secondary kpi-print" onClick="{{ printSummary }}">Print one-page summary</button></div>
+          <div class="kpi-grid"><sc-for list="{{ kpiCards }}" as="k"><div class="kpi-card" data-kpi="{{ k.id }}"><div class="kpi-label">{{ k.label }}</div><div class="kpi-value">{{ k.value }}</div><div class="kpi-note">{{ k.note }}</div></div></sc-for></div>
+          <div class="kpi-tables">
+            <div class="table-scroll"><table class="table kpi-owners" style="font-size:13px"><caption>By owner · open pipeline, completed meetings and MQL/SQL this quarter</caption><thead><tr><th>Owner</th><th class="money">Deals</th><th class="money">Pipeline</th><th class="money">Weighted</th><th class="money">Meetings</th><th class="money">MQL</th><th class="money">SQL</th></tr></thead>
+              <tbody><sc-for list="{{ kpiOwners }}" as="o"><tr><td>{{ o.owner }}</td><td class="money">{{ o.deals }}</td><td class="money">{{ o.amount }}</td><td class="money">{{ o.weighted }}</td><td class="money">{{ o.meetings }}</td><td class="money">{{ o.mql }}</td><td class="money">{{ o.sql }}</td></tr></sc-for></tbody></table></div>
+            <sc-if value="{{ hasKpiEvents }}"><div class="table-scroll"><table class="table kpi-events" style="font-size:13px"><caption>Event cost and leads · payments matched to shows, with how</caption><thead><tr><th>Event</th><th class="money">Planned</th><th class="money">Paid</th><th class="money">Leads</th><th class="money">MQL</th><th class="money">Paid per lead</th></tr></thead>
+              <tbody><sc-for list="{{ kpiEvents }}" as="e"><tr><td>{{ e.name }}<small style="display:block;color:var(--color-neutral-700)">{{ e.how }}</small></td><td class="money">{{ e.planned }}</td><td class="money">{{ e.paid }}</td><td class="money">{{ e.leads }}</td><td class="money">{{ e.mql }}</td><td class="money">{{ e.cpl }}</td></tr></sc-for></tbody></table></div></sc-if>
+            <sc-if value="{{ hasKpiSourced }}"><div class="table-scroll"><table class="table kpi-sourced" style="font-size:13px"><caption>Marketing-sourced open deals · company first on the Lead Tracker</caption><thead><tr><th>Company</th><th class="money">Amount</th><th>Source</th><th>First touch</th></tr></thead>
+              <tbody><sc-for list="{{ kpiSourced }}" as="r"><tr><td>{{ r.company }}</td><td class="money">{{ r.amount }}</td><td>{{ r.source }}</td><td>{{ r.leadDate }}</td></tr></sc-for></tbody></table></div></sc-if>
+          </div>
+        </section>
         <div class="home-grid">
           <div style="display:flex;flex-direction:column;gap:32px;min-width:0">
             <sc-if value="{{ signedIn }}"><section aria-label="Your brief" style="display:flex;flex-direction:column;gap:10px">
@@ -271,7 +287,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <div class="priority-context">
                     <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
                     <sc-if value="{{ p.hasLeadOwners }}"><span><strong>Lead owners:</strong> {{ p.leadOwnersLine }}</span></sc-if>
-                    <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
+                    <span><strong>{{ p.interactionHeading }}:</strong> {{ p.interactionDate }}</span>
                   </div>
                   <p>{{ p.why }}</p>
                   <p><strong>Next step:</strong> {{ p.next }}</p>
@@ -282,7 +298,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                     <sc-for list="{{ p.more }}" as="x"><sc-if value="{{ x.href }}"><a href="{{ x.href }}" target="_blank" rel="noopener" class="btn btn-secondary">{{ x.label }} ↗</a></sc-if><sc-if value="{{ !x.href }}"><button onClick="{{ x.go }}" class="btn btn-secondary">{{ x.label }}</button></sc-if></sc-for>
                   </div>
                   <div class="priority-feedback" role="group" aria-label="Priority feedback">
-                    <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCount }}</span></button>
+                    <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCountLabel }}</span></button>
                     <button class="quiet-control" onClick="{{ p.importantGo }}" aria-pressed="{{ p.important }}" aria-label="{{ p.starLabel }}" title="{{ p.starLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{ p.starFill }}" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9L12 3Z"></path></svg></button>
                     <details class="priority-menu"><summary class="quiet-control" aria-label="More priority actions">•••</summary><div class="priority-menu-items"><button class="quiet-control" onClick="{{ p.lessGo }}">{{ p.lessActionLabel }}</button><sc-if value="{{ p.rated }}"><button class="quiet-control" onClick="{{ p.clearRating }}">Reset priority</button></sc-if></div></details>
                   </div>
@@ -319,7 +335,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <div class="priority-context">
                     <span><strong>{{ p.ownerLabel }}:</strong> {{ p.owner }}</span>
                     <sc-if value="{{ p.hasLeadOwners }}"><span><strong>Lead owners:</strong> {{ p.leadOwnersLine }}</span></sc-if>
-                    <span><strong>Last interaction:</strong> {{ p.interactionDate }}</span>
+                    <span><strong>{{ p.interactionHeading }}:</strong> {{ p.interactionDate }}</span>
                   </div>
                   <p>{{ p.why }}</p>
                   <p><strong>Next step:</strong> {{ p.next }}</p>
@@ -330,7 +346,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                     <sc-for list="{{ p.more }}" as="x"><sc-if value="{{ x.href }}"><a href="{{ x.href }}" target="_blank" rel="noopener" class="btn btn-secondary">{{ x.label }} ↗</a></sc-if><sc-if value="{{ !x.href }}"><button onClick="{{ x.go }}" class="btn btn-secondary">{{ x.label }}</button></sc-if></sc-for>
                   </div>
                   <div class="priority-feedback" role="group" aria-label="Priority feedback">
-                    <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCount }}</span></button>
+                    <button class="quiet-control" onClick="{{ p.commentGo }}" aria-expanded="{{ p.commentsOpen }}" aria-label="{{ p.commentLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"></path></svg><span>{{ p.commentCountLabel }}</span></button>
                     <button class="quiet-control" onClick="{{ p.importantGo }}" aria-pressed="{{ p.important }}" aria-label="{{ p.starLabel }}" title="{{ p.starLabel }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{ p.starFill }}" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9L12 3Z"></path></svg></button>
                     <details class="priority-menu"><summary class="quiet-control" aria-label="More priority actions">•••</summary><div class="priority-menu-items"><button class="quiet-control" onClick="{{ p.lessGo }}">{{ p.lessActionLabel }}</button><sc-if value="{{ p.rated }}"><button class="quiet-control" onClick="{{ p.clearRating }}">Reset priority</button></sc-if></div></details>
                   </div>
@@ -369,7 +385,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                   <div class="show-head"><h3>{{ sh.name }}</h3><span class="show-when">{{ sh.when }}</span></div>
                   <p class="show-meta">{{ sh.meta }}</p>
                   <p class="show-meta">{{ sh.attendees }}<sc-if value="{{ sh.hasCampaign }}"> · {{ sh.campaign }}</sc-if></p>
-                  <sc-if value="{{ sh.hasReplies }}"><p class="show-meta"><a class="campaign-replies" href="{{ sh.repliesUrl }}" target="_blank" rel="noopener">{{ sh.repliesLabel }} ↗</a> <span>Replies are not on the Lead Tracker; only the tracker's meeting requests are listed above.</span></p></sc-if>
+                  <sc-if value="{{ sh.hasReplies }}"><p class="show-meta"><a class="campaign-replies" href="{{ sh.repliesUrl }}" target="_blank" rel="noopener">{{ sh.repliesLabel }} ↗</a> <span>{{ sh.repliesNote }}</span></p></sc-if>
                   <sc-if value="{{ sh.calendarHint }}"><p class="show-meta calendar-hint">{{ sh.calendarHint }}</p></sc-if>
                   <sc-if value="{{ sh.hasOnCalendar }}"><p class="show-meta" style="color:var(--color-text)"><strong>{{ sh.onCalendar }}</strong> <span style="color:var(--color-neutral-700)">· Google Calendar</span></p></sc-if>
                   <sc-if value="{{ sh.hasData }}">
@@ -407,10 +423,6 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                 <tbody><sc-for list="{{ marketingSources }}" as="c" hint-placeholder-count="4"><tr><td>{{ c.channel }}</td><td class="money">{{ c.week }}</td><td class="money">{{ c.quarter }}</td></tr></sc-for></tbody>
               </table></div>
             </section>
-            <sc-if value="{{ hasHomeComingUp }}"><section>
-              <div class="section-rule"><h6>Coming up</h6><button class="text-control" style="font-size:12px" onClick="{{ goEventsShows }}">All shows</button></div>
-              <sc-for list="{{ homeComingUp }}" as="u"><button class="coming-row" onClick="{{ u.go }}"><span>{{ u.when }}</span><strong>{{ u.title }}</strong><span>{{ u.note }}</span></button></sc-for>
-            </section></sc-if>
             <section class="reading-box"><h6>Reading the numbers</h6><sc-for list="{{ homeReading }}" as="r"><p>{{ r }}</p></sc-for><button class="text-control" style="color:var(--color-accent-700)" onClick="{{ goData }}">About this data →</button></section>
           </aside>
         </div>
@@ -460,29 +472,8 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                         <sc-for list="{{ heartbeatInsights }}" as="hbi">
                           <p style="font-size:14px;margin:0 0 8px"><strong>{{ hbi.title }}</strong> — {{ hbi.detail }}</p>
                         </sc-for>
-                        <sc-if value="{{ hasHeartbeatFixes }}">
-                          <div class="section-rule" style="margin-top:4px"><h6 style="margin:0">Fixes ready</h6><span style="font-size:12px;color:var(--color-neutral-700)">Prepared by the heartbeat · field fixes are in "Needs your decision" below</span></div>
-                          <sc-for list="{{ heartbeatFixes }}" as="fx">
-                            <sc-if value="{{ fx.isDraft }}">
-                              <article class="priority-card" aria-label="{{ fx.title }}">
-                                <div class="priority-number">✎</div>
-                                <div class="priority-content">
-                                  <h3>{{ fx.title }}</h3>
-                                  <sc-if value="{{ fx.detail }}"><p>{{ fx.detail }}</p></sc-if>
-                                  <sc-if value="{{ fx.draftSubject }}"><p class="priority-context"><span>Subject: {{ fx.draftSubject }}</span></p></sc-if>
-                                  <div class="priority-actions">
-                                    <sc-if value="{{ !fx.created }}">
-                                      <button onClick="{{ fx.createGo }}" class="btn btn-primary">Create draft</button>
-                                    </sc-if>
-                                    <sc-if value="{{ fx.created }}"><span class="muted-copy">Draft created — opened in Drafts.</span></sc-if>
-                                  </div>
-                                </div>
-                              </article>
-                            </sc-if>
-                            <sc-if value="{{ fx.isAsk }}">
-                              <p style="font-size:14px;margin:0 0 8px"><strong>{{ fx.title }}</strong> — {{ fx.question }}</p>
-                            </sc-if>
-                          </sc-for>
+                        <sc-for list="{{ pulseNotes }}" as="fx"><p class="pulse-note" style="font-size:14px;margin:0 0 8px"><strong>{{ fx.title }}</strong> — {{ fx.detail }} <sc-if value="{{ !fx.created }}"><button class="text-control" onClick="{{ fx.createGo }}">{{ fx.createLabel }}</button></sc-if><sc-if value="{{ fx.created }}"><span class="muted-copy">Note created in Drafts › Internal notes.</span></sc-if></p></sc-for>
+                        <sc-for list="{{ pulseQuestions }}" as="fx"><p style="font-size:14px;margin:0 0 8px"><strong>{{ fx.title }}</strong> — {{ fx.question }}</p></sc-for>
                         </sc-if>
                       </section>
                     </sc-if>
@@ -527,7 +518,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                               <button onClick="{{ a.primaryGo }}" class="btn btn-primary">{{ a.primary }}</button>
                               <button onClick="{{ a.doneGo }}" class="btn btn-secondary">{{ a.doneLabel }}</button>
                               <button onClick="{{ a.dismissGo }}" class="btn btn-secondary">{{ a.dismissLabel }}</button>
-                              <sc-if value="{{ a.hasAccount }}"><button onClick="{{ a.accountGo }}" class="text-control">Open account</button></sc-if>
+                              <sc-if value="{{ a.hasPulseNote }}"><button onClick="{{ a.pulseNoteGo }}" class="text-control">{{ a.pulseNoteLabel }}</button></sc-if><sc-if value="{{ a.hasAccount }}"><button onClick="{{ a.accountGo }}" class="text-control">Open account</button></sc-if>
                               <sc-for list="{{ a.evidenceLinks }}" as="el"><button onClick="{{ el.go }}" class="text-control">{{ el.label }}</button></sc-for>
                               <button onClick="{{ a.importantGo }}" class="btn btn-secondary">{{ a.importantLabel }}</button>
                               <button onClick="{{ a.commentGo }}" class="btn btn-secondary">{{ a.commentLabel }}</button>
@@ -587,10 +578,6 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
                     </section>
                     </sc-if>
                   </sc-if>
-                    <section>
-                      <div class="section-rule"><h6 style="margin:0">How the assistant works</h6><span style="font-size:12px;color:var(--color-neutral-700)">Your autonomy settings</span></div>
-                      <p class="muted-copy" style="font-size:13px"><sc-for list="{{ hollieAutonomy }}" as="au"><strong>{{ au.label }}:</strong> {{ au.text }}<span> · </span></sc-for></p>
-                    </section>
                   <sc-if value="{{ noHollieOp }}">
                     <section style="display:flex;flex-direction:column">
                       <div class="section-rule"><h6 style="margin:0">Action queue</h6><span style="font-size:12px;color:var(--color-neutral-700)">Assistant data not loaded — showing pipeline ranking</span></div>
@@ -628,6 +615,19 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             <sc-for list="{{ perfTabs }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.go }}" role="tab" aria-selected="{{ t.selected }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for>
           </div>
         </div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
+          <sc-if value="{{ perfDemand }}" hint-placeholder-val="{{ true }}">
+          <div class="seg">
+            <sc-for list="{{ periods }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.go }}" style="font:inherit;font-size:13px;padding:7px 12px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for>
+          </div>
+          <sc-if value="{{ isCustom }}" hint-placeholder-val="{{ false }}">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px">From<input id="period-start" type="date" class="input" min="2026-01-01" max="2027-12-31" onChange="{{ setStart }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px">Through<input id="period-end" type="date" class="input" min="2026-01-01" max="2027-12-31" onChange="{{ setEnd }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
+          </sc-if>
+          <span style="font-size:13px;color:var(--color-neutral-700)">{{ periodRange }}</span>
+          </sc-if>
+          <span style="font-size:13px;color:var(--color-neutral-800)">{{ scopeNote }}</span>
+        </div>
         <sc-if value="{{ perfDemand }}" hint-placeholder-val="{{ true }}"><section aria-label="Key numbers">
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;padding:16px 0;border-top:2px solid var(--color-divider)">
             <sc-for list="{{ briefingMetrics }}" as="m">
@@ -652,19 +652,6 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             </sc-for>
           </section>
         </sc-if>
-        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding:12px 0;border-top:2px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
-          <sc-if value="{{ perfDemand }}" hint-placeholder-val="{{ true }}">
-          <div class="seg">
-            <sc-for list="{{ periods }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.go }}" style="font:inherit;font-size:13px;padding:7px 12px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for>
-          </div>
-          <sc-if value="{{ isCustom }}" hint-placeholder-val="{{ false }}">
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px">From<input id="period-start" type="date" class="input" min="2026-01-01" max="2027-12-31" onChange="{{ setStart }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px">Through<input id="period-end" type="date" class="input" min="2026-01-01" max="2027-12-31" onChange="{{ setEnd }}" style="width:auto;min-height:32px;padding:4px 8px"></label>
-          </sc-if>
-          <span style="font-size:13px;color:var(--color-neutral-700)">{{ periodRange }}</span>
-          </sc-if>
-          <span style="font-size:13px;color:var(--color-neutral-800)">{{ scopeNote }}</span>
-        </div>
 
         <sc-if value="{{ perfDemand }}" hint-placeholder-val="{{ true }}">
           <section style="padding-top:8px">
@@ -701,7 +688,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
             <section style="flex:1 1 320px;min-width:0">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">{{ barsTitle }}</h6><span style="font-size:12px;color:var(--color-neutral-700)">Lead Tracker · first stage date</span></div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">{{ barsTitle }}</h6><span style="font-size:12px;color:var(--color-neutral-700)">Lead Tracker · first stage date</span></div><sc-if value="{{ barsNote }}"><p class="bars-note" style="margin:6px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ barsNote }}</p></sc-if>
               <div style="display:grid;grid-template-columns:repeat({{ barCols }},minmax(0,1fr));gap:6px;align-items:end;height:180px;padding-top:16px">
                 <sc-for list="{{ weeks }}" as="w" hint-placeholder-count="10">
                   <div style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0" title="{{ w.title }}">
@@ -727,7 +714,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
             <section style="flex:1 1 320px;min-width:0">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Open pipeline by stage</h6><span style="font-size:12px;color:var(--color-neutral-700)">Owners' prep sheets · ARR</span></div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Open pipeline by stage</h6><span style="font-size:12px;color:var(--color-neutral-700)">Master Sheet · amounts</span></div>
               <sc-for list="{{ stages }}" as="s" hint-placeholder-count="6">
                 <div style="display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--color-divider);font-size:14px">
                   <span>{{ s.stage }}</span>
@@ -775,14 +762,14 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               </div>
             </section>
             <sc-if value="{{ showOwnerNotes }}"><section style="flex:1 1 320px;min-width:0">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Latest owner notes</h6><button onClick="{{ goDeals }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">All opportunities</button></div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Latest notes on open deals</h6><button onClick="{{ goDeals }}" class="btn btn-ghost" style="padding:2px 4px;font-size:12px">All opportunities</button></div>
               <sc-for list="{{ movements }}" as="m" hint-placeholder-count="6">
                 <button onClick="{{ m.go }}" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);padding:10px 0;font:inherit;color:inherit;cursor:pointer">
                   <span style="font-weight:600;font-size:14px">{{ m.name }}</span><span style="font-size:12px;color:var(--color-neutral-700);white-space:nowrap">{{ m.meta }}</span>
                   <span style="font-size:13px;color:var(--color-neutral-800);grid-column:1/-1">{{ m.change }}</span>
                 </button>
               </sc-for>
-              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">"Last meeting / what happened" column, owner pipeline sheets, collected {{ collectedShort }}.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:var(--color-neutral-700)">HubSpot notes on accounts with an open deal, newest first. Collected {{ collectedShort }}.</p>
             </section></sc-if>
           </div>
         </sc-if>
@@ -813,6 +800,13 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             </section>
           </div>
           </sc-if>
+          <sc-if value="{{ hasKpiEvents }}"><section class="spend-events">
+            <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">Event cost and leads</h6></div>
+            <div style="overflow-x:auto"><table class="table" style="font-size:13px;min-width:560px"><thead><tr><th>Event</th><th class="money">Planned</th><th class="money">Paid</th><th class="money">Leads</th><th class="money">MQL</th><th class="money">Paid per lead</th></tr></thead>
+              <tbody><sc-for list="{{ kpiEvents }}" as="e"><tr><td>{{ e.name }}<small style="display:block;color:var(--color-neutral-700)">{{ e.how }}</small></td><td class="money">{{ e.planned }}</td><td class="money">{{ e.paid }}</td><td class="money">{{ e.leads }}</td><td class="money">{{ e.mql }}</td><td class="money">{{ e.cpl }}</td></tr></sc-for></tbody></table></div>
+            <sc-if value="{{ hasUnattributed }}"><p style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ unattributedNote }}</p></sc-if>
+          </section></sc-if>
+          <sc-if value="{{ hasSpendMonthNotes }}"><section class="spend-month-notes"><sc-for list="{{ spendMonthNotes }}" as="n"><p style="margin:0 0 6px;font-size:13px">{{ n }}</p></sc-for></section></sc-if>
           <sc-if value="{{ !adsConnected }}"><p style="margin:12px 0 0;font-size:14px">Advertising and outbound are not connected yet.</p></sc-if>
           <sc-if value="{{ hasOutboundNote }}"><p style="margin:12px 0 0;font-size:13px;color:var(--color-neutral-700)">{{ outboundNote }}</p></sc-if>
           <sc-if value="{{ adsConnected }}">
@@ -822,6 +816,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
               <thead><tr><th>Line</th><th style="text-align:right">Sent / shown</th><th style="text-align:right">Replies / conv.</th><th style="text-align:right">Bounces</th><th>Note</th></tr></thead>
               <tbody><sc-for list="{{ ads }}" as="a" hint-placeholder-count="4"><tr><td style="font-weight:600">{{ a.name }}</td><td class="money">{{ a.sent }}</td><td class="money">{{ a.replies }}</td><td class="money">{{ a.bounces }}</td><td style="font-size:13px;color:var(--color-neutral-800)">{{ a.note }}</td></tr></sc-for></tbody>
             </table></div>
+            <sc-if value="{{ hasIdleCampaigns }}"><p class="idle-campaigns" style="margin:8px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ idleCampaignsLine }}</p></sc-if>
           </section>
           </sc-if>
         </sc-if>
@@ -870,7 +865,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
     <sc-if value="{{ isAccounts }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Accounts" style="display:flex;flex-direction:column;gap:24px">
         <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px">
-          <div><h1 style="font-size:36px;margin:0 0 4px">Accounts</h1><p style="margin:0;color:var(--color-neutral-700)">Open opportunities from the owners' prep sheets, the review's follow-ups, and new leads from the tracker.</p></div>
+          <div><h1 style="font-size:36px;margin:0 0 4px">Accounts</h1><p style="margin:0;color:var(--color-neutral-700)">Open deals from the master Sheet, follow-ups from recent calls, and new leads from the Lead Tracker.</p></div>
           <div class="seg">
             <sc-for list="{{ accountTabs }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.go }}" style="font:inherit;font-size:13px;padding:7px 14px;border:0;border-left:1px solid var(--color-divider);background:{{ t.bg }};color:{{ t.fg }};cursor:pointer">{{ t.label }}</button></sc-for>
           </div>
@@ -886,7 +881,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
 
         <p class="account-order-note">{{ accountOrderNote }}</p><sc-if value="{{ accountsDeals }}" hint-placeholder-val="{{ true }}"><sc-if value="{{ hasCloseOn }}"><p class="close-on-line" style="margin:0;font-size:14px"><strong>{{ closeOnLine }}</strong> · <button class="text-control" onClick="{{ clearSearch }}">Show all opportunities</button></p></sc-if><sc-if value="{{ hasPlaceholderNote }}"><p class="account-order-note" style="color:var(--color-accent-700)">{{ placeholderNote }}</p></sc-if>
           <div class="table-scroll"><table class="table" style="font-size:14px">
-            <thead><tr><th>Company</th><th>Owner</th><th>Stage</th><th class="money">ARR</th><th class="money">Prob.</th><th class="money">Weighted ARR</th><th>Close</th><th>Last interaction</th><th class="money">Days in stage</th><th style="display:{{ lastNoteDisplay }}">Last note</th></tr></thead>
+            <thead><tr><th>Company</th><th>Owner</th><th>Stage</th><th class="money">Amount</th><th class="money">Prob.</th><th class="money">Weighted</th><th>Close</th><th>Last interaction</th><th class="money">Days in stage</th><th style="display:{{ lastNoteDisplay }}">Flags</th></tr></thead>
             <tbody><sc-for list="{{ deals }}" as="d" hint-placeholder-count="10">
               <tr onClick="{{ d.go }}" style="cursor:pointer">
                 <td class="company" style="font-weight:600">{{ d.company }}</td><td title="{{ d.ownerTitle }}" style="white-space:nowrap">{{ d.owner }}</td><td class="stage">{{ d.stage }}</td><td class="money">{{ d.arr }}</td><td class="money">{{ d.prob }}</td><td class="money">{{ d.weighted }}</td><td class="money">{{ d.close }}</td><td style="font-variant-numeric:tabular-nums;white-space:nowrap">{{ d.lastInteraction }}</td><td class="money" style="color:{{ d.daysColor }}">{{ d.days }}</td><td style="display:{{ lastNoteDisplay }};font-size:13px;color:var(--color-neutral-800);max-width:16rem">{{ d.note }}</td>
@@ -894,7 +889,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             </sc-for></tbody>
           </table></div>
           <sc-if value="{{ dealsEmpty }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:14px;color:var(--color-neutral-800)"><span>{{ emptyNote }}</span><button onClick="{{ clearSearch }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">Clear search and owner</button></div></sc-if>
-          <p class="book-rule" style="margin:0 0 6px;font-size:12px;color:var(--color-neutral-700)">{{ bookRuleLine }}</p><p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ dealsCount }} · Owner pipeline sheets, collected {{ collectedShort }}. ARR and probability are owner-entered; the CRM may differ. Days in stage remain the recorded owner values.</p>
+          <p class="book-rule" style="margin:0 0 6px;font-size:12px;color:var(--color-neutral-700)">{{ bookRuleLine }}</p><p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ dealsCount }} · master Sheet, collected {{ collectedShort }}. Amount and probability are owner-entered; HubSpot may differ. Days in stage remain the recorded owner values.</p>
         </sc-if>
 
         <sc-if value="{{ accountsFollow }}" hint-placeholder-val="{{ false }}"><sc-if value="{{ followUpsEmpty }}"><p>No follow-ups match these filters.</p></sc-if>
@@ -1013,6 +1008,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
           <input class="input" placeholder="Search meetings, companies, attendees" value="{{ meetingSearchValue }}" onChange="{{ setMeetingSearch }}" style="max-width:320px;min-height:34px">
           <label style="display:flex;align-items:center;gap:8px;font-size:13px">Owner<select class="input" value="{{ meetingOwnerValue }}" onChange="{{ setMeetingOwner }}" style="width:auto;min-height:32px;padding:4px 8px"><option>Everyone</option><sc-for list="{{ meetingOwnerOptions }}" as="o"><option value="{{ o.name }}">{{ o.name }}</option></sc-for></select></label>
           <span style="margin-left:auto;font-size:12px;color:var(--color-neutral-700)">{{ meetingsNote }}</span>
+          <sc-if value="{{ hasMeetingScope }}"><p class="meeting-scope-line" style="margin:0;width:100%;font-size:13px">{{ meetingScopeLine }} <button class="text-control" onClick="{{ toggleMeetingScope }}">{{ meetingScopeLabel }}</button></p></sc-if>
           <sc-if value="{{ hasMeetingKind }}"><p class="meeting-kind-line" style="margin:0;width:100%;font-size:14px"><strong>{{ meetingKindLine }}</strong> · <button class="text-control" onClick="{{ clearMeetingKind }}">Show all past meetings</button></p></sc-if>
         </div>
         <sc-if value="{{ meetingsEmpty }}" hint-placeholder-val="{{ false }}"><p style="margin:0;font-size:14px;color:var(--color-neutral-700)">No meetings match. Clear the search or choose Everyone.</p></sc-if>
@@ -1057,6 +1053,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             <div style="margin-top:24px;border-top:2px solid var(--color-divider);padding-top:12px;display:flex;flex-wrap:wrap;gap:12px;align-items:center"><span style="font-weight:600;font-size:15px">Transcript · {{ mtg.transcript }}</span><sc-if value="{{ mtg.canLoadTranscript }}" hint-placeholder-val="{{ false }}"><button onClick="{{ mtg.loadTranscript }}" class="btn btn-secondary" style="font-size:13px;padding:6px 10px">{{ mtg.transcriptBtn }}</button></sc-if><button onClick="{{ mtg.recordGo }}" class="btn btn-ghost" style="font-size:13px;padding:6px 4px">Recording record</button><span style="font-size:13px;color:var(--color-neutral-700)">{{ mtg.transcriptNote }}</span></div>
             <sc-if value="{{ mtg.transcriptOpen }}" hint-placeholder-val="{{ false }}">
               <div style="margin-top:12px;display:flex;flex-direction:column;gap:2px;font-size:14px;line-height:1.5;max-height:520px;overflow:auto;border:1px solid var(--color-divider);padding:12px 14px">
+                <sc-if value="{{ mtg.transcriptEmpty }}"><p class="transcript-empty" style="margin:0;color:var(--color-neutral-700)">No transcript for this call. Fathom returned no spoken lines for this recording.</p></sc-if>
                 <sc-for list="{{ mtg.lines }}" as="l" hint-placeholder-count="10"><div style="display:grid;grid-template-columns:52px 120px minmax(0,1fr);gap:10px;padding:3px 0"><span style="font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ l.t }}</span><span style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ l.s }}</span><span>{{ l.x }}</span></div></sc-for>
               </div>
             </sc-if>
@@ -1128,6 +1125,10 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
     <sc-if value="{{ isData }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="About this data" style="display:flex;flex-direction:column;gap:32px">
         <div><h1 style="font-size:36px;margin:0 0 4px">About this data</h1><p style="margin:0;color:var(--color-neutral-700);max-width:64ch">Where the numbers come from, how current each source is, and what they can and cannot tell you.</p></div>
+        <sc-if value="{{ hollieAutonomy.length }}"><section class="assistant-settings">
+          <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">What the assistant does on its own</h6></div>
+          <sc-for list="{{ hollieAutonomy }}" as="au"><p style="margin:8px 0 0;font-size:13px"><strong>{{ au.label }}:</strong> {{ au.text }}</p></sc-for>
+        </section></sc-if>
         <section>
           <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">How to read the numbers</h6></div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 32px">
@@ -1146,7 +1147,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">What counts as Lead, MQL and SQL</h6></div>
             <table class="table" style="font-size:13px"><thead><tr><th>Source</th><th>Lead</th><th>MQL</th><th>SQL</th></tr></thead>
             <tbody><sc-for list="{{ definitions }}" as="d" hint-placeholder-count="4"><tr><td style="font-weight:600">{{ d.source }}</td><td>{{ d.lead }}</td><td>{{ d.mql }}</td><td>{{ d.sql }}</td></tr></sc-for></tbody></table>
-            <p style="margin:10px 0 0;font-size:12px;color:var(--color-neutral-700)">From the workbook's Marketing tab, rows 45 – 48.</p>
+            <p style="margin:10px 0 0;font-size:12px;color:var(--color-neutral-700)">Inbound, Outbound, Events and RFP are from the workbook's Marketing tab, rows 45 – 48. Webinar and Paid are not defined there.</p>
           </section>
           <section style="flex:1 1 300px;min-width:0">
             <div style="padding-bottom:8px;border-bottom:2px solid var(--color-divider)"><h6 style="margin:0">The review</h6></div>
@@ -1199,32 +1200,35 @@ class Component extends DCLogic {
     this.setState({ toast: 'Exported ' + name, toastKey: Date.now() }); clearTimeout(this._toastT); this._toastT = setTimeout(() => { if (this.state && this.state.toast) this.setState({ toast: null }); }, 4000);
   }
   memo(key, dep, fn) { this._memo = this._memo || {}; const m = this._memo[key]; if (m && m.dep === dep) return m.val; const val = fn(); this._memo[key] = { dep, val }; return val; }
-  loadTranscript(id) { if (!id || (this.state.transcripts && this.state.transcripts[id] !== undefined)) return; if (!this._trPromise) this._trPromise = fetch('data/transcripts.json').then(r => r.json()); this._trPromise.then(all => this.setState(s => ({ transcripts: { ...(s.transcripts || {}), [id]: all[id] || null } }))); }
-  syncPeriodInputs() { if (typeof document === 'undefined') return; const today = workspaceModel.phoenixToday(); const start = document.getElementById('period-start'); const end = document.getElementById('period-end'); if (start && document.activeElement !== start) start.value = this.state.start || '2026-08-01'; if (end && document.activeElement !== end) end.value = this.state.end || today; }
+  syncPeriodInputs() { if (typeof document === 'undefined') return; const today = workspaceModel.phoenixToday(); const start = document.getElementById('period-start'); const end = document.getElementById('period-end'); if (start && document.activeElement !== start) start.value = this.state.start || workspaceModel.addDays(today, -56); if (end && document.activeElement !== end) end.value = this.state.end || today; }
   componentDidMount() { fetch('/api/session').then(r => r.json()).then(googleSession => { this.setState({ googleSession, gmailEmail: googleSession && googleSession.signedIn && !googleSession.expired ? googleSession.email : null }); if (googleSession && googleSession.signedIn) { fetch('/api/me/brief').then(r => r.json()).then(personalBrief => this.setState({ personalBrief })).catch(() => {}); fetch('/api/me/sends').then(r => r.json()).then(audit => this.setState({ sendAudit: (audit && audit.sends) || [] })).catch(() => {}); } }).catch(() => {}); this.syncPeriodInputs(); }
   componentDidUpdate() { this.syncPeriodInputs(); }
-  hollieFeedback(itemId, action) { try { fetch('/api/hollie/feedback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ itemId, action }) }).catch(() => {}); } catch {} this.setState(s => ({ hollieDone: { ...(s.hollieDone || {}), [itemId]: action } })); }
-  decideProposal(idx, decision) { try { fetch('/api/proposals/decide', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idx, decision }) }).catch(() => {}); } catch {} this.setState(s => ({ proposals: (s.proposals || []).map((p, i) => i === idx ? { ...p, status: decision } : p) })); }
-  createHeartbeatDraft(i) {
+  _needsSignIn(what) { if (this.state.googleSession && this.state.googleSession.signedIn && !this.state.googleSession.expired) return false; this.setState({ toast: 'Sign in with Google to ' + what + '. The shared view is read-only.', toastKey: Date.now() }); return true; }
+  hollieFeedback(itemId, action) { if (this._needsSignIn('mark queue items done or dismissed')) return; try { fetch('/api/hollie/feedback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ itemId, action }) }).catch(() => {}); } catch {} this.setState(s => ({ hollieDone: { ...(s.hollieDone || {}), [itemId]: action } })); }
+  decideProposal(idx, decision) { if (this._needsSignIn('decide on proposed CRM changes')) return; try { fetch('/api/proposals/decide', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idx, decision }) }).catch(() => {}); } catch {} this.setState(s => ({ proposals: (s.proposals || []).map((p, i) => i === idx ? { ...p, status: decision } : p) })); }
+  // A pulse suggestion is an internal note to the deal owner. It never goes to a customer.
+  createHeartbeatNote(i) {
     const f = ((this.state.heartbeatFixes || {}).fixes || [])[i];
-    if (!f || f.type !== 'draft') return;
-    if ((this.state.heartbeatDraftsCreated || {})[i]) return;
-    try {
-      var account = null;
-      try { account = this._verifiedAccount ? this._verifiedAccount(f.company || '') : null; } catch (e) {}
-      var contactEmail = account && account.contacts && account.contacts[0] ? account.contacts[0].email : '';
-      var draft = this._newWorkspaceDraft('email', {
-        title: f.title || ((account && account.name ? account.name : (f.company || 'Follow-up')) + ' — follow-up'),
-        subject: f.draftSubject || '',
-        text: f.draftText || '',
-        recipients: contactEmail || '',
-        company: (account && account.name) || f.company || 'No company linked',
-        accountIds: account ? ['company:' + account.id] : [],
-        rationale: 'Drafted by the heartbeat.'
-      });
-      const done = () => { try { this.setState(s => ({ heartbeatDraftsCreated: { ...(s.heartbeatDraftsCreated || {}), [i]: true }, screen: 'drafts' })); window.scrollTo(0, 0); } catch (e) {} };
-      try { const p = this._saveWorkspaceDraft(draft); if (p && p.then) p.then(done).catch(done); else done(); } catch (e) { done(); }
-    } catch (e) {}
+    if (!f || f.type !== 'draft' || (this.state.heartbeatDraftsCreated || {})[i]) return;
+    const rep = this._pulseRep(f);
+    const id = 'pulse-note:' + i + ':' + String(f.company || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    this._newWorkspaceDraft('internal-note', {
+      id, title: 'Note to ' + (rep.name || 'the deal owner') + ': ' + (f.company || f.title || 'deal'),
+      subject: f.draftSubject || ((f.company || 'Deal') + ' – follow-up needed'),
+      text: String(f.draftText || '').trim(), recipients: rep.email || '',
+      company: f.company || 'No company linked', contentMode: 'cs',
+      rationale: 'Suggested by the pulse. Internal note to ' + (rep.name || 'the deal owner') + (rep.email ? ' (' + rep.email + ')' : '') + '; nothing goes to the customer.'
+    });
+    this.setState(s => ({ heartbeatDraftsCreated: { ...(s.heartbeatDraftsCreated || {}), [i]: true }, screen: 'drafts', draftId: id, draftPurpose: 'internal-note', draftShow: null }));
+    window.scrollTo(0, 0);
+  }
+  _pulseRep(f) {
+    const sheet = ((this.state.sheetReview || {}).deals || []).find(d => f.company && workspaceModel.companyName(d.company || '').toLowerCase() === workspaceModel.companyName(f.company).toLowerCase());
+    const name = workspaceModel.displayOwner(f.owner || (sheet && sheet.owner) || '');
+    const team = ((this.state.marketing || {}).team || []);
+    const first = String(name || '').split(/\s+/)[0].toLowerCase();
+    const person = team.find(p => String(p.name || '').toLowerCase() === String(name).toLowerCase()) || team.find(p => first && String(p.name || '').toLowerCase().split(/\s+/)[0] === first && /@opstream\.ai$/i.test(p.email || ''));
+    return { name: name && name !== 'Unassigned' ? name : '', email: person && /@opstream\.ai$/i.test(person.email || '') ? person.email : '' };
   }
   edit(field) { return e => { const i = this.state.draft; const edits = { ...(this.state.edits || {}) }; edits[i] = { ...(edits[i] || {}), [field]: e.target.value }; this.setState({ edits }); }; }
   renderVals() { const t0 = performance.now(); const v = this.renderValsInner(); window.__rvMs = Math.round(performance.now() - t0); return v; }
@@ -1304,7 +1308,8 @@ class Component extends DCLogic {
     const money = n => n === null || n === undefined ? 'no amount' : '$' + Math.round(n).toLocaleString('en-US');
     const findCo = idOrName => this._verifiedAccount(idOrName);
     const goCo = (idOrName) => e => { e && e.stopPropagation && e.stopPropagation(); const c = findCo(idOrName); if (c) { this.setState({ screen: 'account', accountId: c.id, evidence: false, timelineAll: false, peopleAll: false }); window.scrollTo(0, 0); } else ev('sheet:' + idOrName)(e); };
-    const allRecs = this.memo('allRecs', REC, () => [...REC.companies.flatMap(c => c.recordings.map(r => ({ ...r, companyId: c.id, companyName: c.name }))), ...(REC.unmatchedRecordings || []).map(r => { const ext = [...new Set(r.invitees.map(i => String(i.email || '').split('@')[1]).filter(d => d && !/opstream|gmail|outlook/.test(d)))]; return { ...r, companyId: null, companyName: ext[0] ? ext[0] + ' (not in CRM extract)' : 'Internal' }; })]);
+    const allRecs = this.memo('allRecs', REC, () => [...REC.companies.flatMap(c => c.recordings.map(r => ({ ...r, companyId: c.id, companyName: c.name }))), ...(REC.unmatchedRecordings || []).map(r => { const ext = [...new Set(r.invitees.map(i => String(i.email || '').split('@')[1]).filter(d => d && !/opstream|gmail|outlook/.test(d)))]; return { ...r, companyId: null, companyName: ext[0] ? ext[0] + ' (not in HubSpot)' : 'Internal' }; })]);
+    const allRecsById = new Map(allRecs.map(r => [r.id, r]));
     const goMtg = id => e => { e && e.stopPropagation && e.stopPropagation(); this.setState({ screen: 'meeting', meetingId: id, evidence: false }); window.scrollTo(0, 0); };
     const co = findCo(st.accountId || 'sample-account') || { name: 'Loading…', deals: [], contacts: [], notes: [], meetings: [], tasks: [], recordings: [] };
     const sheetFor = name => { const c = findCo(name); return dealsRaw.find(d => d[0] === name || (c && findCo(d[0])?.id === c.id)); };
@@ -1315,15 +1320,16 @@ class Component extends DCLogic {
     const mostlyEnglish = t => { const letters = String(t || '').match(/\p{L}/gu) || []; return !letters.length || letters.filter(ch => /[A-Za-z]/.test(ch)).length / letters.length >= 0.8; };
     const followUpText = (company, actions, extra, rec) => {
       const guests = ((rec && rec.invitees) || []).filter(i => i.email && !/@opstream\.ai$/i.test(i.email));
-      const toCustomer = a => guests.reduce((t, g) => g.name ? t.replace(new RegExp('^(?:email|send|follow up with|share with|reply to)\\s+' + g.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b[:,]?\\s*(?:the\\s+|a\\s+)?', 'i'), '') : t, a);
-      const items = [...new Set((actions || []).map(a => String(a || '').replace(/\s+/g, ' ').trim()).filter(Boolean))].map(toCustomer).map(t => t.charAt(0).toUpperCase() + t.slice(1));
+      const team = workspaceModel.teamFirstNames(REC);
+      const items = [...new Set((actions || []).map(a => String(a || '').replace(/\s+/g, ' ').trim()).filter(Boolean))].filter(a => !workspaceModel.internalTodo(a, team)).map(a => workspaceModel.customerCopy(a, guests));
       const first = String((guests[0] && guests[0].name) || '').split(/\s+/)[0];
+      const when = rec && rec.date ? workspaceModel.naturalDay(rec.date) : '';
       const lines = [first ? 'Hi ' + first + ',' : 'Hi,', ''];
-      if (items.length) { lines.push('Following our call' + (company ? ' with ' + company : '') + ', here are the action items we captured:', ''); for (const item of items) lines.push('- ' + item); }
-      else if (extra && String(extra).trim() && mostlyEnglish(extra)) lines.push(String(extra).trim());
+      if (items.length) { lines.push('Thanks for your time' + (when ? ' on ' + when : '') + '. Here is what we agreed to follow up on:', ''); for (const item of items) lines.push('- ' + item); }
       else return '';
       if (rec && rec.shareUrl && items.some(i => /record/i.test(i))) lines.push('', 'The recording of our call: ' + rec.shareUrl);
-      lines.push('', 'Happy to pick a time to go through these together.');
+      const signer = workspaceModel.personLabel(rec && rec.recordedBy);
+      lines.push('', 'Happy to find a time to go through these together.', '', 'Best,', signer && !signer.includes('@') ? signer + '\nOpstream' : 'Opstream');
       return lines.join('\n');
     };
     const timeline = this.memo('timeline', REC === (st.records || null) ? co.id + ':' + (REC.generatedAt || '') : Math.random(), () => {
@@ -1353,10 +1359,10 @@ class Component extends DCLogic {
     const uniquePeople = [...new Map((co.contacts || []).map(c => [String(c.email || c.name || '').toLowerCase(), c])).values()];
     const acct = {
       name: workspaceModel.companyName(co.name), hubspotUrl: workspaceModel.hubspotUrl(co.refs, 'company'), ownerTitle: workspaceModel.ownerInfo(co.owner).title, description: (co.description || '').length > 320 ? co.description.slice(0, 300).replace(/[,;]\s*\S*$/, '') + '…' : (co.description || ''), hasDescription: !!co.description,
-      subtitle: [co.domain, co.owner ? workspaceModel.displayOwner(co.owner) : null, co.industry ? co.industry.toLowerCase().replace(/_/g, ' ') : null, co.employees ? co.employees.toLocaleString('en-US') + ' employees' : null, [co.city, co.country].filter(Boolean).join(', ') || null, co.lifecycle ? 'CRM: ' + co.lifecycle : null].filter(Boolean).join(' · '),
+      subtitle: [co.domain, co.owner ? 'Company owner (HubSpot): ' + workspaceModel.displayOwner(co.owner) : null, (() => { const sd = ((st.sheetReview || {}).deals || []).find(d => workspaceModel.companyName(d.company || '').toLowerCase() === workspaceModel.companyName(co.name).toLowerCase()); return sd && sd.owner ? 'Deal owner (Sheet): ' + workspaceModel.displayOwner(sd.owner) : null; })(), workspaceModel.humanEnum(co.industry) || null, co.employees ? co.employees.toLocaleString('en-US') + ' employees' : null, [co.city, co.country].filter(Boolean).join(', ') || null, co.lifecycle ? 'CRM: ' + co.lifecycle : null].filter(Boolean).join(' · '),
       hasReview: !!review, noReview: !review && !!st.records, reason: review ? review[2] : '', next: review ? review[3] : '', uncertainty: review ? review[4] : '',
       draftLabel: review ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: review ? () => { this.setState({ screen: 'drafts', draft: review[5] }); window.scrollTo(0, 0); } : () => { const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up with ' + co.name, company: co.name, text: '', rationale: openDeal ? openDeal.name + ' · ' + openDeal.stageLabel + ' · ' + money(openDeal.amount) : '', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: [...new Set(co.contacts.map(c => c.email).filter(Boolean))].slice(0, 2).join(', '), saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
-      timeline: tlShown.map(t => ({ ...t, date: fmtD(t.date) })), timelineNote: timeline.length + ' dated items · notes, calls, recordings, calendar, stage and amount changes, open tasks', hasMoreTimeline: timeline.length > tlShown.length, moreTimelineLabel: 'Show all ' + timeline.length, showAllTimeline: () => this.setState({ timelineAll: true }),
+      timeline: tlShown.map(t => ({ ...t, text: workspaceModel.plainMarkdown(t.text), title: workspaceModel.plainMarkdown(t.title), date: fmtD(t.date) })), timelineNote: timeline.length + ' dated items · notes, calls, recordings, calendar, stage and amount changes, open tasks', hasMoreTimeline: timeline.length > tlShown.length, moreTimelineLabel: 'Show all ' + timeline.length, showAllTimeline: () => this.setState({ timelineAll: true }),
       hasRelated: !!(co.related && co.related.length), relatedNote: co.related && co.related.length ? 'Includes ' + co.related.length + ' related CRM company record' + (co.related.length > 1 ? 's' : '') + ' (' + co.related.map(r => r.name).join(', ') + ') whose contacts, meetings and emails are merged here. Records are kept separate in the CRM.' : '',
       emailNote: co.emails ? co.emails.count + ' CRM emails on file' + (co.emails.latest ? ', latest ' + fmtD(String(co.emails.latest).slice(0, 10)) : '') + '. Email bodies are not shown in this workspace.' : 'No CRM emails on file for this company.',
       deals: co.deals.map(d => { const open = !d.closed && !/closed/i.test(String(d.stageLabel || d.stage || '')); const sh = open ? sheetFor(co.name) : null; return { name: d.name, hubspotUrl: workspaceModel.hubspotUrl(d.refs, 'deal'), line: 'CRM: ' + (d.stageLabel || 'No stage') + ' · ' + money(d.amount) + (d.currency && d.currency !== 'USD' ? ' ' + d.currency : '') + (d.probability !== null ? ' · ' + d.probability + '%' : '') + ' · close ' + fmtD(d.close) + ' · ' + workspaceModel.displayOwner(d.owner), sheet: sh ? 'Master Sheet: ' + sh[2] + ' · $' + sh[3].toLocaleString('en-US') + ' · ' + sh[4] + '% · close ' + sh[5] + ' · ' + (sh[6] ?? '—') + ' days in stage' : open ? 'Not on the master Sheet' : 'Closed deal', go: ev('deal:' + d.id) }; }),
@@ -1378,22 +1384,22 @@ class Component extends DCLogic {
       hasActions: !!(mrec.actions && mrec.actions.length), actions: mrec.actions || [],
       hasSummary: !!(mrec.summary && mrec.summary.length), noSummary: !!(st.records && !(mrec.summary && mrec.summary.length)), summary: (mrec.summary || []).map(styleBlock),
       transcript: mrec.transcriptLines ? mrec.transcriptLines.toLocaleString('en-US') + ' lines' : 'not available', recordGo: ev('recording:' + mrec.id),
-      canLoadTranscript: !!mrec.hasTranscript, transcriptBtn: st.transcriptOpen === mrec.id ? 'Hide transcript' : 'Read transcript', loadTranscript: () => { if (st.transcriptOpen === mrec.id) this.setState({ transcriptOpen: null }); else { this.loadTranscript(mrec.id); this.setState({ transcriptOpen: mrec.id }); } }, transcriptOpen: st.transcriptOpen === mrec.id && !!(st.transcripts && st.transcripts[mrec.id]), lines: (st.transcripts && st.transcripts[mrec.id]) || [], transcriptNote: mrec.hasTranscript ? 'Speakers and timestamps as recorded by Fathom.' : 'Transcript text for this recording was not included.',
-      hasCompany: true, company: mrec.companyId ? mco.name : mrec.companyName, companyGo: mrec.companyId ? goCo(mrec.companyId) : ev('recording:' + mrec.id), dealLine: !mrec.companyId ? 'Matched by invitee domain only; this company was not in the CRM extract' : mdeal ? mdeal.stageLabel + ' · ' + money(mdeal.amount) + ' · close ' + fmtD(mdeal.close) + (mdeal.owner ? ' · ' + mdeal.owner : '') + (mrec.matchedBy && /shared/.test(mrec.matchedBy) ? ' · recording shared with another account' : '') : 'No open opportunity',
-      draftLabel: mreview ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: mreview ? () => { this.setState({ screen: 'drafts', draft: mreview[5] }); window.scrollTo(0, 0); } : () => { const recipients = [...new Set((mrec.invitees || []).filter(i => i.email && !/opstream/.test(i.email)).map(i => i.email.toLowerCase()))].slice(0, 3).join(', '); const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up: ' + mrec.title, subject: 'Follow up: ' + mrec.title, company: mco.name, text: followUpText(mco.name, mrec.actions, (mrec.summary || []).map(b => b.x).filter(Boolean).filter(mostlyEnglish).slice(0, 1).join(' '), mrec), rationale: (mrec.actions || []).join('\n'), refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients, saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
-      invitees: [...new Map((mrec.invitees || []).map(i => [String(i.email || i.name || '').toLowerCase(), { name: i.name || i.email || 'Unnamed', email: i.email || '' }])).values()],
+      canLoadTranscript: !!mrec.hasTranscript, transcriptBtn: st.transcriptOpen === mrec.id ? 'Hide transcript' : 'Read transcript', loadTranscript: () => { if (st.transcriptOpen === mrec.id) this.setState({ transcriptOpen: null }); else { this.loadTranscript(mrec.id); this.setState({ transcriptOpen: mrec.id }); } }, transcriptOpen: st.transcriptOpen === mrec.id && !!(st.transcripts && st.transcripts[mrec.id]), lines: (st.transcripts && st.transcripts[mrec.id]) || [], transcriptEmpty: st.transcriptOpen === mrec.id && Array.isArray(st.transcripts && st.transcripts[mrec.id]) && !st.transcripts[mrec.id].length, transcriptNote: mrec.hasTranscript ? 'Speakers and timestamps as recorded by Fathom.' : 'Transcript text for this recording was not included.',
+      hasCompany: true, company: mrec.companyId ? mco.name : mrec.companyName, companyGo: mrec.companyId ? goCo(mrec.companyId) : ev('recording:' + mrec.id), dealLine: !mrec.companyId ? 'Matched by invitee domain only; this company is not in the HubSpot data for this collection' : mdeal ? mdeal.stageLabel + ' · ' + money(mdeal.amount) + ' · close ' + fmtD(mdeal.close) + (mdeal.owner ? ' · ' + mdeal.owner : '') + (mrec.matchedBy && /shared/.test(mrec.matchedBy) ? ' · recording shared with another account' : '') : 'No open opportunity',
+      draftLabel: mreview ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: mreview ? () => { this.setState({ screen: 'drafts', draft: mreview[5] }); window.scrollTo(0, 0); } : () => { const recipients = [...new Set((mrec.invitees || []).filter(i => i.email && !/opstream/.test(i.email)).map(i => i.email.toLowerCase()))].slice(0, 3).join(', '); const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up: ' + mrec.title, subject: workspaceModel.companyName(mco.name || mrec.companyName || 'Opstream') + ' – next steps from our ' + workspaceModel.naturalDay(mrec.date) + ' call', company: mco.name, text: followUpText(mco.name, mrec.actions, (mrec.summary || []).map(b => b.x).filter(Boolean).filter(mostlyEnglish).slice(0, 1).join(' '), mrec), rationale: (mrec.actions || []).join('\n'), refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients, saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
+      invitees: [...new Map((mrec.invitees || []).map(i => [String(i.email || i.name || '').toLowerCase(), { name: workspaceModel.personLabel(i.name) || i.email || 'Unnamed', email: i.name && i.email && i.name !== i.email ? i.email : '' }])).values()],
       hasRelated: allRecs.filter(r => r.companyId === mrec.companyId && r.id !== mrec.id).length > 0, related: allRecs.filter(r => r.companyId === mrec.companyId && r.id !== mrec.id).slice(0, 5).map(r => ({ title: r.title, date: fmtD(r.date.slice(0, 10)), go: goMtg(r.id) }))
     };
-    const sheetRow = (company) => { const d = dealsRaw.find(x => x[0] === company); if (!d) return null; const tab = d[1]; return { kicker: 'Pipeline workbook', title: company, meta: d[1] + (d[2] ? ' · ' + d[2] : ''), rows: [['Stage', d[2] || '—'], ['Close month', d[5] || '—'], ['ARR', d[3] ? d[3].toLocaleString('en-US') : '—'], ['Probability', d[4] != null ? d[4] + '%' : '—'], ['Days in stage', d[6] ?? '—'], ['Weighted ARR', d[3] && d[4] != null ? Math.round(d[3] * d[4] / 100).toLocaleString('en-US') : '—'], ['Last meeting / what happened', d[7] || '—']].map(([label, value]) => ({ label, value })), note: 'ARR, probability and close month are owner estimates, not buyer commitments.', operational: true }; };
+    const sheetRow = (company) => { const d = dealsRaw.find(x => x[0] === company); if (!d) return null; const tab = d[1]; return { kicker: 'Pipeline workbook', title: company, meta: d[1] + (d[2] ? ' · ' + d[2] : ''), rows: [['Stage', d[2] || '—'], ['Close month', d[5] || '—'], ['Amount', d[3] ? d[3].toLocaleString('en-US') : '—'], ['Probability', d[4] != null ? d[4] + '%' : '—'], ['Days in stage', d[6] ?? '—'], ['Weighted', d[3] && d[4] != null ? Math.round(d[3] * d[4] / 100).toLocaleString('en-US') : '—'], ['Last meeting / what happened', d[7] || '—']].map(([label, value]) => ({ label, value })), note: 'Amount, probability and close month are owner estimates, not buyer commitments.', operational: true }; };
     const refOnly = (title, meta, ids, note) => ({ kicker: 'Referenced record', title, meta, rows: [], missing: true, note, ids });
     const evidenceMap = {};
     const evKey = typeof st.evidence === 'string' ? st.evidence : 'doug-11';
     const dyn = (() => { const [kind, a, b] = evKey.split(':'); const c = REC.companies.find(x => x.id === a) || REC.companies.find(x => x.deals.some(d => d.id === a));
       if (kind === 'note' && c) { const n = c.notes.find(x => x.id === b) || {}; const body = workspaceModel.plainNote(n.text); return { kicker: c.name + (n.date ? ' · ' + fmtD(n.date) : ''), title: 'Note' + (n.owner ? ' from ' + workspaceModel.displayOwner(n.owner) : ''), meta: '', rows: body ? [{ label: '', value: body }] : [], note: '', operational: true }; }
-      if (kind === 'deal' && c) { const d = c.deals.find(x => x.id === a); const dl = d.displayLine || ''; const what = dl.indexOf(d.name) === 0 ? dl : d.name + (dl ? ' — ' + dl : ''); return { kicker: workspaceModel.companyName(c.name), title: what, meta: d.isOpen ? 'Open opportunity' : 'Closed', rows: [d.amount != null ? { label: 'Amount', value: money(d.amount) } : null, d.close ? { label: 'Expected close', value: fmtD(d.close) } : null, d.owner ? { label: 'Owner', value: workspaceModel.displayOwner(d.owner) } : null].filter(Boolean), note: '', ids: (d.refs || []).join(' · '), operational: true }; }
-      if (kind === 'company' && c) return { kicker: [c.domain, c.industry, c.employees ? c.employees.toLocaleString('en-US') + ' employees' : null, [c.city, c.country].filter(Boolean).join(', ') || null].filter(Boolean).join(' · '), title: c.name, meta: '', rows: (c.contacts || []).slice(0, 5).map(p => ({ label: p.title || 'Contact', value: p.name + (p.email ? ' · ' + p.email : '') })).concat((c.deals || []).filter(d => d.isOpen).slice(0, 3).map(d => { const dl = d.displayLine || ''; return { label: 'Open deal', value: dl.indexOf(d.name) === 0 ? dl : d.name + (dl ? ' — ' + dl : '') }; })), note: '', ids: (c.refs || []).join(' · '), operational: true };
+      if (kind === 'deal' && c) { const raw = c.deals.find(x => x.id === a); const d = workspaceModel.applySheetDeal(raw, workspaceModel.sheetOverrides(st.sheetReview)); const open = workspaceModel.dealIsOpen(d); const hub = (v, f) => v != null && v !== '' ? ' (HubSpot: ' + f(v) + ')' : ''; return { kicker: workspaceModel.companyName(c.name), title: workspaceModel.companyName(d.name) + ' · ' + (d.stageLabel || d.stage || 'No stage') + (d.amount != null ? ' · ' + money(d.amount) : '') + (d.close ? ' · closes ' + fmtD(d.close) : ''), meta: (open ? 'Open deal' : 'Closed deal') + (d.onSheet ? ' · values from the master Sheet' : ' · not on the master Sheet; values from HubSpot'), rows: [d.amount != null ? { label: 'Amount', value: money(d.amount) + hub(d.hubspotAmount, money) } : null, d.probability != null ? { label: 'Probability', value: Math.round(workspaceModel.probabilityFraction(d.probability) * 100) + '%' + hub(d.hubspotProbability, p => Math.round(workspaceModel.probabilityFraction(p) * 100) + '%') } : null, d.close ? { label: 'Expected close', value: fmtD(d.close) + hub(d.hubspotClose, fmtD) } : null, d.owner ? { label: 'Deal owner', value: workspaceModel.displayOwner(d.owner) + hub(d.hubspotOwner, workspaceModel.displayOwner.bind(workspaceModel)) } : null].filter(Boolean), note: '', ids: (d.refs || []).join(' · '), operational: true }; }
+      if (kind === 'company' && c) return { kicker: [c.domain, workspaceModel.humanEnum(c.industry), c.employees ? c.employees.toLocaleString('en-US') + ' employees' : null, [c.city, c.country].filter(Boolean).join(', ') || null].filter(Boolean).join(' · '), title: c.name, meta: '', rows: (c.contacts || []).slice(0, 5).map(p => ({ label: p.title || 'Contact', value: p.name + (p.email ? ' · ' + p.email : '') })).concat((c.deals || []).filter(d => workspaceModel.dealIsOpen(d)).slice(0, 3).map(d => { const dl = d.displayLine || ''; return { label: 'Open deal', value: dl.indexOf(d.name) === 0 ? dl : d.name + (dl ? ' — ' + dl : '') }; })), note: '', ids: (c.refs || []).join(' · '), operational: true };
       if (kind === 'contact' && c) { const p = c.contacts.find(x => (x.email || x.name) === b) || {}; const theirMeetings = [...new Map((c.meetings || []).filter(m => (m.start || '').slice(0, 10) <= new Date().toISOString().slice(0, 10)).map(m => [m.title + '|' + (m.start || '').slice(0, 10), m])).values()].slice(-3); return { kicker: c.name, title: p.name || 'Contact', meta: p.title || '', rows: (p.email ? [{ label: 'Email', value: p.email }] : []).concat(theirMeetings.length ? [{ label: 'Recent meetings', value: theirMeetings.map(m => m.title + ' · ' + fmtD((m.start || '').slice(0, 10))).join('\n') }] : []), note: '', ids: (p.refs || []).join(' · '), operational: true }; }
-      if (kind === 'crm-meeting' && c) { const m = c.meetings.find(x => x.id === b) || {}; const startDay = workspaceModel.dateOnly(m.start); const future = !!(startDay && startDay > workspaceModel.phoenixToday()); const rec = future ? null : (c.recordings || []).find(r => workspaceModel.dateOnly(r.date) === startDay); const who = [...new Set(rec ? (rec.invitees || []).map(i => i.name || i.email).filter(x => x && !/@opstream\.ai/i.test(x)) : (c.contacts || []).map(p => p.name + (p.title ? ' — ' + p.title : '')))].slice(0, rec ? 6 : 4); const deal = (c.deals || []).find(d => d.isOpen); const whoLabel = future ? 'Who is invited' : 'Who was there'; return { kicker: fmtDT(m.start) || 'Meeting', title: m.title || 'Meeting', meta: c.name, rows: (who.length ? [{ label: whoLabel, value: who.join(', ') }] : []).concat(!future && rec && rec.summary ? [{ label: 'What was discussed', value: rec.summary.slice(0, 2).map(p => (p.x || p).toString().replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')).join(' ') }] : []).concat(!future && rec && rec.actions && rec.actions.length ? [{ label: 'Action items (' + rec.actions.length + ')', value: rec.actions.join(' · ') }] : []).concat(deal ? [{ label: 'Related deal', value: (deal.displayLine && deal.displayLine.indexOf(deal.name) === 0 ? deal.displayLine : deal.name + (deal.displayLine ? ' — ' + deal.displayLine : '')) }] : []).concat(future ? [{ label: 'Notes', value: 'This meeting has not happened yet.' }] : (!rec && !m.outcome ? [{ label: 'Notes', value: 'No call notes or recording were captured for this meeting.' }] : [])), note: '', operational: true }; }
+      if (kind === 'crm-meeting' && c) { const m = c.meetings.find(x => x.id === b) || {}; const startDay = workspaceModel.dateOnly(m.start); const future = !!(startDay && startDay > workspaceModel.phoenixToday()); const rec = future ? null : (c.recordings || []).find(r => workspaceModel.dateOnly(r.date) === startDay); const invited = (m.invitees || []).filter(i => !/@opstream\.ai$/i.test(i.email || '')).map(i => i.name || i.email); const who = [...new Set(rec ? (rec.invitees || []).map(i => i.name || i.email).filter(x => x && !/@opstream\.ai/i.test(x)) : invited.length ? invited : (c.contacts || []).map(p => p.name + (p.title ? ' — ' + p.title : '')))].slice(0, 8); const deal = (c.deals || []).find(d => workspaceModel.dealIsOpen(d)); const whoLabel = future ? 'Who is invited' : 'Who was there'; return { kicker: fmtDT(m.start) || 'Meeting', title: m.title || 'Meeting', meta: c.name, rows: (who.length ? [{ label: whoLabel, value: who.join(', ') }] : []).concat(!future && rec && rec.summary ? [{ label: 'What was discussed', value: rec.summary.slice(0, 2).map(p => (p.x || p).toString().replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')).join(' ') }] : []).concat(!future && rec && rec.actions && rec.actions.length ? [{ label: 'Action items (' + rec.actions.length + ')', value: rec.actions.join(' · ') }] : []).concat(deal ? [{ label: 'Related deal', value: (deal.displayLine && deal.displayLine.indexOf(deal.name) === 0 ? deal.displayLine : deal.name + (deal.displayLine ? ' — ' + deal.displayLine : '')) }] : []).concat(future ? [{ label: 'Notes', value: 'This meeting has not happened yet.' }] : (!rec && !m.outcome ? [{ label: 'Notes', value: 'No call notes or recording were captured for this meeting.' }] : [])), note: '', operational: true }; }
       if (kind === 'call' && c) { const cl = (c.calls || []).find(x => x.id === b) || {}; const said = workspaceModel.plainNote(cl.text); return { kicker: c.name + (cl.date ? ' · ' + fmtD(cl.date) : ''), title: cl.title || 'Call', meta: cl.owner || '', rows: (cl.minutes ? [{ label: 'Duration', value: cl.minutes + ' min' }] : []).concat(said ? [{ label: 'What was said', value: said }] : []), note: '', operational: true }; }
       if (kind === 'recording') { const r = allRecs.find(x => x.id === a); if (!r) return null; const who = [...new Set((r.invitees || []).map(i => i.name || i.email).filter(x => x && !/@opstream\.ai/i.test(x)))]; return { kicker: fmtDT(r.date) + (r.minutes ? ' · ' + r.minutes + ' min' : ''), title: r.title, meta: r.companyName, rows: (who.length ? [{ label: 'Who was on the call', value: who.slice(0, 8).join(', ') }] : []).concat(r.summary && r.summary.length ? [{ label: 'Key points', value: r.summary.slice(0, 4).map(p => '• ' + (p.x || p).toString().replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')).join('\n') }] : []).concat(r.actions && r.actions.length ? [{ label: 'Action items (' + r.actions.length + ')', value: r.actions.map(a => '• ' + a).join('\n') }] : []), note: '', operational: true }; }
       return null; })();
@@ -1425,7 +1431,7 @@ class Component extends DCLogic {
       return {
         n: i + 1, title: 'Move ' + company + ' out of ' + stage,
         context: usd(arr) + ' · ' + prob + '% · ' + (daysKnown ? days + ' days in stage' : 'stage age not in extract') + ' · close ' + fmtD(close) + ' · ' + owner,
-        why: (note ? note + ' ' : '') + (daysKnown ? 'No recorded stage movement in ' + days + ' days' + (i === 0 ? ' — the longest-stuck deal in the pipeline.' : '.') : 'Stage age is not in the CRM extract; ranked by pipeline order.'),
+        why: (note ? note + ' ' : '') + (daysKnown ? 'No recorded stage movement in ' + days + ' days' + (i === 0 ? ' — the longest-stuck deal in the pipeline.' : '.') : 'Days in stage are not in HubSpot; ranked by pipeline order.'),
         confidence: 'Medium · ' + (daysKnown ? 'days-in-stage is the only staleness signal collected.' : 'based on open pipeline records.'),
         changed: cc && cc.lastContact ? 'Last contact ' + fmtD(cc.lastContact) + '.' : '',
         primary: 'Draft follow-up', primaryGo: draftForCompany(company, (note || '') + ' ' + stage + ' · ' + usd(arr) + (daysKnown ? ' · ' + days + ' days in stage.' : '.')),
@@ -1438,48 +1444,50 @@ class Component extends DCLogic {
     // ---- Hollie operator: invisible background operator output (data/hollie.json) ----
     const hop = st.hollie || null;
     const hollieDoneMap = st.hollieDone || {};
-    const drawerLabel = k => k.indexOf('deal:') === 0 ? 'Deal record' : k.indexOf('crm-meeting:') === 0 ? 'Meeting record' : k.indexOf('recording:') === 0 ? 'Call notes' : k.indexOf('note:') === 0 ? 'CRM note' : k.indexOf('call:') === 0 ? 'Call record' : k.indexOf('company:') === 0 ? 'Company record' : 'Record';
+    // Two call-notes buttons for one account say which call each one opens.
+    const keyDate = k => { const [kind, a, b] = k.split(':'); const c = REC.companies.find(x => x.id === a); if (kind === 'recording') { const r = allRecsById.get(a); return r ? workspaceModel.naturalDay(r.date) : ''; } if (kind === 'crm-meeting' && c) { const m = (c.meetings || []).find(x => x.id === b); return m ? workspaceModel.naturalDay(m.start) : ''; } if (kind === 'note' && c) { const n = (c.notes || []).find(x => x.id === b); return n ? workspaceModel.naturalDay(n.date) : ''; } return ''; };
+    const drawerLabel = k => { const base = k.indexOf('deal:') === 0 ? 'Deal record' : k.indexOf('crm-meeting:') === 0 ? 'Meeting record' : k.indexOf('recording:') === 0 ? 'Call notes' : k.indexOf('note:') === 0 ? 'CRM note' : k.indexOf('call:') === 0 ? 'Call record' : k.indexOf('company:') === 0 ? 'Company record' : 'Record'; const d = keyDate(k); return d ? base + ' · ' + d : base; };
     const dedupeKeys = keys => [...new Set(keys || [])];
     const seedDraft = (q) => () => { const existing = (st.newDrafts || []).find(x => x.seedId === q.id); if (existing && existing.id) { this.setState({ screen: 'drafts', draftId: existing.id, draftPurpose: 'email', evidence: false }); window.scrollTo(0, 0); return; } const seed = q.draftSeed || {}; const body = String(seed.body || '').trim() || followUpText(q.company, q.actions, ''); const id = 'seed:' + q.id; const item = { id, kind: 'Follow-up', seedId: q.id, purpose: 'email', title: seed.subject || ('Follow up with ' + (q.company || 'account')), subject: seed.subject || ('Follow up with ' + (q.company || 'account')), company: q.company || 'No company linked', text: body, rationale: 'From the call notes. ' + (q.why || '') + ' Drafts are never sent automatically.', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients: seed.recipients || '', saved: false }; this.setState({ newDrafts: [...(st.newDrafts || []), item], draftId: id, draftPurpose: 'email', screen: 'drafts', evidence: false, draftFeedback: 'Draft created from the call notes. Nothing sends from here.', draftFeedbackClass: 'form-success' }); window.scrollTo(0, 0); };
     const nudgeDraft = (q) => () => {
       const id = 'seed:' + q.id;
       if ((st.newDrafts || []).some(x => x.id === id)) { this.setState({ screen: 'drafts', draftId: id, draftPurpose: 'email', draftShow: null, evidence: false }); window.scrollTo(0, 0); return; }
       const cc = q.companyId ? findCo(q.companyId) : q.company ? findCo(q.company) : null;
-      const recs = ((cc && cc.recordings) || []).slice().sort((x, y) => String(y.date || '').localeCompare(String(x.date || '')));
-      const lastRec = recs[0] || null;
-      const lastMeeting = ((cc && cc.meetings) || []).filter(m => /complete/i.test(m.outcome || '') && String(m.start || '') <= new Date().toISOString()).sort((x, y) => String(y.start || '').localeCompare(String(x.start || '')))[0] || null;
-      const talked = lastRec ? { title: lastRec.title, date: lastRec.date } : lastMeeting ? { title: lastMeeting.title, date: lastMeeting.start } : null;
-      const domain = String((cc && cc.domain) || '').toLowerCase();
-      const fromCall = lastRec ? (lastRec.invitees || []).filter(i => i.email && !/@opstream\.ai$/i.test(i.email) && (!domain || String(i.email).toLowerCase().endsWith('@' + domain))) : [];
+      // The latest call or completed meeting decides who the nudge goes to.
+      const nowIso = new Date().toISOString();
+      const external = list => (list || []).filter(i => i.email && !/@opstream\.ai$/i.test(i.email));
+      const talks = [...((cc && cc.recordings) || []).map(r => ({ date: r.date, people: external(r.invitees) })), ...((cc && cc.meetings) || []).filter(m => /complete/i.test(m.outcome || '') && String(m.start || '') <= nowIso).map(m => ({ date: m.start, people: external(m.invitees) }))].filter(t => t.date).sort((x, y) => String(y.date).localeCompare(String(x.date)));
+      const talked = talks[0] || null;
+      const fromCall = (talks.find(t => t.people.length) || { people: [] }).people;
       const people = fromCall.length ? fromCall.map(i => ({ name: i.name, email: i.email })) : ((cc && cc.contacts) || []).filter(x => x.email).slice(0, 1);
       const recipients = [...new Set(people.map(x => String(x.email).toLowerCase()))].slice(0, 2).join(', ');
       const first = String((people[0] && people[0].name) || '').split(/[\s,]+/).filter(Boolean)[0] || '';
       const sheetDeal = ((st.sheetReview && st.sheetReview.deals) || []).find(d => String(d.id) === String(q.dealId || '').replace(/^deal-/, '')) || ((st.sheetReview && st.sheetReview.deals) || []).find(d => cc && workspaceModel.companyName(d.company || '').toLowerCase() === workspaceModel.companyName(cc.name).toLowerCase());
-      const signer = workspaceModel.displayOwner((sheetDeal && sheetDeal.owner) || (cc && (cc.deals || []).find(d => d.isOpen) || {}).owner || '');
+      const signer = workspaceModel.displayOwner((sheetDeal && sheetDeal.owner) || (cc && (cc.deals || []).find(d => workspaceModel.dealIsOpen(d)) || {}).owner || '');
       const company = workspaceModel.companyName(q.company || (cc && cc.name) || '');
       const body = [first ? 'Hi ' + first + ',' : 'Hi,', '',
-        talked ? 'Thanks again for the ' + String(talked.title || 'conversation').replace(/\s*\([^)]*\)\s*$/, '') + ' on ' + fmtD(workspaceModel.dateOnly(talked.date)) + '. I wanted to check in on where things stand on your side.' : 'I wanted to check in on where things stand on your side, and whether the timing still works for ' + company + '.',
+        talked ? 'Thanks again for our conversation on ' + workspaceModel.naturalDay(talked.date) + '. I wanted to check in on where things stand on your side.' : 'I wanted to check in on where things stand on your side, and whether the timing still works for ' + company + '.',
         '', 'If it would help, I am happy to set up a short call in the next two weeks to go through next steps.', '',
         'Best,', signer && signer !== 'Unassigned' ? signer + '\nOpstream' : 'Opstream'].join('\n');
-      const why = [(q.why || ''), talked ? 'Last conversation: ' + (talked.title || 'call') + ' on ' + fmtD(workspaceModel.dateOnly(talked.date)) + '.' : 'No call or completed meeting is on file for this account.', fromCall.length ? 'To: attendees of that call.' : recipients ? 'To: the first CRM contact with an email; nobody from ' + company + ' was on a recorded call.' : 'No contact email on file.', signer && signer !== 'Unassigned' ? 'Signed as the deal owner on the master Sheet, ' + signer + '.' : 'No deal owner on file, so the draft is unsigned.'].filter(Boolean).join(' ');
+      const why = [(q.why || ''), talked ? 'Last conversation: ' + workspaceModel.naturalDay(talked.date) + '.' : 'No call or completed meeting is on file for this account.', fromCall.length ? 'To: the people from ' + company + ' on the latest call or meeting.' : recipients ? 'To: the first CRM contact with an email; nobody from ' + company + ' is recorded on a call or meeting.' : 'No contact email on file.', signer && signer !== 'Unassigned' ? 'Signed as the deal owner on the master Sheet, ' + signer + '.' : 'No deal owner on file, so the draft is unsigned.'].filter(Boolean).join(' ');
       const item = { id, kind: 'Follow-up', seedId: q.id, purpose: 'email', title: 'Check in with ' + company, subject: company + ' and Opstream: next steps', company: (cc && cc.name) || company || 'No company linked', text: body, rationale: why + ' Nothing is sent from here.', refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients, accountIds: cc ? ['company:' + cc.id] : [], saved: false };
       this.setState({ newDrafts: [...(st.newDrafts || []), item], draftId: id, draftPurpose: 'email', draftShow: null, screen: 'drafts', evidence: false, draftFeedback: 'Check-in drafted from the last conversation. Edit it, then copy it into Gmail.', draftFeedbackClass: 'form-success' });
       window.scrollTo(0, 0);
     };
     const kindLabel = { followup_draft: 'Follow-up draft', stale_deal: 'Stale deal', unworked_lead: 'Unworked lead', crm_update: 'CRM update', meeting_prep: 'Meeting prep', sheet_review: 'Sheet check' };
     const mdText = s => String(s == null ? '' : s).replace(/\[([^\]]+)\]\([^)\s]+\)/g, '$1');
-    const isTestItem = text => /mozilla firefox|system verification test/i.test(String(text || ''));
-    const cleanCopy = text => String(text == null ? '' : text).replace(/\bnewSinceLastBrief\b/gi, 'new');
+    const isTestItem = text => /system verification test/i.test(String(text || ''));
+    const cleanCopy = text => workspaceModel.phoenixProse(String(text == null ? '' : text).replace(/\bnewSinceLastBrief\b/gi, 'new'));
     const viewerToday = workspaceModel.phoenixToday();
     const hollieQueueAll = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id] && !isTestItem(q.title) && !isTestItem(q.why) && (q.audience || 'sales') !== 'marketing').map((q, i) => {
       const confirmKey = st.confirmQueue;
       const pm = q.kind === 'followup_draft' ? ['Open draft', seedDraft(q)] : q.kind === 'stale_deal' ? ['Draft nudge', nudgeDraft(q)] : q.kind === 'unworked_lead' ? ['Review leads', goLeads] : q.kind === 'sheet_review' ? (q.companyId ? ['Review in account', goCo(q.companyId)] : ['Review deals', goDeals]) : q.kind === 'crm_update' ? ['Review deals', goDeals] : ['Open meetings', goMeetings];
       const confirmGo = (action, fn) => () => { const key = q.id + ':' + action; if (confirmKey === key) { this.setState({ confirmQueue: null }); fn(); } else { this.setState({ confirmQueue: key }); setTimeout(() => { if (this.state.confirmQueue === key) this.setState({ confirmQueue: null }); }, 6000); } };
       return {
-        id: q.id, companyId: q.companyId, dealId: q.dealId || null, n: i + 1, title: (q.kind === 'stale_deal' && q.lastEngagement) ? String(q.title).replace(/quiet \d+ days/, 'quiet ' + workspaceModel.relativeDays(q.lastEngagement, viewerToday) + ' days') : q.title, isNew: !!q.isNew, needsDecision: !!q.needsDecision, audience: q.audience || 'sales',
+        id: q.id, company: q.company || "", companyId: q.companyId, dealId: q.dealId || null, n: i + 1, title: (q.kind === 'stale_deal' && q.lastEngagement) ? String(q.title).replace(/quiet \d+ days/, 'quiet ' + workspaceModel.relativeDays(q.lastEngagement, viewerToday) + ' days') : q.title, isNew: !!q.isNew, needsDecision: !!q.needsDecision, audience: q.audience || 'sales',
         kind: kindLabel[q.kind] || q.kind,
         goal: q.goal || 'pipeline',
-        context: [q.company, (q.deal && q.deal !== q.company ? q.deal : null), q.stage].filter(Boolean).join(' · '),
+        context: [q.company, (() => { const deal = workspaceModel.dealLabel(q.deal); return deal && deal.toLowerCase() !== String(q.company || '').toLowerCase() ? deal : null; })(), q.stage].filter(Boolean).join(' · '),
         why: cleanCopy(mdText(q.why)),
         confidenceText: mdText((q.confidence || '') + (q.confidenceNote ? ' · ' + q.confidenceNote : '')),
         primary: pm[0], primaryGo: pm[1],
@@ -1505,7 +1513,7 @@ class Component extends DCLogic {
       for (const m of c.meetings || []) {
         const d = workspaceModel.dateOnly(m.start);
         if ((d !== viewerToday && d !== viewerTomorrow) || workspaceModel.hasStarted(m.start)) continue;
-        if (/opstream/i.test(c.name || '') || /opstream/i.test(m.title || '')) continue;
+        if (/opstream/i.test(c.name || '') || /opstream/i.test(m.title || '') || /^\s*(hold\b|placeholder\b)|<<[^>]*>>/i.test(m.title || '')) continue;
         const emails = (m.invitees || []).map(i => String(i.email || '').toLowerCase()).filter(Boolean);
         if (emails.length && emails.every(e => e.endsWith('@opstream.ai'))) continue;
         const key = m.id || (d + '|' + m.title);
@@ -1517,9 +1525,9 @@ class Component extends DCLogic {
     const hb = hop ? hop.brief : null;
     const hollieBriefCards = hb ? [
       { title: 'Meetings today & tomorrow', line: soonNow.length ? soonNow.join(' / ') : 'None scheduled', note: 'Built from the calendar when the page renders. Times are America/Phoenix.', go: this.go('meetings', { meetings: 'upcoming' }), goLabel: 'Open meetings' },
-      { title: 'Deals gone quiet', line: quietNow.length + ' with no engagement in ' + workspaceModel.QUIET_DAYS + '+ days', note: hb.quietDeals.note, go: goFollow, goLabel: 'Open follow-ups' },
+      { title: 'Deals gone quiet', line: quietNow.length + ' with no engagement in ' + workspaceModel.QUIET_DAYS + '+ days', note: hb.quietDeals.note, go: this.go('accounts', { accounts: 'deals', dealFilter: 'quiet', search: '', owner: 'Everyone', closeOn: null }), goLabel: 'Open the ' + quietNow.length + ' quiet deals' },
       { title: 'Follow-ups owed', line: hb.followupsOwed.items.length + (hb.followupsOwed.items.length === 1 ? ' call' : ' calls') + ' with open action items', note: hb.followupsOwed.note, go: goFollow, goLabel: 'Open follow-ups' },
-      { title: 'New leads', line: unworkedInfo.count + ' unworked', note: 'No MQL date on the ' + (unworkedInfo.source === 'sheet' ? 'Lead Tracker' : 'HubSpot contacts') + '.', go: goLeads, goLabel: 'Open new leads' },
+      { title: 'New leads', line: unworkedInfo.count + ' with no MQL date yet (all time)', note: 'No MQL date on the ' + (unworkedInfo.source === 'sheet' ? 'Lead Tracker' : 'HubSpot contacts') + '.', go: this.go('accounts', { accounts: 'leads', leadStage: 'no-mql', leadSource: null, leadFlag: null, search: '', owner: 'Everyone', contributor: null }), goLabel: 'Open the ' + unworkedInfo.count + ' leads' },
     ] : [];
     const hollieAutonomy = hop ? [
       { label: 'Meeting prep', text: (hop.autonomyText || {}).meeting_prep },
@@ -1535,7 +1543,7 @@ class Component extends DCLogic {
       lastCallLine: pr.lastCall ? (pr.lastCall.title || 'Last call') + ' · ' + (pr.lastCall.date || '') : '',
       lastCallSummary: pr.lastCall ? (pr.lastCall.summary || []).slice(0, 2).map(mdText) : [],
       dealsLine: ((pr.accountHistory || {}).openDeals || []).map(d => { const dl = d.displayLine || ''; return dl.startsWith(d.name) ? dl : d.name + (dl ? ' — ' + dl : ''); }).join('; '),
-      attendees: (() => { const inv = ((pr.lastCall || {}).invitees || []).map(i => i.name); return inv.length ? inv : (pr.attendees || []).map(a => a.name + (a.title ? ' — ' + a.title : '')); })(),
+      attendees: [...new Set((pr.attendees || []).map(a => a.name + (a.title ? ' — ' + a.title : '')))],
       lastCallPurpose: ((pr.lastCall || {}).purpose) || '',
       lastCallTakeaways: ((pr.lastCall || {}).takeaways || []).map(mdText),
       callGoal: pr.callGoal || '',
@@ -1556,9 +1564,9 @@ class Component extends DCLogic {
     const agentBriefGenNote = ab && ab.generatedAt ? 'Written ' + fmtDT(ab.generatedAt) : '';
     // ---- Heartbeat: periodic proactive pulse (data/heartbeat.json) ----
     const pulse = st.heartbeat || null;
-    const heartbeatInsights = pulse ? (pulse.insights || []) : [];
+    const heartbeatInsights = pulse ? (pulse.insights || []).map(i => ({ ...i, title: cleanCopy(i.title), detail: cleanCopy(i.detail) })) : [];
     const hasHeartbeat = heartbeatInsights.length > 0;
-    const heartbeatSummary = pulse ? (pulse.summary || '') : '';
+    const heartbeatSummary = pulse ? cleanCopy(pulse.summary || '').replace(/^\s*good (?:morning|afternoon|evening)[,!.]?\s*(?:hollie[,!.]?\s*)?/i, '') : '';
     const heartbeatGenNote = pulse && pulse.generatedAt ? 'Checked ' + fmtDT(pulse.generatedAt) : '';
     // ---- Heartbeat fixes: prepared fixes with one-tap actions (data/heartbeat-fixes.json) ----
     const fixRaw = (st.heartbeatFixes && st.heartbeatFixes.fixes) || [];
@@ -1573,10 +1581,19 @@ class Component extends DCLogic {
       draftText: f.draftText || '',
       isDraft: f.type === 'draft',
       isAsk: f.type === 'ask',
+      company: f.company || '',
       created: !!createdFixes[i],
-      createGo: () => this.createHeartbeatDraft(i),
+      createLabel: 'Create internal note to ' + (this._pulseRep(f).name || 'the deal owner'),
+      createGo: () => this.createHeartbeatNote(i),
     }));
     const hasHeartbeatFixes = heartbeatFixes.length > 0;
+    const sameCo = (a, b) => !!a && !!b && workspaceModel.companyName(a).toLowerCase() === workspaceModel.companyName(b).toLowerCase();
+    for (const item of hollieQueueAll) {
+      const fx = heartbeatFixes.find(f => f.isDraft && sameCo(f.company, item.company));
+      item.hasPulseNote = !!fx && !fx.created; item.pulseNoteLabel = fx ? fx.createLabel : ''; item.pulseNoteGo = fx ? fx.createGo : () => {};
+    }
+    const pulseNotes = heartbeatFixes.filter(f => f.isDraft && !hollieQueueAll.some(q => sameCo(f.company, q.company)));
+    const pulseQuestions = heartbeatFixes.filter(f => f.isAsk);
     const approvals = st.approvals || {};
     const quietValue = quietNow.reduce((n, d) => n + (Number(d.amount) || 0), 0);
     const briefingMetrics = [
@@ -1590,19 +1607,13 @@ class Component extends DCLogic {
     const topQuietDays = topCompany ? workspaceModel.daysQuiet(topCompany, workspaceModel.phoenixToday()) : null;
     const share = topDeal ? workspaceModel.closeDateShare(pipeNow.deals, topDeal.close) : null;
     const briefingDecisions = topDeal ? [
-      { title: 'Push ' + workspaceModel.companyName(topDeal.name) + ' or let it slip', why: workspaceModel.companyName(topDeal.name) + ' is the largest open deal (' + usd(topDeal.amount || 0) + '). The close date is ' + fmtD(topDeal.close) + '. ' + (topQuietDays != null ? 'Last interaction was ' + topQuietDays + ' days ago.' : 'No past engagement date is on file.'), confidence: 'Computed from the master sheet\'s active rows. A past close date stays in the book and is marked close date passed. Renewals, On Hold, and Disqualified are not included. Amounts use the sheet when it disagrees with HubSpot.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal.name) },
+      { title: workspaceModel.companyName(topDeal.name) + ' is the largest open deal (' + usd(topDeal.amount || 0) + ', closes ' + fmtD(topDeal.close) + ')', why: workspaceModel.companyName(topDeal.name) + ' is the largest open deal (' + usd(topDeal.amount || 0) + '). The close date is ' + fmtD(topDeal.close) + '. ' + (topQuietDays != null ? 'Last interaction was ' + topQuietDays + ' days ago.' : 'No past engagement date is on file.'), confidence: 'Computed from the master sheet\'s active rows. A past close date stays in the book and is marked close date passed. Renewals, On Hold, and Disqualified are not included. Amounts use the sheet when it disagrees with HubSpot.', evidenceLabel: 'Open account', evidenceGo: goCo(topDeal.name) },
     ].concat(share && share.count >= 2 ? [{ title: share.count + ' of ' + share.total + ' open deals share a ' + fmtD(share.day) + ' close date', why: 'These deals are grouped by the Phoenix calendar date of the close, not the raw timestamp.', confidence: 'Computed from the same open-pipeline set as the headline.', evidenceLabel: 'Review the ' + share.count + ' deals closing ' + fmtD(share.day), evidenceGo: this.go('accounts', { accounts: 'deals', sort: 'close', closeOn: share.day, search: '', owner: 'Everyone' }) }] : []) : [];
     return {
       ...(() => {
         const mode = st.systemState ?? this.props.systemState ?? 'normal';
         const mobile = String(this.props.mobile ?? '') === 'true';
-        const banners = {
-          'review-running': { bg: 'var(--color-surface)', fg: ink, btnBg: 'transparent', title: 'Review running', text: 'Requested 09:12. Priorities, follow-ups and suggested drafts below are from the collected record until it finishes.', action: 'Details', go: this.go('data') },
-          'review-ready': { bg: 'var(--color-accent-100)', fg: 'var(--color-accent-900)', btnBg: 'transparent', title: 'A newer review is ready', text: 'Prepared today on the collected record. Showing the collected data until you switch; your saved drafts are unaffected.', action: 'Show the new review', go: () => this.setState({ systemState: 'normal', screen: 'briefing' }) },
-          'source-failed': { bg: 'var(--color-accent-100)', fg: 'var(--color-accent-900)', btnBg: 'transparent', title: 'AI visibility did not refresh', text: 'A source collection failed. Source dates are listed on the Data tab.', action: 'See sources', go: this.go('data') },
-          'stale': { bg: 'var(--color-surface)', fg: ink, btnBg: 'transparent', title: 'Newer data collected', text: 'A collection completed at 09:30. Numbers refresh on their own; open records keep the data you were reviewing.', action: 'Refresh now', go: () => this.setState({ systemState: 'normal' }) }
-        };
-        const banner = banners[mode];
+        const banner = null;
         return { isMobile: mobile, topNavDisplay: mobile ? 'none' : 'flex', mainPadBottom: mobile ? '24px' : '56px', isLoading: mode === 'loading', notLoading: mode !== 'loading', bannerShown: !!banner, banner: banner || {}, draftConflict: mode === 'draft-conflict' && s === 'drafts', reloadDraft: () => this.setState({ systemState: 'normal', edits: {} }), keepMine: () => this.setState({ systemState: 'normal' }), skeleton: [{ w1: '70%', w2: '95%', w3: '60%' }, { w1: '55%', w2: '90%', w3: '40%' }, { w1: '65%', w2: '85%', w3: '55%' }, { w1: '50%', w2: '92%', w3: '35%' }],
           mobileNav: [['briefing', 'Today'], ['pipeline', 'Pipeline'], ['accounts', 'Accounts'], ['meetings', 'Meetings'], ['drafts', 'Drafts']].map(([id, label]) => ({ id, label, go: this.go(id), current: activeNav === id ? 'page' : undefined, line: activeNav === id ? accent : 'transparent', color: activeNav === id ? ink : muted, weight: activeNav === id ? 600 : 400 })) };
       })(),
@@ -1617,19 +1628,19 @@ class Component extends DCLogic {
       spendConnected: false, adsConnected: false, webConnected: false,
       showChannelLinkNote: false, channelLinkNote: '', channelFoot: 'Same definitions as the cards: leads by lead date, MQL by meetings booked, SQL by meetings held. A meeting with no lead source is listed as Unattributed so the columns add up to the cards.', lastNoteDisplay: 'table-cell',
       acct, mtg, coverageNote: REC.coverage ? 'This prototype loads ' + REC.coverage.primary + ' accounts (' + REC.coverage.companiesInExtract + ' CRM company records, ' + REC.coverage.foldedRelated + ' duplicates folded), ' + REC.coverage.contacts.toLocaleString('en-US') + ' contacts, ' + REC.coverage.notes + ' notes, ' + REC.coverage.calls + ' calls, ' + REC.coverage.meetings + ' calendar entries, ' + REC.coverage.tasks + ' tasks and ' + REC.coverage.fathomTotal + ' recordings (' + REC.coverage.unmatchedRecordings + ' with companies outside the extract), full transcripts for ' + (REC.coverage.transcripts || 0) + ' of them. ' + (REC.coverage.ownersArchived || 0) + ' of 54 CRM owners are archived and shown as (former). Email bodies were excluded. Stage names for numeric CRM stage ids are inferred from the owner sheets; the connector does not export the stage catalog.' : '',
-      meetingsNote: st.records ? (new Set(allRecs.map(r => r.id)).size) + ' recordings · ' + (REC.unmatchedRecordings || []).length + ' not matched to one of the ' + (REC.companies || []).length + ' accounts in this collection · Upcoming is the CRM calendar' : 'Loading meeting records…',
+      meetingsNote: st.records ? (new Set(allRecs.map(r => r.id)).size) + ' recordings · ' + (REC.unmatchedRecordings || []).length + ' recordings not linked to a company · Upcoming is the HubSpot calendar' : 'Loading meeting records…',
       evidenceOpen: !!st.evidence, openEvidence: goEvidence, ev: evVal, evReviewSample: ev('review-sample'), evRecordingSample: ev('recording-sample'), evTim13: ev('tim-13'), evDraftRefs: ev('draft-refs'), closeEvidence: () => this.setState({ evidence: false }), stop: e => e.stopPropagation(),
       priorities: [],
       isHollie: true,
       briefingEmpty: rankedDeals.length === 0, briefingMetrics, briefingDecisions,
       hasHollieOp: !!hop, noHollieOp: !hop,
-      hollieGenNote: hop ? 'Assistant run ' + fmtDT(hop.generatedAt) + ' · ' + (hop.queue || []).length + ' items in queue' : '',
+      hollieGenNote: hop ? 'Assistant run ' + fmtDT(hop.generatedAt) + ' · ' + hollieQueue.length + (hollieQueue.length === 1 ? ' item' : ' items') + ' in the queue' : '',
       hollieBriefCards, hollieAutonomy,
       hollieQueue, hollieQueueEmpty: hollieQueue.length === 0,
       hollieQueueEmptyNote: hop ? 'Queue is clear — nothing new from the assistant since the last run.' : '',
       hollieNewCount: hollieQueue.filter(q => q.isNew).length,
       hollieNewNote: (() => { const n = hollieQueue.filter(q => q.isNew).length; return n > 0 ? n + ' new or updated since the last run — look for the · new tag.' : 'No queue items changed since the last run.'; })(),
-      hollieQueueGroups: (hop && hop.goals && hop.goals.length ? hop.goals.map(g => ({ label: g.title, status: g.status || '', items: hollieQueue.filter(q => q.goal === g.id) })).filter(g => g.items.length).map(g => ({ ...g, count: g.items.length })) : ['Follow-up draft', 'Stale deal', 'Unworked lead', 'Sheet check', 'CRM update', 'Meeting prep'].map(label => ({ label, status: '', items: hollieQueue.filter(q => q.kind === label) })).filter(g => g.items.length).map(g => ({ ...g, count: g.items.length }))),
+      hollieQueueGroups: (hop && hop.goals && hop.goals.length ? hop.goals.map(g => { const items = hollieQueue.filter(q => q.goal === g.id); const checks = hollieQueue.filter(q => q.kind === 'Sheet check').length; return { label: g.title, status: String(g.status || '').replace(/\b\d+ Sheet checks?\b/, checks + (checks === 1 ? ' Sheet check' : ' Sheet checks')), items }; }).filter(g => g.items.length).map(g => ({ ...g, count: g.items.length })) : ['Follow-up draft', 'Stale deal', 'Unworked lead', 'Sheet check', 'CRM update', 'Meeting prep'].map(label => ({ label, status: '', items: hollieQueue.filter(q => q.kind === label) })).filter(g => g.items.length).map(g => ({ ...g, count: g.items.length }))),
       aiProposals: (st.proposals || []).map((p, i) => ({ p, i })).filter(({ p }) => !isTestItem([p.rationale, p.field, p.proposedValue, p.title, p.company].join(' '))).map(({ p, i }) => ({
         idx: i,
         title: (p.company || 'Account') + ' · ' + (p.field || 'field update'),
@@ -1648,7 +1659,7 @@ class Component extends DCLogic {
       hasAgentBrief, hasAgentBriefNew, hasAgentBriefWatch,
       agentBriefGreeting, agentBriefGenNote, agentBriefParas, agentBriefNew, agentBriefWatch, agentBriefTop, hasAgentBriefTop,
       hasHeartbeat, heartbeatSummary, heartbeatGenNote, heartbeatInsights,
-      hasHeartbeatFixes, heartbeatFixes,
+      hasHeartbeatFixes, heartbeatFixes, pulseNotes, pulseQuestions,
       quickNumbers: [{"label":"New leads","value":"0","delta":"Company record"},{"label":"Marketing qualified","value":"0","delta":"Company record"},{"label":"Sales qualified","value":"0","delta":"Company record"},{"label":"Meetings completed","value":"0","delta":"Company record"},{"label":"Weighted pipeline","value":"0","delta":"Company record"}],
       upcoming: [],
       perfTabs: seg([['demand', 'Demand'], ['spend', 'Spend'], ['web', 'Website & AI']], st.perf, 'perf'),
@@ -1665,8 +1676,6 @@ class Component extends DCLogic {
       marketingIntervals: [], marketingSources: [], marketingEmpty: true, marketingEmptyNote: 'No leads in this week, the last six weeks, or the quarter.',
       stages: stagesAgg.map(([stage, count, amt]) => ({ stage, count, amount: k(amt), w: Math.round(amt / maxStage * 100) + '%' })),
       scorecard: [],
-      movements: dealsRaw.filter(d => (d[7] || '').trim()).slice(0, 6).map(d => ({ name: d[0], meta: d[1] + ' · ' + d[2], change: d[7], go: ev('sheet:' + d[0]) })),
-      movementsEmpty: !dealsRaw.some(d => (d[7] || '').trim()),
       spendMonths: [].map(([month, plan, act, tag]) => ({ month, budget: Math.round(plan).toLocaleString('en-US'), actual: act === null ? '—' : Math.round(act).toLocaleString('en-US'), diff: act === null || tag ? 'Not comparable' : (act - plan >= 0 ? '+' : '−') + Math.round(Math.abs(act - plan)).toLocaleString('en-US'), tag: tag || '', tagDisplay: tag ? 'inline-flex' : 'none' })),
       spendChannels: [].map(([name, amt]) => ({ name, amount: Math.round(amt).toLocaleString('en-US'), w: Math.round(amt / 230640 * 100) + '%' })),
       ads: [],
@@ -1681,7 +1690,7 @@ class Component extends DCLogic {
       dealsEmpty: filteredDeals.length === 0, leadsEmpty: filteredLeads.length === 0, emptyNote: 'Nothing matches' + (q ? ' “' + (st.search || '').trim() + '”' : '') + (st.owner && st.owner !== 'Everyone' ? ' for ' + st.owner : '') + '.',
       dealsCount: filteredDeals.length + ' of ' + dealsRaw.length + ' opportunities', leadsCount: filteredLeads.length + ' of ' + leadsRaw.length + ' recent leads',
       exportLabel: st.accounts === 'leads' ? 'Export ' + filteredLeads.length + ' leads' : st.accounts === 'follow' ? 'Export follow-ups' : 'Export ' + filteredDeals.length + ' opportunities',
-      exportAccounts: () => { if (st.accounts === 'leads') this.csv('leads.csv', ['Company', 'Source', 'Owner', 'Lead date', 'Notes', 'MQL', 'SQL'], filteredLeads); else if (st.accounts === 'follow') this.csv('follow-ups.csv', ['Company', 'Context', 'Reason', 'Next step', 'Uncertainty'], followRaw.map(f => f.slice(0, 5))); else this.csv('opportunities.csv', ['Company', 'Owner', 'Stage', 'ARR', 'Probability', 'Close', 'Days in stage', 'Last note'], dealRows); },
+      exportAccounts: () => { if (st.accounts === 'leads') this.csv('leads.csv', ['Company', 'Source', 'Owner', 'Lead date', 'Notes', 'MQL', 'SQL'], filteredLeads); else if (st.accounts === 'follow') this.csv('follow-ups.csv', ['Company', 'Context', 'Reason', 'Next step', 'Uncertainty'], followRaw.map(f => f.slice(0, 5))); else this.csv('opportunities.csv', ['Company', 'Owner', 'Stage', 'Amount', 'Probability', 'Close', 'Days in stage', 'Last note'], dealRows); },
       exportSources: () => this.csv('leads-by-source.csv', ['Source', 'Leads', 'MQL', 'SQL', 'Period'], pd.src.map(r => [...r.slice(0, 4), pd.range])),
       exportSpend: () => this.csv('spend-2026.csv', ['Month', 'Planned', 'Recorded', 'Note'], []),
       exportAccount: () => this.csv((co.name || 'account').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.csv', ['Date', 'Kind', 'Title', 'Detail'], [['', 'Company', co.name, acct.subtitle], ...co.deals.map(d => ['', 'Deal', d.name, d.stageLabel + ' · ' + money(d.amount) + ' · close ' + d.close]), ...timeline.map(t => [t.date, t.kind, t.title, t.text]), ...co.contacts.map(c => ['', 'Contact', c.name, [c.title, c.email].filter(Boolean).join(' · ')])]),
@@ -1697,8 +1706,6 @@ class Component extends DCLogic {
       editTitle: this.edit('title'), editSubject: this.edit('subject'), editText: this.edit('text'), editRationale: this.edit('rationale'), editType: this.edit('type'), editStatus: this.edit('status'), editRecipients: this.edit('recipients'),
       checking: !!st.checking, checkLabel: st.checking ? 'Checking\u2026' : 'Check for updates', checkNote: st.checked ? 'Checked ' + st.checked + ' · no newer collection than ' + collectedLong : '',
       checkUpdates: () => { this.setState({ checking: true }); setTimeout(() => this.setState({ checking: false, checked: now() }), 1200); },
-      reviewRequested: !!st.reviewRequested, refreshLabel: st.reviewRequested ? 'Review requested' : 'Refresh the review', refreshNote: st.reviewRequested ? 'Requested ' + st.reviewRequested + '. The workspace stays usable while it runs; Today will show "new review available" when it finishes.' : 'Runs on the data already collected. Takes several minutes.',
-      refreshReview: () => this.setState({ reviewRequested: now() }),
       deals: filteredDeals.sort((a, b) => { const sort = st.sort || 'weighted'; if (sort === 'name') return a[0].localeCompare(b[0]); if (sort === 'days') return (b[6] ?? -1) - (a[6] ?? -1); if (sort === 'close') { const key = d => { const m = String(d[5]) === 'Apr 30' ? ['', 'Apr', '26'] : String(d[5]).match(/^(\w{3}) (\d{2})$/); return m ? '20' + m[2] + '-' + ({ Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' })[m[1]] : (d[5] || ''); }; return key(a).localeCompare(key(b)); } return b[3] * b[4] - a[3] * a[4]; }).map(([company, owner, stage, arr, prob, close, days, note]) => ({ company, owner, stage, arr: usd(arr), prob: prob == null ? '—' : prob + '%', close, days: days === null ? '—' : days, daysColor: days !== null && days > 120 ? red : ink, note, go: goCo(company) })),      followUps: followRaw.map(([name, meta, reason, next, uncertainty, draftIndex, queueId]) => ({ name, meta, reason, next, uncertainty, go: goCo(name), openLabel: 'Open account', draftGo: () => { const q = ((hop && hop.queue) || []).find(x => x.id === queueId); if (q && q.draftSeed) seedDraft(q)(); else goCo(name)(); } })),
       leads: filteredLeads.map(([company, source, owner, date, note, mql, sql]) => ({ company, source, owner, date, note, mql: mql || '—', sql: sql || '—' })),
       timeline: [],
@@ -1711,7 +1718,10 @@ class Component extends DCLogic {
         const monthLabel = k => new Date(k + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
         let items;
         if (st.meetings === 'upcoming') {
-          const seenUp = new Set(); const ups = REC.companies.flatMap(c => c.meetings.filter(m => (workspaceModel.dateOnly(m.start) || '') >= todayStr && !workspaceModel.hasStarted(m.start) && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => { const ownerLabel = workspaceModel.displayOwner(m.owner || c.owner); return { when: fmtDT(m.start), sort: m.start, title: m.title, who: workspaceModel.companyName(c.name) + (ownerLabel === 'Unassigned' ? '' : ' · ' + ownerLabel), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: ownerLabel }; }));
+          // Sales and marketing first: accounts with an open new-business deal. Holds and placeholders are calendar clutter.
+          const salesIds = new Set(pipeNow.deals.map(d => { const c = workspaceModel.companyForOpportunity(d, REC); return c && c.id; }).filter(Boolean));
+          const clutter = m => /^\s*(hold\b|placeholder\b)|<<[^>]*>>/i.test(m.title || '');
+          const seenUp = new Set(); const ups = REC.companies.filter(c => st.meetingScope === 'all' || salesIds.has(c.id)).flatMap(c => c.meetings.filter(m => (workspaceModel.dateOnly(m.start) || '') >= todayStr && !workspaceModel.hasStarted(m.start) && !clutter(m) && !seenUp.has(m.id) && seenUp.add(m.id)).map(m => { const ownerLabel = workspaceModel.displayOwner(m.owner || c.owner); return { when: fmtDT(m.start), sort: m.start, title: m.title, who: workspaceModel.companyName(c.name) + (ownerLabel === 'Unassigned' ? '' : ' · ' + ownerLabel), kind: 'Calendar', go: ev('crm-meeting:' + c.id + ':' + m.id), owner: ownerLabel }; }));
           const notes = [];
           items = [...ups, ...notes].sort((a, b) => a.sort.localeCompare(b.sort));
           const g = {}; for (const it of items) { const k = it.sort.slice(0, 10) <= plus(todayStr, 7) ? 'This week' : it.sort.slice(0, 10) <= plus(todayStr, 14) ? 'Next week' : 'Later'; (g[k] = g[k] || []).push(it); }
@@ -1737,9 +1747,9 @@ class Component extends DCLogic {
       draftFeedback: st.draftFeedback || null,
       draftFeedbackClass: st.draftFeedbackClass || 'form-success',
       get meetingsEmpty() { return this.meetingGroups.length === 0; },
-      readingRules: [{ title: 'Missing spend is not zero', text: workspaceModel.missingSpendText(st.marketing && st.marketing.spend) }, { title: 'Forecasts are not commitments', text: 'ARR, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'Leads, MQLs and SQLs come from the Lead Tracker using the definitions below. A lead counts on its first stage date, an MQL on its MQL date and an SQL on its SQL date, so a short period can have more SQLs than leads. Completed meetings come from the CRM and recordings from Fathom.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. Only the Lead Tracker decides qualification.' }, { title: 'Each source has its own date', text: 'HubSpot, Fathom, the master Sheet and the budget workbook use this collection. Website channels cover the last 90 days; AI answers use the latest Otterly report; ad platforms use each report sheet\u2019s window.' }],
+      readingRules: [{ title: 'Missing spend is not zero', text: workspaceModel.missingSpendText(st.marketing && st.marketing.spend) }, { title: 'Forecasts are not commitments', text: 'Amount, probability and close month are what the CRM or the owner sheet says. Buyers have not confirmed them.' }, { title: 'Counts are not a funnel', text: 'Leads, MQLs and SQLs come from the Lead Tracker using the definitions below. A lead counts on its first stage date, an MQL on its MQL date and an SQL on its SQL date, so a short period can have more SQLs than leads. Completed meetings come from the CRM and recordings from Fathom.' }, { title: 'Campaign conversions are not leads', text: 'Ad-platform conversions and outbound replies follow each tool\u2019s definition. Only the Lead Tracker decides qualification.' }, { title: 'Each source has its own date', text: 'HubSpot, Fathom, the master Sheet and the budget workbook use this collection. Website channels cover the last 90 days; AI answers use the latest Otterly report; ad platforms use each report sheet\u2019s window.' }],
       sources: [],
-      definitions: [{ source: 'Inbound', lead: 'Gated content (excl. spam/jobs); simple email form', mql: 'Demo request, meeting booked, pricing, contact form', sql: 'Meeting happened' }, { source: 'Outbound', lead: 'Prospect replied with positive engagement', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'Events', lead: 'Gave us contact info / badge scanned', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'RFP', lead: 'Said they want to send an RFI/RFP', mql: 'Sent RFI/RFP', sql: 'Invitation to start demo' }]
+      definitions: [{ source: 'Inbound', lead: 'Gated content (excl. spam/jobs); simple email form', mql: 'Demo request, meeting booked, pricing, contact form', sql: 'Meeting happened' }, { source: 'Outbound', lead: 'Prospect replied with positive engagement', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'Events', lead: 'Gave us contact info / badge scanned', mql: 'Booked a meeting', sql: 'Meeting happened' }, { source: 'RFP', lead: 'Said they want to send an RFI/RFP', mql: 'Sent RFI/RFP', sql: 'Invitation to start demo' }, { source: 'Webinar', lead: 'Not defined on the Marketing tab. Counted when a Lead Tracker row has source Webinar (registrants).', mql: 'The owner enters an MQL date on the tracker', sql: 'The owner enters an SQL date on the tracker' }, { source: 'Paid', lead: 'Not defined on the Marketing tab. Counted when a Lead Tracker row has source Paid (ad leads).', mql: 'The owner enters an MQL date on the tracker', sql: 'The owner enters an SQL date on the tracker' }]
     };
   }
 }

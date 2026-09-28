@@ -226,7 +226,7 @@ export function computeFacts(verified, records, today, sheetReview) {
   };
 
   const lines = [];
-  lines.push('DATA COLLECTED: ' + (metrics.collectedLabel || 'unknown') + ' (source timestamp ' + (metrics.collectedAt || 'unknown') + '). This is when the files on disk were generated. Repeat this timestamp when you give current figures. Do not describe the figures as newer than this collection.');
+  lines.push('DATA COLLECTED: ' + (metrics.collectedLabel || 'unknown') + ' (source timestamp ' + (metrics.collectedAt || 'unknown') + '). This is when the files on disk were generated. The workspace adds the collection time under every answer, so do not write a collection time yourself. Do not describe the figures as newer than this collection.');
   lines.push('WORKSPACE DATA (real records from the company brain: HubSpot, Fathom, Sheets). Never invent records; say when something is not in the data.');
   lines.push('OPEN BOOK METRICS (America/Phoenix date ' + today + '). ' + metrics.definition + ' These figures are already computed. Repeat them. Do not calculate another open-pipeline total. A renewal, current agreement, On Hold, or Disqualified deal is not an open deal, even when its amount is larger. A past close date on a sheet row stays in the open book.');
   if (metrics.largest) {

@@ -33,7 +33,7 @@ Component.prototype.renderVals=function(){
     const editor=this._commentEditor(p.id),comments=Array.isArray(prefs.comments[p.id])?prefs.comments[p.id]:[];
     const contextRefs=[...new Set([...context.ownerRefs,...context.interaction?.refs||[]])];
     const ownDate=p.lastInteraction?verifiedFormat.date(p.lastInteraction)+' · '+workspaceModel.relativeLabel(p.lastInteraction,workspaceModel.phoenixToday()):'';
-    return {...p,n:String(i+1),owner:context.owner,ownerLabel:context.account?'Account owner':'Owner',
+    return {...p,n:String(i+1),owner:context.owner,ownerLabel:context.account?'Account owner':'Owner',interactionHeading:context.account?'Last interaction':'Latest activity',
       interactionDate:context.account?(context.interaction?verifiedFormat.date(context.interaction.date):'Not recorded'):(ownDate?ownDate+(p.lastInteractionLabel?' · '+p.lastInteractionLabel:''):(p.lastInteractionLabel||'Not recorded')),
       contextLabel:context.interaction?.source||'Owner source',hasContextRefs:contextRefs.length>0,contextGo:()=>this._verifiedOpenRefs(contextRefs,'Owner and last interaction'),
       primary:p.primary.label,primaryGo:this._verifiedTarget(p.primary.target),primaryHref:p.primary.target?.kind==='url'?p.primary.target.href:'',more:(p.more||[]).map(x=>({label:x.label,href:x.target?.kind==='url'?x.target.href:'',go:this._verifiedTarget(x.target)})),hasSecondary:!!p.secondary,secondary:p.secondary?.label||'',secondaryGo:p.secondary?this._verifiedTarget(p.secondary.target):()=>{},
@@ -64,7 +64,7 @@ Component.prototype.renderVals=function(){
   v.prioritiesEmpty=v.priorities.length===0;v.goBriefing=this.go('briefing');
   v.priorityIntro=v.priorities.length?(v.priorities.length+' priorities from the collected record \u00b7 collected '+v.collectedShort+'.'):'No ranked priorities in this collection.';
   v.reviewScope=d.presentation.priorityReview.scope;
-  v.accountOrderNote=s.accounts==='follow'?'Order: saved follow-up review · personal priority ratings do not change this list.':s.accounts==='leads'?'Order: newest lead date first · missing lead dates last.':'Order: one row per account. '+({amount:'Largest amount first. HubSpot probability is not used.',close:'Earliest close date first.',interaction:'Most recent past interaction first. Accounts with no interaction date are last.',name:'Account name, A to Z.'}[s.sort||'amount']||'Largest amount first.')+' Deals with a past close date are listed after current ones.';
+  v.accountOrderNote=s.accounts==='follow'?'Order: saved follow-up review · personal priority ratings do not change this list.':s.accounts==='leads'?'Order: newest lead date first · missing lead dates last.':'Order: one row per account. '+({amount:'Largest amount first.',close:'Earliest close date first.',interaction:'Most recent past interaction first. Accounts with no interaction date are last.',name:'Account name, A to Z.'}[s.sort||'amount']||'Largest amount first.')+' Deals whose close date has passed are listed last, marked “close date passed”.';
   const localNotes=this._priorityNotes();
   const companies=(s.records&&s.records.companies)||[];
   const findCompany=item=>{

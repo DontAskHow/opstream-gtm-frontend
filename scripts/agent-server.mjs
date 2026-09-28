@@ -133,6 +133,18 @@ function userCookie(value, maxAge) {
   return 'gtm_user=' + (value || '') + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + maxAge + secure;
 }
 
+const WRITE_TOOLS = new Set(['propose_crm_update', 'mark_queue_item']);
+
+function isSignedIn(user) {
+  return !!(user && user.email && !user.expired);
+}
+
+function requireSignIn(req, res) {
+  if (isSignedIn(currentUser(req))) return true;
+  res.writeHead(401, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ error: 'Sign in with Google to change the queue.' }));
+  return false;
+}
+
 function currentUser(req) {
   const sid = readCookies(req).gtm_user || '';
   if (!/^[a-f0-9]{32}$/.test(sid)) return null;
@@ -573,7 +585,9 @@ function phoenixNow(now = new Date()) {
 
 async function askOpenAI(message, history, user) {
   ensureContext();
-  const tools = user && user.email && !user.expired ? [...TOOLS, ...GOOGLE_TOOL_SCHEMAS] : TOOLS;
+  // Writing tools change Hollie's queue and proposals, so only a signed-in person gets them.
+  const signed = isSignedIn(user);
+  const tools = signed ? [...TOOLS, ...GOOGLE_TOOL_SCHEMAS] : TOOLS.filter(t => !WRITE_TOOLS.has(t.function && t.function.name));
   const chat = hooks.callChatApi || callChatApi;
   const messages = [
     { role: 'system', content: SYSTEM + googlePrompt(user) + '\n\nRight now it is ' + phoenixNow() + ' in America/Phoenix. Say today, tomorrow or a date relative to that.\n\n' + CTX },
@@ -605,6 +619,8 @@ async function askOpenAI(message, history, user) {
     } else if (name === 'navigate') {
       actions.push({ type: 'navigate', ...args });
       toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Navigation queued in the workspace.' });
+    } else if (WRITE_TOOLS.has(name) && !signed) {
+      toolMessages.push({ role: 'tool', tool_call_id: tc.id, content: 'Sign in with Google to change the queue or propose CRM updates.' });
     } else if (name === 'propose_crm_update') {
       const ok = appendJsonArray(path.join(dataDir, 'crm-proposals.json'), {
         company: String(args.company || ''), deal: String(args.deal || ''),
@@ -649,14 +665,30 @@ async function askOpenAI(message, history, user) {
     }
     if (actions.length) answer += describeActions(actions);
     for (const n of notes) answer += '<p><em>' + escapeHtml(n) + '</em></p>';
-    const answerText = answer.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    return { answer: answer || '<p>I could not produce an answer.</p>', answerText, actions };
+    return stampAnswer(answer, actions);
   }
   let answer = htmlify((choice?.content || '').trim());
   if (!answer && actions.length) answer = describeActions(actions);
   for (const n of notes) answer += '<p><em>' + escapeHtml(n) + '</em></p>';
-  const answerText = answer.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  return { answer: answer || '<p>I could not produce an answer.</p>', answerText, actions };
+  return stampAnswer(answer, actions);
+}
+
+// The collection time comes from run-facts.json, never from the model.
+function dataAsOf() {
+  try {
+    const facts = JSON.parse(fs.readFileSync(path.join(dataDir, 'run-facts.json'), 'utf8'));
+    return facts.collectedAt ? collectedLabel(facts.collectedAt) : null;
+  } catch { return null; }
+}
+
+function stampAnswer(answer, actions) {
+  const clean = String(answer || '<p>I could not produce an answer.</p>')
+    .replace(/<p>[^<]*\b(?:data (?:was )?collected|collected at|data as of)\b[^<]*<\/p>/gi, '')
+    .replace(/\b(?:Data collected|Collected):?\s*[A-Z][a-z]{2} \d{1,2}(?:, \d{4})?\s*·?\s*\d{1,2}:\d{2}\s*[AP]M(?: Phoenix)?\.?/g, '');
+  const asOf = dataAsOf();
+  const stamped = clean + (asOf ? '<p class="data-as-of">Data as of ' + escapeHtml(asOf) + '.</p>' : '');
+  const answerText = stamped.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return { answer: stamped, answerText, actions, dataAsOf: asOf };
 }
 
 function escapeHtml(s) {
@@ -719,6 +751,11 @@ function serveStatic(req, res) {
   fs.createReadStream(file).pipe(res);
 }
 
+// A friendly page that reloads itself, for the rare request that fails.
+function retryPage() {
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GTM Workspace</title><meta http-equiv="refresh" content="5"><style>body{font-family:system-ui,sans-serif;background:#fff;color:#143e32;display:grid;place-items:center;min-height:100vh;margin:0}main{max-width:32rem;padding:24px;text-align:center}a{color:#0f766e;font-weight:600}</style></head><body><main><h1>One moment</h1><p>The workspace did not answer this time. It will try again in 5 seconds.</p><p><a href="">Try again now</a></p></main></body></html>';
+}
+
 function scrubResponse(res) {
   const write = res.write.bind(res), end = res.end.bind(res);
   const clean = chunk => (typeof chunk === 'string' ? scrubText(chunk) : Buffer.isBuffer(chunk) ? scrubBuffer(chunk) : chunk);
@@ -754,11 +791,12 @@ function onRequest(req, res) {
           serveStatic.stamp = { key, generatedAt };
         } else generatedAt = serveStatic.stamp.generatedAt;
       } catch { generatedAt = null; }
-      let runId = null;
-      try { runId = fs.readFileSync(path.join(dataDir, '.published-run'), 'utf8').trim() || null; } catch { runId = null; }
-      if (!runId) { try { runId = JSON.parse(fs.readFileSync(path.join(dataDir, 'run-facts.json'), 'utf8')).runId || null; } catch { runId = null; } }
+      // One run id everywhere: the one inside the data files. The S3 folder name is kept apart.
+      let runId = null, publishedRun = null;
+      try { runId = JSON.parse(fs.readFileSync(path.join(dataDir, 'run-facts.json'), 'utf8')).runId || null; } catch { runId = null; }
+      try { publishedRun = fs.readFileSync(path.join(dataDir, '.published-run'), 'utf8').trim() || null; } catch { publishedRun = null; }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-        .end(JSON.stringify({ generatedAt, runId, label: collectedLabel(generatedAt) }));
+        .end(JSON.stringify({ generatedAt, runId, publishedRun, label: collectedLabel(generatedAt) }));
       return;
     }
     if (url.pathname === '/api/ask' && req.method === 'POST') {
@@ -792,6 +830,7 @@ function onRequest(req, res) {
       return;
     }
     if (url.pathname === '/api/hollie/feedback' && req.method === 'POST') {
+      if (!requireSignIn(req, res)) return;
       // Hollie operator feedback: Dismiss/Done on queue items. Append-only log
       // the operator reads on its next run (anti-nag). Minimal and safe:
       // itemId must look like q:<kind>:<id>, action is dismiss|done, body capped.
@@ -1138,6 +1177,7 @@ function onRequest(req, res) {
       return;
     }
     if (url.pathname === '/api/proposals/decide' && req.method === 'POST') {
+      if (!requireSignIn(req, res)) return;
       // Hollie approves/declines an assistant-proposed CRM change. Workspace-local
       // only: records the decision on the proposal, never writes to HubSpot.
       let raw = '';
@@ -1170,7 +1210,17 @@ function onRequest(req, res) {
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405).end(); return; }
     serveStatic(req, res);
-  })().catch(() => { try { res.writeHead(500).end(); } catch {} });
+  })().catch(err => {
+    console.error('[request] ' + req.method + ' ' + String(req.url || '').split('?')[0] + ': ' + (err && err.message ? err.message : err));
+    try {
+      if (res.headersSent) { res.end(); return; }
+      if (/^\/(api|auth|admin)\//.test(String(req.url || ''))) {
+        res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': '5' }).end(JSON.stringify({ error: 'The workspace hit a problem. Try again in a few seconds.' }));
+      } else {
+        res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '5' }).end(retryPage());
+      }
+    } catch {}
+  });
 }
 
 export function createServer() {

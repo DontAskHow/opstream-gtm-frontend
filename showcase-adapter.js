@@ -1,6 +1,6 @@
 const showcaseStorageKey = 'opstream-gtm-showcase-v1';
 const showcaseOriginal = { mount:Component.prototype.componentDidMount, update:Component.prototype.componentDidUpdate, render:Component.prototype.renderVals };
-const showcaseRouteKeys = ['perf','accounts','meetings','period','search','owner','sort','meetingSearch','meetingOwner','start','end','draft','contributor','leadStage','leadSource','leadFlag','closeOn','meetingKind','draftShow'];
+const showcaseRouteKeys = ['perf','accounts','meetings','period','search','owner','sort','meetingSearch','meetingOwner','start','end','draft','contributor','leadStage','leadSource','leadFlag','dealFilter','meetingScope','closeOn','meetingKind','draftShow'];
 Component.prototype.componentDidMount = function () {
   showcaseOriginal.mount?.call(this);
   try { const raw=localStorage.getItem(showcaseStorageKey),saved=JSON.parse(raw||'null');if(saved&&(!Object.prototype.hasOwnProperty.call(saved,'savedState')||typeof saved!=='object'||Array.isArray(saved)))throw new Error('Invalid browser data');this._legacyBrowserRaw=saved?raw:null; }
@@ -8,13 +8,16 @@ Component.prototype.componentDidMount = function () {
   this._showcaseRestore=()=>{
     const p=new URL(location.href).searchParams;
     const views=['briefing','pipeline','accounts','account','meetings','meeting','drafts','data'];
-    const patch={screen:views.includes(p.get('view'))?p.get('view'):'briefing',evidence:false,perf:'demand',accounts:'deals',meetings:'upcoming',period:'quarter',search:'',owner:'Everyone',sort:'amount',meetingSearch:'',meetingOwner:'Everyone',start:'',end:'',draft:0,contributor:null,leadStage:null,leadSource:null,leadFlag:null,closeOn:null,meetingKind:null,draftShow:null};
+    const patch={screen:views.includes(p.get('view'))?p.get('view'):'briefing',evidence:false,perf:'demand',accounts:'deals',meetings:'upcoming',period:'quarter',search:'',owner:'Everyone',sort:'amount',meetingSearch:'',meetingOwner:'Everyone',start:'',end:'',draft:0,contributor:null,leadStage:null,leadSource:null,leadFlag:null,dealFilter:null,meetingScope:null,closeOn:null,meetingKind:null,draftShow:null};
     for(const k of showcaseRouteKeys) if(p.has(k)) patch[k]=k==='draft'?Number(p.get(k)):p.get(k);
-    for(const [key,values] of Object.entries({perf:['demand','spend','web'],accounts:['deals','follow','leads'],meetings:['upcoming','past'],period:['six','quarter','year','custom'],sort:['weighted','close','days','name']}))if(!values.includes(patch[key]))patch[key]=values[0];
+    if(!p.has('sort')){try{const saved=localStorage.getItem('gtm-sort');if(saved)patch.sort=saved;}catch{}}
+    for(const [key,values] of Object.entries({perf:['demand','spend','web'],accounts:['deals','follow','leads'],meetings:['upcoming','past'],period:['six','quarter','year','custom'],sort:['amount','close','interaction','name']}))if(!values.includes(patch[key]))patch[key]=values[0];
     if(!Number.isInteger(patch.draft)||patch.draft<0)patch.draft=0;
     if(!['lead','mql','sql'].includes(patch.contributor))patch.contributor=null;
     if(!['mql-no-sql','no-mql'].includes(patch.leadStage))patch.leadStage=null;
     if(!['hot','live'].includes(patch.leadFlag))patch.leadFlag=null;
+    if(patch.dealFilter!=='quiet')patch.dealFilter=null;
+    if(patch.meetingScope!=='all')patch.meetingScope=null;
     if(!['completed','recordings'].includes(patch.meetingKind))patch.meetingKind=null;
     if(patch.closeOn&&!/^\d{4}-\d{2}-\d{2}$/.test(patch.closeOn))patch.closeOn=null;
     for(const key of ['start','end'])if(patch[key]&&!/^\d{4}-\d{2}-\d{2}$/.test(patch[key]))patch[key]='';
@@ -47,6 +50,7 @@ Component.prototype.componentDidUpdate = function (...args) {
   showcaseOriginal.update?.apply(this,args);
   const st=this.state;
   this._saveBrowserState();
+  if(st.sort){try{if(localStorage.getItem('gtm-sort')!==st.sort)localStorage.setItem('gtm-sort',st.sort);}catch{}}
   if(!this._showcaseRestoring){
     const u=new URL(location.href);u.search='';u.searchParams.set('view',st.screen||'briefing');
     for(const k of showcaseRouteKeys)if(st[k]!=null&&st[k]!=='')u.searchParams.set(k,st[k]);
@@ -73,7 +77,6 @@ Component.prototype.renderVals = function () {
   // There is no on-demand rebuild in the browser. Check for updates reloads
   // the files already on the server. A background watch does the same when
   // records.json carries a new generatedAt.
-  v.reviewRequested=false;v.refreshReview=null;v.refreshLabel='';
   v.checkLabel=this.state.checking?'Checking…':'Check for updates';
   v.checkNote=this.state.showcaseCheck||'';
   v.checkUpdates=async()=>{

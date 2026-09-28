@@ -200,12 +200,17 @@ Component.prototype.renderVals = function() {
   if(!s.verified)return v;
   if(s.screen==='meeting'){
     const recording=[...s.records.companies.flatMap(c=>c.recordings),...s.records.unmatchedRecordings].find(r=>r.id===s.meetingId);
-    this._readableMeeting=recording?.refs.map(ref=>s.verifiedEvidence[ref]).find(record=>record?.content)?.content||'';
+    const raw=recording?.refs.map(ref=>s.verifiedEvidence[ref]).find(record=>record?.content)?.content||'';
+    // A line in another script is summarised in its own language by Fathom; say so instead of pasting it.
+    const foreign=line=>{const letters=line.match(/\p{L}/gu)||[];return letters.length>12&&letters.filter(ch=>/[A-Za-z]/.test(ch)).length/letters.length<0.8;};
+    let hidden=0;
+    const kept=raw.split('\n').filter(line=>{if(foreign(line)){hidden++;return false;}return true;}).map(line=>line.replace(/\[(?![^\]]*\]\()/g,''));
+    this._readableMeeting=kept.join('\n')+(hidden?'\n\n_'+hidden+' summary line'+(hidden===1?' is':'s are')+' in another language. Open the recording in Fathom to read '+(hidden===1?'it':'them')+'._':'');
   }else this._readableMeeting='';
   const colleagues=(s.verified.meta.owners||[]).filter(p=>!p.former&&p.email),names=new Map(colleagues.map(p=>[p.id,p.name]));
   for(const p of [...v.priorities,...v.lessPriorities]) {
     const comments=(s.sharedComments||[]).filter(c=>c.priorityId===p.id),editor=this._commentEditor(p.id),suggestions=this._mentionCandidates(editor),selected=Math.min(editor.mentionIndex||0,suggestions.length-1);
-    p.commentCount=comments.length;p.commentLabel=comments.length?'Comments ('+comments.length+')':'Add a comment';p.starLabel=p.important?'Remove priority star':'Prioritize';p.starFill=p.important?'currentColor':'none';p.lessActionLabel=p.notImportant?'Show in priorities':'Show less';
+    p.commentCount=comments.length;p.commentCountLabel=comments.length?comments.length+(comments.length===1?' comment':' comments'):'Comment';p.commentLabel=comments.length?'Comments ('+comments.length+')':'Add a comment';p.starLabel=p.important?'Remove priority star':'Prioritize';p.starFill=p.important?'currentColor':'none';p.lessActionLabel=p.notImportant?'Show in priorities':'Show less';
     const importantGo=p.importantGo,lessGo=p.lessGo,clearRating=p.clearRating;
     p.importantGo=()=>{if(ready)importantGo();};p.lessGo=()=>{if(ready)lessGo();};p.clearRating=()=>{if(ready)clearRating();};
     p.comments=comments.map(c=>({...c,anchorId:'shared-comment-'+c.id,date:shortDate(c.updatedAt||c.createdAt),tags:c.tags.map(id=>'@'+(names.get(id)||id)).join(' · '),hasTags:!!c.tags.length,

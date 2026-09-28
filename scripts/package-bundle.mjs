@@ -32,6 +32,8 @@ function copyFiltered(src, dest) {
     return;
   }
   if (SKIP_FILE.has(path.basename(src))) return;
+  // End-to-end checks run in CI and CloudShell, not on the server.
+  if (/^check-.*\.(mjs|py|cjs)$/.test(path.basename(src))) return;
   if (src.endsWith('.pyc')) return;
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(src, dest);

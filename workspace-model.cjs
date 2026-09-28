@@ -95,7 +95,8 @@ const workspaceModel = {
     const hit=book[stripped]||book[s]||book[String(stripped).toLowerCase()];
     if(typeof hit==='string'&&hit.trim())return {label:this.canonicalPerson(hit.trim()), title:'', key:stripped, named:true};
     if(/^\d+$/.test(stripped)||/^[a-f0-9-]{8,}$/i.test(stripped))return {label:'Unassigned', title:'This HubSpot owner has no name in the owners list', key:'Unassigned', named:false};
-    return {label:this.canonicalPerson(stripped), title:'', key:stripped, named:true};
+    const person=this.canonicalPerson(this.personLabel(stripped));
+    return {label:person, title:'', key:person, named:true};
   },
   // "Doug", "doug.daniels@opstream.ai" and "Doug Daniels" are one person when
   // the collected directory has exactly one full name for them.
@@ -132,10 +133,6 @@ const workspaceModel = {
     const s=String(source??'').trim();
     if(!s||/^(hubspot|crm|integration|unknown|unknown source)$/i.test(s))return 'Unknown source';
     return s;
-  },
-  // A verification fixture is not a customer deal.
-  isBrowserLabel(value) {
-    return /mozilla firefox\b/i.test(String(value||''));
   },
   isTestRecord(deal) {
     const blob=[deal?.name,deal?.dealName,deal?.company,deal?.title,deal?.rationale].filter(Boolean).join(' ');
@@ -174,8 +171,8 @@ const workspaceModel = {
   // 'excluded' is everything else: On Hold, Disqualified, closed, renewal, or not on the sheet.
   listStatus(deal,today) {
     today=today||this.phoenixToday();
-    if(this.isOpenPipeline(deal,today))return 'open';
-    if(this.isOpenPipeline({...deal,close:this.addDays(today,30)},today))return 'past';
+    // A past close date stays in the open pipeline but lists after current deals.
+    if(this.isOpenPipeline(deal,today)){const close=this.dateOnly(deal.close);return close&&close<today?'past':'open';}
     return 'excluded';
   },
   closeLabel(value) {
@@ -318,11 +315,12 @@ const workspaceModel = {
   // Company shown on a pipeline row. Associations win. A placeholder title is not a company.
   pipelineCompanyName(companyName, dealName, fallbackName) {
     const fromCompany=this.accountName(companyName, dealName);
+    if(fromCompany&&this.isDomainName(fromCompany)&&this.dealLabel(dealName||fallbackName))return this.dealLabel(dealName||fallbackName);
     if(fromCompany)return fromCompany;
     const raw=this.companyName(companyName);
-    if(raw&&!this.isPlaceholderName(raw)&&!this.isBrowserLabel(raw))return raw;
+    if(raw&&!this.isPlaceholderName(raw))return raw;
     const other=this.companyName(fallbackName);
-    if(other&&!this.isPlaceholderName(other)&&!this.isBrowserLabel(other))return other;
+    if(other&&!this.isPlaceholderName(other))return other;
     return 'No company on the Sheet row';
   },
   renewalStage(deal) {
@@ -332,7 +330,7 @@ const workspaceModel = {
     return shown;
   },
   // HubSpot-shaped open check. The sheet, not this function, defines the book.
-  legacyOpenPipeline(deal,today) {
+  hubspotLooksOpen(deal,today) {
     if(!deal||deal.closed===true)return false;
     if(this.isTestRecord(deal))return false;
     const blob=this.stageBlob(deal);
@@ -354,7 +352,7 @@ const workspaceModel = {
   isHubspotOnlyOpen(deal,today) {
     if(this.sheetClass(deal))return false;
     if(this.isRenewalRecord(deal))return false;
-    return this.legacyOpenPipeline(deal,today);
+    return this.hubspotLooksOpen(deal,today);
   },
   moneySum(deals) {
     let total=0;
@@ -496,6 +494,112 @@ const workspaceModel = {
     if(!leads)return {cpl:'no leads in this window',cplNote:''};
     return {cpl:'$'+Math.round(spend/leads).toLocaleString('en-US'),cplNote:'Recorded spend spread by day.'};
   },
+  // The numbers Hollie opens with. Every figure comes from collected data; a
+  // missing target says so rather than inventing one.
+  kpiSummary({opportunities, records, trackerRows, marketing, sheetReview, today}) {
+    today=today||this.phoenixToday();
+    const book=this.pipelineTotals(opportunities,today);
+    const q=this.periodBounds('quarter',null,null,today);
+    const quarter=this.leadCounts(trackerRows,q.start,q.end);
+    const thisWeek=this.leadCounts(trackerRows,this.addDays(today,-6),today);
+    const lastWeek=this.leadCounts(trackerRows,this.addDays(today,-13),this.addDays(today,-7));
+    const change=k=>({now:thisWeek[k],before:lastWeek[k],delta:thisWeek[k]-lastWeek[k]});
+    const month=today.slice(0,7),buckets=((sheetReview&&sheetReview.forecast)||{}).buckets||{};
+    const commitTarget=((buckets.commit||{}).targets||{})[month];
+    const commitStages=((buckets.commit||{}).stages||[]).map(x=>String(x).toLowerCase());
+    const commitDeals=book.deals.filter(d=>this.dateOnly(d.close)&&this.dateOnly(d.close).slice(0,7)===month&&this.dateOnly(d.close)>=today&&commitStages.some(st=>String(d.stageLabel||d.stage||'').toLowerCase().includes(st)));
+    // By owner: open pipeline (Sheet owner), completed CRM meetings this quarter, leads' MQL and SQL this quarter.
+    const owners=new Map(),row=name=>{const k=this.displayOwner(name);if(!owners.has(k))owners.set(k,{owner:k,deals:0,amount:0,weighted:0,meetings:0,mql:0,sql:0});return owners.get(k);};
+    for(const d of book.deals){const r=row(d.owner);r.deals++;r.amount+=Number(d.amount)||0;r.weighted+=this.weighted(d)||0;}
+    for(const m of this.activityFromRecords(records).meetings)if(this.inRange(m.start,q.start,q.end)&&/complete/i.test(m.outcome||''))row(m.owner).meetings++;
+    for(const l of trackerRows||[]){if(this.inRange(l.mql,q.start,q.end))row(l.owner).mql++;if(this.inRange(l.sql,q.start,q.end))row(l.owner).sql++;}
+    const byOwner=[...owners.values()].filter(r=>r.deals||r.meetings||r.mql||r.sql).sort((a,b)=>b.amount-a.amount||b.meetings-a.meetings);
+    // Marketing-sourced: an open deal whose company is on the Lead Tracker.
+    const key=v=>String(v||'').toLowerCase().replace(/\b(inc|llc|ltd|gmbh|corp|corporation|co|plc|sa|ag|limited|group)\b/g,'').replace(/[^a-z0-9]/g,'');
+    const leadByKey=new Map();for(const l of trackerRows||[]){const k=key(l.trackerName||l.name);if(k&&!leadByKey.has(k))leadByKey.set(k,l);}
+    const sourced=book.deals.map(d=>({deal:d,lead:leadByKey.get(key(d.name))||leadByKey.get(key(d.companyRecord&&d.companyRecord.name))})).filter(x=>x.lead);
+    // Won and lost this quarter: closed HubSpot deals on the accounts in this collection.
+    const closed=(records&&records.companies||[]).flatMap(c=>(c.deals||[]).filter(d=>d.closed&&this.inRange(d.close,q.start,q.end)).map(d=>({...d,company:c.name})));
+    const won=closed.filter(d=>/won/i.test(d.stageLabel||d.stage||'')),lost=closed.filter(d=>/lost/i.test(d.stageLabel||d.stage||''));
+    const sum=list=>list.reduce((a,d)=>a+(Number(d.amount)||0),0);
+    const spend=(marketing&&marketing.spend)||{};
+    const roi=((marketing&&marketing.shows)||{}).eventRoi||{rows:[]};
+    return {today,quarter:q,book:{count:book.count,amount:book.openAmount,weighted:book.weighted},
+      commit:{amount:sum(commitDeals),deals:commitDeals.map(d=>this.companyName(d.name)),target:commitTarget==null?null:commitTarget},
+      leads:{quarter,week:{leads:change('leads'),mql:change('mql'),sql:change('sql')},targets:null},
+      byOwner,sourced:{count:sourced.length,amount:sum(sourced.map(x=>x.deal)),rows:sourced.map(x=>({company:this.companyName(x.deal.name),amount:x.deal.amount,source:this.sourceLabel(x.lead.source),leadDate:this.firstTouch(x.lead)}))},
+      won:{count:won.length,amount:sum(won),rows:won.map(d=>({company:d.company,amount:d.amount,close:d.close}))},
+      lost:{count:lost.length,amount:sum(lost),rows:lost.map(d=>({company:d.company,amount:d.amount,close:d.close}))},
+      spend:{text:this.spendVersusPlan(spend),connected:!!spend.connected},
+      events:roi.rows||[]};
+  },
+  // 'Applied Materials, - New Deal' -> 'Applied Materials'; 'Known - New Deal' -> 'Known'.
+  dealLabel(name) {
+    return String(name??'').replace(/\s*[-–—]\s*new deal\b.*$/i,'').replace(/\s+/g,' ').trim().replace(/[,;]+$/,'').trim();
+  },
+  // A domain used as a company name ('tapi.com') is not a name.
+  isDomainName(value) {
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(String(value??'').trim());
+  },
+  // Markdown links and escapes from pasted notes, as plain words.
+  plainMarkdown(text) {
+    return String(text??'').replace(/\[([^\]]*)\]\([^)]*\)/g,'$1').replace(/\[([^\]]*)\]\(\[?link:[^)]*\)?/gi,'$1').replace(/\\([~*_`#[\]()-])/g,'$1').replace(/\*\*([^*]+)\*\*/g,'$1').replace(/(^|\s)\[(?=\S)/g,'$1').replace(/\s{2,}/g,' ').trim();
+  },
+  // 'COMPUTER_SOFTWARE' -> 'Computer software'.
+  humanEnum(value) {
+    const t=String(value??'').trim();if(!t)return '';
+    return /^[A-Z0-9_]+$/.test(t)?t.charAt(0)+t.slice(1).toLowerCase().replace(/_/g,' '):t;
+  },
+  // Model prose with raw ISO timestamps rewritten as Phoenix times.
+  phoenixProse(text) {
+    return String(text??'').replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?/g,m=>this.formatDateTime(m));
+  },
+  // 'maya graff' and 'Maya Graff' are one person.
+  personLabel(value) {
+    let raw=String(value??'').replace(/\s+/g,' ').trim();
+    if(raw&&raw===raw.toLowerCase()&&!raw.includes('@'))raw=raw.split(' ').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
+    return raw;
+  },
+  naturalDay(iso) {
+    const d=this.dateOnly(iso);if(!d)return '';
+    const [,m,day]=d.split('-').map(Number);
+    return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]+' '+day;
+  },
+  teamFirstNames(records) {
+    const out=new Set();
+    for(const n of Object.values((records&&records.owners)||{}))if(String(n).trim())out.add(String(n).trim().split(/\s+/)[0].toLowerCase());
+    for(const c of (records&&records.companies)||[])for(const r of c.recordings||[]){
+      const host=this.personLabel(r.recordedBy);if(host&&!host.includes('@'))out.add(host.split(' ')[0].toLowerCase());
+      for(const i of r.invitees||[])if(/@opstream\.ai$/i.test(i.email||'')&&i.name)out.add(String(i.name).split(/\s+/)[0].toLowerCase());
+    }
+    return [...out].filter(n=>n.length>=3);
+  },
+  // An item for our own team ('Send missing Drive doc to Maya', 'Ping Martin re: code change').
+  internalTodo(action, teamFirst) {
+    const text=String(action||'');
+    if(/\binternal(?:ly)?\b|\bslack\b|\bjira\b|\bticket\b/i.test(text))return true;
+    return (teamFirst||[]).some(first=>new RegExp('\\b(?:to|with|ping|ask|tell|remind|loop in|sync with|cc|for)\\s+'+first.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','i').test(text));
+  },
+  // An action item written to the customer, in the second person.
+  customerCopy(action, guests) {
+    const esc=t=>t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    let text=String(action||'').trim().replace(/\\([~*_`#[\]()-])/g,'$1');
+    for(const g of guests||[]){
+      const name=String(g.name||'').trim();if(!name)continue;const first=name.split(/\s+/)[0];
+      text=text.replace(new RegExp('^(?:email|send|follow up with|share with|reply to)\\s+'+esc(name)+'\\b[:,]?\\s*(?:the\\s+|a\\s+)?','i'),'');
+      text=text.replace(new RegExp('^(?:'+esc(name)+'|'+esc(first)+')\\s+(?:to|will)\\s+','i'),"You'll ");
+      text=text.replace(new RegExp('\\b(?:'+esc(name)+'|'+esc(first)+')\\b','g'),'you').replace(/\b(?:she|he)'ll\b/gi,"you'll");
+    }
+    text=text.replace(/^(?:opstream|we)\s+(?:to|will)\s+/i,"We'll ");
+    if(/^(?:email|send|fix|backfill|update|share|schedule|set up|book|prepare|draft|follow up|confirm|provide|review)\b/i.test(text))text="We'll "+text.charAt(0).toLowerCase()+text.slice(1);
+    return text.charAt(0).toUpperCase()+text.slice(1);
+  },
+  // Records carry closed:true|false. A stage named Closed … is closed either way.
+  dealIsOpen(deal) {
+    if(!deal)return false;
+    if(deal.closed===true)return false;
+    return !/^closed\b/i.test(String(deal.stageLabel||deal.stage||''));
+  },
   // HubSpot record pages for deal, company and contact refs ('hubspot:deals:123').
   hubspotLinks(refs) {
     const types={deals:['0-3','deal'],companies:['0-2','company'],contacts:['0-1','contact']};
@@ -595,7 +699,7 @@ const workspaceModel = {
         mql:this.formatMetric(b.counts.mql/(b.average?6:1),b.average),
         sql:this.formatMetric(b.counts.sql/(b.average?6:1),b.average),
         total:b.counts,
-        note:b.average?'Per week over the last 42 days. Not the six-week total.':b.key==='week'?this.formatDate(b.start)+' – '+this.formatDate(b.end):'Since '+this.formatDate(b.start)
+        note:b.average?'Per week over the last 42 days. Not the six-week total.':''
       })),
       sources
     };
@@ -692,6 +796,7 @@ const workspaceModel = {
       if(deal.stage)s.stage=String(deal.stage).split(' (')[0].trim();
       if(deal.owner)s.owner=String(deal.owner).trim();
       if(deal.company)s.company=String(deal.company).trim();
+      if(deal.probability!=null&&deal.probability!=='')s.probability=Number(deal.probability);
     }
     return out;
   },
@@ -713,7 +818,8 @@ const workspaceModel = {
       next.stage=ov.stage; next.stageLabel=ov.stage;
     }
     if(ov.owner&&next.owner!==ov.owner){next.hubspotOwner=next.owner; next.owner=ov.owner; diffs.push('owner');}
-    if(ov.company&&!this.isBrowserLabel(ov.company)&&next.name!==ov.company)next.name=ov.company;
+    if(ov.probability!=null&&Number.isFinite(ov.probability)){const sheetP=this.probabilityFraction(ov.probability);if(this.probabilityFraction(next.probability)!==sheetP){next.hubspotProbability=next.probability;diffs.push('probability');}next.probability=sheetP;}
+    if(ov.company&&next.name!==ov.company)next.name=ov.company;
     next.sheetClass=this.sheetClassName(ov.stage||next.stage);
     if(diffs.length)next.hubspotDiffers=diffs;
     return next;

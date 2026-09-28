@@ -7,10 +7,10 @@ function runStep(label,cmd,args){
 async function main(){
  fs.mkdirSync('out/assets',{recursive:true});
  for(const name of ['support.js','_ds','assets'])fs.cpSync('source/'+name,'out/'+name,{recursive:true});
- const modules=["workspace-model.cjs","workspace-domain.cjs","showcase-adapter.js","data-bindings.js","workspace-controls.js","collaboration.js","marketing-home.js","demo-mode.js","agent.js"];
+ const modules=["workspace-model.cjs","workspace-domain.cjs","showcase-adapter.js","data-bindings.js","workspace-controls.js","collaboration.js","marketing-home.js","account-session.js","agent.js"];
  const html=fs.readFileSync('source/workspace.html','utf8').replace('/* FRONTEND_MODULES */',()=>modules.map(f=>fs.readFileSync(f,'utf8')).join('\n'));
  fs.writeFileSync('out/index.html',html);fs.mkdirSync('out/gtm',{recursive:true});fs.writeFileSync('out/gtm/index.html',html);
- fs.mkdirSync('out/data',{recursive:true});fs.writeFileSync('out/data/records.json',JSON.stringify({companies:[],unmatchedRecordings:[]}));fs.writeFileSync('out/data/transcripts.json','{}');
+ fs.mkdirSync('out/data',{recursive:true});fs.writeFileSync('out/data/records.json',JSON.stringify({companies:[],unmatchedRecordings:[]}));
 // Real data from the company brain takes precedence when the private database
 // is present. Synthetic demo data is the fallback so a public checkout builds
 // without that database or any contact records.
@@ -18,7 +18,7 @@ const hasBrain=fs.existsSync(brainDb);
 let usedBrain=false;
 if(hasBrain&&fs.existsSync('scripts/brain-data.mjs'))usedBrain=runStep('brain-data','node',['scripts/brain-data.mjs']);
 else if(hasBrain&&fs.existsSync('scripts/brain-data.py'))usedBrain=runStep('brain-data','python3',['scripts/brain-data.py']);
-if(!usedBrain){console.log('No company brain database; using synthetic demo data.');require('./scripts/synthetic-data.cjs');}
+if(!usedBrain)console.log('No company brain database; out/data has no collection until the refresh publishes a run.');
 // The operator refreshes after data generation (brain or synthetic).
 // Before it runs, the sheet review reconciles the manual pipeline sheet
 // against HubSpot when the brain database is present.

@@ -146,10 +146,10 @@ async function publicRun(width, tag) {
   check(tag + ' priorities come from the operator', cards.length === hollie.marketingPriorities.length && cards.length >= 3,
     cards.length + ' vs ' + hollie.marketingPriorities.length);
   check(tag + ' first priority is this week\'s shows', thisWeek.length > 0 && thisWeek.every(s => cards[0].includes(s.name)));
-  check(tag + ' show priority uses relative days', /start this coming week/.test(cards[0]) && /\((tomorrow|today|in \d days|on now[^)]*)\)/.test(cards[0]), cards[0].split('\n')[1]);
+  check(tag + ' show priority says where each show is', thisWeek.every(sh => new RegExp(sh.name + ' (is on now|starts (today|tomorrow|Mon|Tue|Wed|Thu|Fri|Sat|Sun)|ends today)').test(cards[0])), cards[0].split('\n')[1]);
   check(tag + ' owner is Hollie with lead owners apart', /Owner: Hollie\b/.test(cards[0]) && !/Hollie \(marketing\)/.test(cards.join(' ')) && /Lead owners:/.test(cards.join(' ')));
   check(tag + ' spend is in dollars', /\$429K/.test(cards.join(' ')) && !/Currency is not stated/.test(cards.join(' ')));
-  check(tag + ' cards show owner and last interaction', cards.every(t => /Owner:/.test(t) && /Last interaction:/.test(t) && /Next step:/.test(t)));
+  check(tag + ' cards show owner and latest activity', cards.every(t => /Owner:/.test(t) && /(Last interaction|Latest activity):/.test(t) && /Next step:/.test(t)));
   await shot(page, 'marketing-home-' + tag);
   const events = page.locator('#events-shows');
   const eventsText = await events.innerText();
@@ -274,7 +274,7 @@ async function checkTotals(page) {
   const unworkedCard = (await page.locator('section[aria-label="Priorities"] .priority-card', { hasText: 'have no MQL date yet' }).first().innerText().catch(() => '')).match(/(\d[\d,]*) leads have no MQL date yet/);
   await page.getByRole('button', { name: 'Sales & CS', exact: true }).click();
   const salesText = await page.locator('main').innerText();
-  const salesUnworked = (salesText.match(/(\d[\d,]*) unworked/) || [])[1];
+  const salesUnworked = (salesText.match(/(\d[\d,]*) with no MQL date yet/) || [])[1];
   check('unworked leads agree', unworkedCard && salesUnworked && num(unworkedCard[1]) === num(salesUnworked), (unworkedCard && unworkedCard[1]) + ' vs ' + salesUnworked);
   check('sales brief repeats the quarter', salesText.includes(facts.leads + ' leads / ' + facts.mql + ' MQL / ' + facts.sql + ' SQL'));
   await goView(page, 'Pipeline');

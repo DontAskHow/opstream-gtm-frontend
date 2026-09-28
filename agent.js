@@ -1,11 +1,11 @@
 // Opstream GTM agent — AI assistant panel with agentic workspace actions.
-// Inlined by build.cjs after demo-mode.js. Browser only.
+// Inlined by build.cjs after account-session.js. Browser only.
 (function () {
   'use strict';
 
   // Capture the live Component instance so actions can use the app's own
   // methods (_newWorkspaceDraft, _saveWorkspaceDraft, go, _verifiedAccount).
-  // Chains after the other adapters (showcase, collaboration, demo).
+  // Chains after the other adapters (showcase, collaboration, account session).
   var prevMount = Component.prototype.componentDidMount;
   Component.prototype.componentDidMount = function () {
     try { window.__gtmAgentHost = this; } catch (e) {}
@@ -115,7 +115,7 @@
     panel.setAttribute('aria-label', 'GTM AI assistant');
     panel.innerHTML =
       '<div id="gtm-agent-head"><div style="flex:1"><h2>GTM Assistant</h2>' +
-      '<p>Grounded in live workspace data. Drafts follow-ups, preps meetings, proposes CRM updates — never sends, never changes your CRM.</p></div>' +
+      '<p>Answers from the collected workspace data; each answer says when it was collected. Drafts follow-ups and preps meetings. Never sends and never changes your CRM.</p></div>' +
       '<button id="gtm-agent-close" aria-label="Close assistant">&times;</button></div>' +
       '<div id="gtm-agent-msgs" role="log" aria-live="polite"></div>' +
       '<div id="gtm-agent-sugg"></div>' +

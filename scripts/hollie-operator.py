@@ -97,14 +97,71 @@ def mostly_english(text):
     return latin / len(letters) >= 0.8
 
 
+MONTH_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def readable_company(company, deal_name=None):
+    """'tapi.com' is a domain; the deal name ('TAPI (Teva)') says who the company is."""
+    name = str(company or "").strip()
+    if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", name, re.I) and deal_name:
+        return re.sub(r"\s*[-–—]\s*new deal\b.*$", "", str(deal_name), flags=re.I).strip().rstrip(",;") or name
+    return name
+
+
+def natural_day(iso):
+    """'2026-09-28' -> 'Sep 28'."""
+    try:
+        d = date.fromisoformat(str(iso)[:10])
+    except ValueError:
+        return str(iso or "")
+    return "%s %d" % (MONTH_ABBR[d.month - 1], d.day)
+
+
+def person_label(value):
+    """'maya graff' and 'Maya Graff' are one person."""
+    raw = " ".join(str(value or "").split())
+    if raw and raw == raw.lower() and "@" not in raw:
+        raw = " ".join(w[:1].upper() + w[1:] for w in raw.split())
+    return raw
+
+
+def call_owner(recording):
+    """Whoever ran the call signs its follow-up."""
+    who = person_label((recording or {}).get("recordedBy"))
+    return "" if "@" in who else who
+
+
+def internal_todo(action, team_first):
+    """An item for our own team ('Send missing Drive doc to Maya', 'Ping Martin re: code change')."""
+    text = str(action or "")
+    if re.search(r"\binternal(?:ly)?\b|\bslack\b|\bjira\b|\bticket\b", text, re.I):
+        return True
+    for first in team_first:
+        if re.search(r"\b(?:to|with|ping|ask|tell|remind|loop in|sync with|cc|for)\s+%s\b" % re.escape(first), text, re.I):
+            return True
+    return False
+
+
 def customer_copy(action, invitees):
-    """An internal to-do addressed to the customer: 'Email Christine Sparbeck demo recording' -> 'Demo recording'."""
-    text = str(action).strip()
+    """An action item written to the customer: second person, no markdown escapes.
+
+    'Email Christine Sparbeck demo recording' -> 'Demo recording'; 'Juella to share the list' -> "You'll share the list".
+    """
+    text = re.sub(r"\\([~*_`#\[\]()\-])", r"\1", str(action).strip())
     for inv in invitees or []:
         name = str(inv.get("name") or "").strip()
-        if name:
-            text = re.sub(r"^(?:email|send|follow up with|share with|reply to)\s+" + re.escape(name) + r"\b[:,]?\s*(?:the\s+|a\s+)?",
-                          "", text, flags=re.I)
+        if not name:
+            continue
+        first = name.split()[0]
+        text = re.sub(r"^(?:email|send|follow up with|share with|reply to)\s+" + re.escape(name) + r"\b[:,]?\s*(?:the\s+|a\s+)?",
+                      "", text, flags=re.I)
+        text = re.sub(r"^(?:%s|%s)\s+(?:to|will)\s+" % (re.escape(name), re.escape(first)), "You'll ", text, flags=re.I)
+        # Written to them, so they are "you", not their name.
+        text = re.sub(r"\b(?:%s|%s)\b" % (re.escape(name), re.escape(first)), "you", text)
+        text = re.sub(r"\b(?:she|he)'ll\b", "you'll", text, flags=re.I)
+    text = re.sub(r"^(?:opstream|we)\s+(?:to|will)\s+", "We'll ", text, flags=re.I)
+    if re.match(r"(?:email|send|fix|backfill|update|share|schedule|set up|book|prepare|draft|follow up|confirm|provide|review)\b", text, re.I):
+        text = "We'll " + text[:1].lower() + text[1:]
     return text[:1].upper() + text[1:] if text else str(action)
 
 
@@ -264,6 +321,20 @@ def main():
     def with_sheet(deal):
         return apply_sheet_deal(dict(deal or {}), overrides)
 
+    # First names of our own team: HubSpot owners, call hosts and @opstream.ai invitees.
+    team_first_names = set()
+    for name in list((records.get("owners") or {}).values()):
+        team_first_names.add(str(name).split()[0].lower() if str(name).split() else "")
+    for c_ in companies:
+        for r_ in c_.get("recordings") or []:
+            host = person_label(r_.get("recordedBy"))
+            if host and "@" not in host:
+                team_first_names.add(host.split()[0].lower())
+            for inv in r_.get("invitees") or []:
+                if str(inv.get("email") or "").lower().endswith("@opstream.ai") and inv.get("name"):
+                    team_first_names.add(str(inv["name"]).split()[0].lower())
+    team_first_names = {n for n in team_first_names if len(n) >= 3}
+
     def signer_for(company):
         for deal in (company or {}).get("deals") or []:
             owner = real_owner_name(with_sheet(deal).get("owner") or deal.get("owner"))
@@ -304,7 +375,7 @@ def main():
                 invitees = r_.get("invitees") or []
                 if is_internal_meeting(c.get("name"), r_.get("title"), invitees):
                     continue
-                actions = call_actions(r_)
+                actions = [a for a in call_actions(r_) if not internal_todo(a, team_first_names)]
                 if not actions:
                     continue
                 d = day(r_.get("date"))
@@ -319,43 +390,31 @@ def main():
                 ext = [i for i in invitees if i.get("email") and not str(i.get("email")).lower().endswith("@opstream.ai")]
                 first = first_name(ext[0].get("name") or ext[0].get("email")) if ext else ""
                 greeting = ("Hi %s," % first) if first else "Hi,"
-                summ_bits = []
-                for p in (r_.get("summary") or []):
-                    if isinstance(p, dict) and p.get("t") == "h2":
-                        continue
-                    raw = p.get("x") if isinstance(p, dict) else p
-                    bit = " ".join(clean_md(str(raw or "")).split())
-                    if bit and mostly_english(bit):
-                        summ_bits.append(bit)
-                    if len(summ_bits) >= 2:
-                        break
-                summ = " ".join(summ_bits)[:420]
+                said = natural_day(d)
                 body_lines = [greeting, "",
-                              "Following our call on %s, here are the action items we captured:" % d,
-                              ""]
+                              "Thanks for your time on %s. Here is what we agreed to follow up on:" % said, ""]
                 body_lines += ["- " + customer_copy(a, ext) for a in actions]
-                if summ:
-                    body_lines += ["", summ]
                 if r_.get("shareUrl") and any("record" in a.lower() for a in actions):
                     body_lines += ["", "The recording of our call: %s" % r_["shareUrl"]]
-                body_lines += ["", "Happy to pick a time to go through these together."]
-                signed = signer_for(c)
-                if signed:
-                    body_lines += ["", signed]
+                body_lines += ["", "Happy to find a time to go through these together."]
+                signed = call_owner(r_) or signer_for(c)
+                body_lines += ["", "Best,", (signed + "\nOpstream") if signed else "Opstream"]
                 draft_seed = {
-                    "subject": "Following up — %s" % shown,
+                    "subject": "%s – next steps from our %s call" % (shown, said),
                     "body": "\n".join(body_lines),
                     "recipients": ", ".join(dict.fromkeys(str(i["email"]).strip().lower() for i in ext[:3])),
                 }
                 item_hash = short_hash("followup", rid, "|".join(actions), r_.get("title"))
                 follow_rows.append({
                     "id": item_id, "kind": "followup_draft", "audience": "sales",
-                    "title": "Draft follow-up: %s%s" % (
-                        r_.get("title") or shown,
-                        " (%s), %d action item%s" % (d, len(actions), "" if len(actions) == 1 else "s")),
+                    "title": "Draft follow-up: %s (%s), %d action item%s" % (
+                        r_.get("title") or shown, said, len(actions), "" if len(actions) == 1 else "s"),
+                    "owner": call_owner(r_) or signer_for(c) or "",
+                    "recordingId": r_.get("id"), "callTitle": r_.get("title"), "callDate": d,
+                    "actionCount": len(actions), "actions": actions,
                     "company": shown, "companyId": c.get("id"),
-                    "why": ("%d customer-facing action item%s from the %s call are still open on the recording."
-                            % (len(actions), "" if len(actions) == 1 else "s", d)),
+                    "why": ("%d customer-facing action item%s from the %s call %s still open on the recording."
+                            % (len(actions), "" if len(actions) == 1 else "s", said, "is" if len(actions) == 1 else "are")),
                     "confidence": "high",
                     "confidenceNote": "Action items are Fathom's own. Resolution is not tracked.",
                     "evidence": refs, "drawerKeys": drawer_keys(refs, c.get("id")),
@@ -426,7 +485,7 @@ def main():
             "company": shown, "companyId": c.get("id"),
             "deal": d_.get("name"), "dealId": did,
             "stage": d_.get("stageLabel"), "amount": d_.get("amount"),
-            "daysQuiet": dq, "lastEngagement": last,
+            "daysQuiet": dq, "lastEngagement": last, "close": day(d_.get("close")),
             "why": why, "confidence": conf, "confidenceNote": conf_note,
             "evidence": refs, "drawerKeys": drawer_keys(refs, c.get("id")),
             "_hash": short_hash("stale", did, d_.get("stage"), last),
@@ -498,7 +557,7 @@ def main():
             candidates.append({
                 "id": "q:sheet_review:" + did, "kind": "sheet_review",
                 "title": "Which is right for %s?" % (m0.get("name") or "this deal"),
-                "company": m0.get("company") or (c.get("name") if c else None),
+                "company": readable_company(m0.get("company") or (c.get("name") if c else None), m0.get("name")),
                 "companyId": c.get("id") if c else None,
                 "why": ("The pipeline sheet and HubSpot disagree on %s: %s. "
                         "The sheet is the team's working copy, so one of the two "
@@ -545,12 +604,27 @@ def main():
                 best = (rank, b)
         co_bucket[c.get("id")] = best[1] if best else None
 
+    this_month = today.strftime("%Y-%m")
+    sheet_by_id = {str(d.get("id")): d for d in review.get("deals") or []}
+
+    def commit_goal(stage, close):
+        """The commit is deals in a commit stage whose Sheet close date is still ahead this month."""
+        close = day(close)
+        if close and close < today.isoformat():
+            return "forecast"
+        if bucket_of(stage) == "commit":
+            return "commit" if close and close[:7] == this_month else "pipeline"
+        return bucket_of(stage) or "pipeline"
+
     for it in candidates:
         k = it["kind"]
-        if k in ("sheet_review", "crm_update"):
+        if k == "sheet_review":
+            sd = sheet_by_id.get(str(it.get("id") or "").split(":")[-1].replace("only-", "")) or {}
+            it["goal"] = "commit" if commit_goal(sd.get("stage"), sd.get("close")) == "commit" else "forecast"
+        elif k == "crm_update":
             it["goal"] = "forecast"
         elif k == "stale_deal":
-            it["goal"] = bucket_of(it.get("stage")) or "pipeline"
+            it["goal"] = commit_goal(it.get("stage"), it.get("close"))
         elif k in ("followup_draft", "meeting_prep"):
             it["goal"] = co_bucket.get(it.get("companyId")) or "pipeline"
         else:
@@ -600,7 +674,7 @@ def main():
                 "title": "Prep for %s (%s)" % (m.get("title") or "meeting", d),
                 "company": c.get("name"), "companyId": c.get("id"),
                 "why": "Meeting is coming up; a prep brief is ready below.",
-                "confidence": "high", "confidenceNote": "Calendar entry from the CRM extract.",
+                "confidence": "high", "confidenceNote": "Calendar entry from HubSpot.",
                 "evidence": refs, "drawerKeys": drawer_keys(refs, c.get("id")),
                 "_hash": short_hash("mtgprep", mid, m.get("start")),
                 "_sort": d,
@@ -805,7 +879,7 @@ def main():
         for r_ in c.get("recordings") or []:
             if is_internal_meeting(c.get("name"), r_.get("title"), r_.get("invitees") or []):
                 continue
-            acts = call_actions(r_)
+            acts = [a for a in call_actions(r_) if not internal_todo(a, team_first_names)]
             if not acts:
                 continue
             d = day(r_.get("date"))
@@ -816,19 +890,16 @@ def main():
                 continue
             rec_by_date.append((d, c, r_, acts))
     rec_by_date.sort(key=lambda t: t[0], reverse=True)
-    # Follow-ups owed are the calls that have a follow-up draft in the queue.
-    queued = {q.get("id") for q in queue if q.get("kind") == "followup_draft"}
+    # Follow-ups owed are exactly the follow-up drafts in the queue: one per call.
     owed = []
-    for (d, c, r_, acts) in rec_by_date:
-        if "q:followup_draft:" + str(r_.get("id") or "").replace("recording-", "") not in queued:
+    for q in queue:
+        if q.get("kind") != "followup_draft":
             continue
-        refs = ok_refs(r_.get("refs"))
         owed.append({
-            "recordingId": r_.get("id"), "title": r_.get("title"), "date": d,
-            "company": c.get("name"), "companyId": c.get("id"),
-            "actionCount": len(acts), "actions": [" ".join(str(a).split()) for a in acts[:3]],
-            "queueId": "q:followup_draft:" + str(r_.get("id") or "").replace("recording-", ""),
-            "evidence": refs, "drawerKeys": drawer_keys(refs, c.get("id")),
+            "recordingId": q.get("recordingId"), "title": q.get("callTitle") or q.get("title"), "date": q.get("callDate"),
+            "company": q.get("company"), "companyId": q.get("companyId"),
+            "actionCount": q.get("actionCount"), "actions": (q.get("actions") or [])[:3],
+            "queueId": q.get("id"), "evidence": q.get("evidence") or [], "drawerKeys": q.get("drawerKeys") or [],
         })
     brief_followups = {"items": owed,
                        "note": None if owed else "No unresolved Fathom action items in the last %d days." % RECENT_CALL_DAYS}
@@ -903,7 +974,7 @@ def main():
                 "purpose": purpose,
                 "takeaways": takeaways,
                 "invitees": invitees,
-                "actions": call_actions(r0),
+                "actions": [a for a in call_actions(r0) if not internal_todo(a, team_first_names)],
             }
         # The agenda carries the last call's action items: the same list and
         # count as its follow-up draft and queue card.
@@ -915,7 +986,7 @@ def main():
         if unresolved:
             lc = last_call or {}
             agenda.append("Open actions from %s (%s): %d item%s" % (
-                lc.get("title") or "the last call", lc.get("date") or "recent",
+                lc.get("title") or "the last call", natural_day(lc.get("date")) if lc.get("date") else "recent",
                 len(unresolved), "" if len(unresolved) == 1 else "s"))
         for dd in open_d[:3]:
             # displayLine is reconciled in brain-data: stage label when known,
@@ -938,7 +1009,11 @@ def main():
             blob = re.sub(r"[^a-z0-9]", "", str(company_name or "").lower())
             return 2 if dom and len(dom) > 2 and dom in blob else 0
         attendees, seen_att = [], {}
-        for p in (c.get("contacts") or []):
+        # The meeting's own invitees come first; account contacts only fill in when HubSpot lists none.
+        titles = {str(p.get("email") or "").lower(): p.get("title") for p in c.get("contacts") or []}
+        invited = [{"name": i.get("name") or i.get("email"), "title": titles.get(str(i.get("email") or "").lower()), "email": i.get("email")}
+                   for i in m.get("invitees") or [] if not str(i.get("email") or "").lower().endswith("@opstream.ai")]
+        for p in (invited or c.get("contacts") or []):
             nm = (p.get("name") or "").strip()
             if not nm:
                 continue
@@ -1082,13 +1157,13 @@ def main():
          "%s sitting in %s" % (usd0(bucket_value["bestcase"]),
                                 (buckets.get("bestcase") or {}).get("label") or "best-case stages")),
         ("pipeline", "Keep the pipeline fed",
-         "%s of the open book is in early stages (%s) · %d unworked leads" % (
+         "%s of the open pipeline is in early stages (%s) · %d leads with no MQL date" % (
              usd0(bucket_value["pipeline"]),
              ", ".join((buckets.get("pipeline") or {}).get("stages") or ["SQL, discovery, demo"]).replace("sql", "SQL"),
              unworked_total)),
         ("forecast", "Keep the forecast honest",
-         "%d sheet-vs-HubSpot mismatches · %d open deals missing amounts" % (
-             n_mismatch, n_no_amount)),
+         "%d Sheet check%s (the Sheet and HubSpot disagree) · %d open deal%s missing an amount" % (
+             n_mismatch, "" if n_mismatch == 1 else "s", n_no_amount, "" if n_no_amount == 1 else "s")),
     ]
     goals = [{"id": gid, "title": title, "status": status}
              for gid, title, status in goal_defs

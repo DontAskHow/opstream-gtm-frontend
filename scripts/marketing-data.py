@@ -104,6 +104,19 @@ def date_label(start, end):
     return "%s %d – %s %d" % (MONTHS[a.month - 1], a.day, MONTHS[b.month - 1], b.day)
 
 
+def month_notes(months, vendors):
+    """Why a month ran well over plan: its three largest payments, as the workbook records them."""
+    out = []
+    for m in months:
+        if m.get("actual") is None or not m.get("planned") or m["actual"] < 1.5 * m["planned"]:
+            continue
+        paid = sorted(((a["amount"], v["vendor"]) for v in vendors for a in v.get("months") or [] if a["month"] == m["month"]), reverse=True)[:3]
+        if paid:
+            out.append({"month": m["month"], "over": round(m["actual"] - m["planned"], 2),
+                        "largest": [{"vendor": v, "amount": a} for a, v in paid]})
+    return out
+
+
 def budget(db, year):
     rows = tab_rows(db, BUDGET, "Actuals")
     if not rows:
@@ -138,13 +151,14 @@ def budget(db, year):
         })
     channels = {}
     for v in vendors:
-        key = v["channel"] or "Unassigned"
+        key = v["channel"] or "No channel set in the workbook"
         channels[key] = round(channels.get(key, 0) + v["total"], 2)
     today = phoenix_today()
     missing = [m for m in months if m["actual"] is None and m["planned"] and m["month"] <= today[:7]]
     return {
         "connected": True,
         "source": "Channels_Marketing Budget · Actuals tab",
+        "monthNotes": month_notes(months, vendors),
         "sheet": sheet_link(db, BUDGET, "Actuals"),
         "currency": None,
         "months": months,
@@ -241,6 +255,7 @@ def shows(db, spend, leads, today, year):
         show["leads"] = summarize_leads(from_show)
         show["meetingRequests"] = summarize_leads(requests)
         show["leadRows"] = [lead_row(l) for l in from_show]
+        show["people"] = people_counts(show["leadRows"])
         show["requestRows"] = [lead_row(l) for l in requests]
         if start and end:
             if end < today:
@@ -259,7 +274,49 @@ def shows(db, spend, leads, today, year):
     unattributed = [{"vendor": v["vendor"], "amount": v["total"], "months": v["months"]}
                     for v in event_rows if not any(match_vendor(v["vendor"], s) for s in items)]
     return {"connected": True, "source": "Channels_Marketing Budget · Final Annual Show calendar",
-            "items": ahead + past, "unattributed": unattributed}
+            "items": ahead + past, "unattributed": unattributed, "eventRoi": event_roi(ahead + past, unattributed)}
+
+
+def event_roi(shows, unattributed):
+    """Event cost next to event leads. Every match says how it was made; nothing is guessed.
+
+    A payment named for the show counts as recorded. An organizer's single payment
+    shared across its shows (KonnectHouse) is one pooled row. A payment whose amount
+    equals exactly one unmatched show's package price is matched by amount.
+    """
+    rows, used = [], set()
+    by_org = {}
+    for s in shows:
+        paid = (s.get("recorded") or {}).get("amount")
+        org_pay = s.get("organizerPayments") or []
+        if paid is None and org_pay:
+            key = tuple(sorted((p["vendor"], p["amount"]) for p in org_pay))
+            by_org.setdefault(key, []).append(s)
+            continue
+        rows.append({"name": s["name"], "shows": [s["id"]], "planned": s.get("planned"), "paid": paid,
+                     "how": "Actuals row names the show" if paid is not None else None,
+                     "leads": s["leads"]["count"], "mql": s["leads"]["mql"], "sql": s["leads"]["sql"], "end": s.get("end")})
+    for key, group in by_org.items():
+        rows.append({"name": "%s events (%d)" % (group[0].get("organizer") or key[0][0], len(group)),
+                     "shows": [s["id"] for s in group], "planned": sum(s.get("planned") or 0 for s in group) or None,
+                     "paid": sum(a for _v, a in key), "how": "one %s payment shared by these shows" % key[0][0],
+                     "leads": sum(s["leads"]["count"] for s in group), "mql": sum(s["leads"]["mql"] for s in group),
+                     "sql": sum(s["leads"]["sql"] for s in group), "end": max((s.get("end") or "") for s in group) or None})
+    for pay in unattributed:
+        open_rows = [r for r in rows if r["paid"] is None and r["planned"] == pay["amount"] and r["name"] not in used]
+        if not open_rows:
+            continue
+        # Two identical payments and two shows at that price match one each, earliest show first.
+        target = sorted(open_rows, key=lambda r: r.get("end") or "9999")[0]
+        target["paid"], target["how"] = pay["amount"], "%s payment equals the package price" % pay["vendor"]
+        used.add(target["name"])
+    for r in rows:
+        r["costPerLead"] = round(r["paid"] / r["leads"]) if r.get("paid") and r.get("leads") else None
+    rows = [r for r in rows if r.get("planned") or r.get("paid") or r.get("leads")]
+    matched = sum(r["paid"] or 0 for r in rows)
+    return {"rows": sorted(rows, key=lambda r: -(r.get("paid") or r.get("planned") or 0)),
+            "unmatched": [p for p in unattributed if not any(r["how"] and p["vendor"] in r["how"] for r in rows)],
+            "paidTotal": matched}
 
 
 def show_aliases(show):
@@ -325,6 +382,20 @@ def attribute_leads(shows, leads, today):
                 out[id(l)] = (show, "lead")
                 break
     return out
+
+
+def people_counts(rows):
+    """One count of people per show, used by the card, the CSV button and the campaign draft."""
+    def key(r):
+        return (r.get("email") or "").lower() or (("%s|%s" % (r.get("company"), r.get("contact"))).lower() if r.get("contact") else "row|%s" % r.get("company"))
+    everyone = {key(r) for r in rows}
+    held_rows = [r for r in rows if (r.get("flags") or {}).get("hot") or (r.get("flags") or {}).get("dead")]
+    held = {key(r) for r in held_rows}
+    campaign = {key(r) for r in rows if key(r) not in held}
+    emails = {(r.get("email") or "").lower() for r in rows if r.get("email") and key(r) in campaign}
+    return {"people": len(everyone), "campaign": len(campaign), "withEmail": len(emails),
+            "held": len(held), "heldHot": len({key(r) for r in held_rows if (r.get("flags") or {}).get("hot")}),
+            "rows": len(rows)}
 
 
 def lead_row(l):
@@ -403,9 +474,9 @@ def checklist(show):
                   if show["recorded"]["rows"] else "No Actuals row names this show"})
     req = show["meetingRequests"]
     if req["count"]:
-        items.append({"stage": "prep", "label": "Meetings booked with prospects who asked",
+        items.append({"stage": "prep", "label": "Prospects who asked to meet have an MQL date",
                       "done": req["mql"] >= req["count"],
-                      "detail": "%d asked to meet at the show; %d have an MQL date on the Lead Tracker" % (req["count"], req["mql"])})
+                      "detail": "%d asked to meet at the show; %d %s an MQL date on the Lead Tracker" % (req["count"], req["mql"], "has" if req["mql"] == 1 else "have")})
     if show["checklistNote"]:
         items.append({"stage": "prep", "label": show["checklistNote"], "done": False,
                       "detail": "From the show calendar's checklist column"})
@@ -609,6 +680,7 @@ def web(db):
     noise += sum(p_.get("sessions") or 0 for p_ in pages if str(p_.get("name") or "").lower() == "(not set)")
     return {"connected": bool(channels or pages), "channels": channels, "pages": pages[:10], "fetchedAt": fetched,
             "channelsWindow": window, "untaggedSessions": noise,
+            "channelsFetchedAt": (rows.get("channels_90d") or (None, None))[1],
             "reason": None if (channels or pages) else
             "GA4 channel and landing-page reports have not been collected yet. They are added on the next refresh."}
 

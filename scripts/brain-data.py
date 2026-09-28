@@ -17,7 +17,7 @@ import sqlite3, json, os, re, sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gtm_metrics import (apply_sheet_owner_names, customer_facing_action, date_only, is_browser_label, is_open_pipeline,
+from gtm_metrics import (apply_sheet_owner_names, customer_facing_action, date_only, is_open_pipeline,
                          phoenix_today, probability_fraction, stage_display)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -137,6 +137,14 @@ def merge_duplicate_companies(companies):
         keep['mergedIds'] = [c['id'] for c in group[1:]]
         out.append(keep)
     return out, merged
+
+
+def person_name(value):
+    """Fathom can store a host as 'maya graff'. People are named the same way everywhere."""
+    raw = " ".join(str(value or "").split())
+    if raw and raw == raw.lower() and "@" not in raw:
+        raw = " ".join(w[:1].upper() + w[1:] for w in raw.split())
+    return raw
 
 
 def clean_company_name(name):
@@ -269,6 +277,17 @@ def main():
                     want(otype, oid)
     for did in all_deal_ids:
         want('deals', did)
+    # Who each HubSpot meeting invited: its own contact associations.
+    meeting_ids = sorted({oid for cid in scoped_company_ids for oid in comp_links[cid].get('meetings', [])})
+    meeting_contacts = {}
+    for i in range(0, len(meeting_ids), ch):
+        batch = meeting_ids[i:i + ch]
+        ph = ','.join('?' * len(batch))
+        for mid, contact_id in q(cur, f"select from_id, to_id from hubspot_associations where from_type='meetings' and to_type='contacts' and from_id in ({ph})", batch):
+            meeting_contacts.setdefault(str(mid), [])
+            if str(contact_id) not in meeting_contacts[str(mid)]:
+                meeting_contacts[str(mid)].append(str(contact_id))
+                want('contacts', str(contact_id))
 
     objects = {}
     for otype, oids in need.items():
@@ -421,7 +440,7 @@ def main():
 
     def contact_names(links):
         names = set()
-        for oid in links.get('contacts', []):
+        for oid in dict.fromkeys(links.get('contacts', [])):
             op, _ = objects['contacts'].get(oid, (None, None))
             full = squash('%s%s' % ((op or {}).get('firstname') or '', (op or {}).get('lastname') or ''))
             if full:
@@ -439,20 +458,20 @@ def main():
         title that matches the domain or a contact's company, then the contacts'
         company property, then linked meeting titles."""
         raw = clean_company_name(p.get('name'))
-        if raw and not is_domain(raw) and not is_browser_label(raw) and not not_a_customer_name(raw, links):
+        if raw and not is_domain(raw) and not not_a_customer_name(raw, links):
             return raw
         root = domain_root(p.get('domain')) or (raw.split('.')[0].lower() if is_domain(raw) else '')
         votes = []
-        for oid in links.get('contacts', []):
+        for oid in dict.fromkeys(links.get('contacts', [])):
             op, _ = objects['contacts'].get(oid, (None, None))
             cn = clean_company_name((op or {}).get('company'))
-            if cn and not is_browser_label(cn) and not is_domain(cn) and not not_a_customer_name(cn, links):
+            if cn and not is_domain(cn) and not not_a_customer_name(cn, links):
                 votes.append(cn)
         heads = []
-        for oid in links.get('deals', []):
+        for oid in dict.fromkeys(links.get('deals', [])):
             dp, _ = objects['deals'].get(oid, (None, None))
             head = clean_company_name(re.split(r'\s[-–—|]\s', str((dp or {}).get('dealname') or ''), maxsplit=1)[0])
-            if head and not is_domain(head) and not is_browser_label(head) and not not_a_customer_name(head, links) \
+            if head and not is_domain(head) and not not_a_customer_name(head, links) \
                and head.lower() not in ('renewal', 'current agreement'):
                 heads.append(head)
         matching = [h for h in heads if root and len(root) > 2 and root in squash(h)]
@@ -464,7 +483,7 @@ def main():
             return sorted(set(voted), key=lambda h: (-sum(ch.isupper() for ch in h), -voted.count(h), h))[0]
         if votes and len(set(votes)) == 1:
             return votes[0]
-        for oid in links.get('meetings', []):
+        for oid in dict.fromkeys(links.get('meetings', [])):
             op, _ = objects['meetings'].get(oid, (None, None))
             t = (op or {}).get('hs_meeting_title') or ''
             pair = re.match(r'^\s*opstream\s*<>\s*(.+?)(\s+(weekly|sync|check-in|call|meeting))?\s*$', t, re.I)
@@ -481,6 +500,18 @@ def main():
         if raw and not not_a_customer_name(raw, links):
             return raw
         return root.capitalize() if root else 'Company not named in HubSpot'
+
+    def meeting_invitees(oid):
+        people = []
+        for contact_id in meeting_contacts.get(str(oid), []):
+            cp, _ = objects['contacts'].get(contact_id, (None, None))
+            if not cp:
+                continue
+            email = str(cp.get('email') or '').strip().lower()
+            name = person_name(' '.join(x for x in (cp.get('firstname'), cp.get('lastname')) if x)) or None
+            if email and not any(x['email'] == email for x in people):
+                people.append({'name': name, 'email': email})
+        return people
 
     for cid in sorted(scoped_company_ids):
         p, fetched = objects['companies'].get(cid, ({}, None))
@@ -531,7 +562,7 @@ def main():
 
         # contacts
         contact_objs = []
-        for oid in links.get('contacts', []):
+        for oid in dict.fromkeys(links.get('contacts', [])):
             op, ofetched = objects['contacts'].get(oid, (None, None))
             if op is None:
                 continue
@@ -547,7 +578,7 @@ def main():
 
         # notes
         note_objs = []
-        for oid in links.get('notes', []):
+        for oid in dict.fromkeys(links.get('notes', [])):
             op, ofetched = objects['notes'].get(oid, (None, None))
             if op is None:
                 continue
@@ -564,7 +595,7 @@ def main():
 
         # tasks
         task_objs = []
-        for oid in links.get('tasks', []):
+        for oid in dict.fromkeys(links.get('tasks', [])):
             op, ofetched = objects['tasks'].get(oid, (None, None))
             if op is None:
                 continue
@@ -579,7 +610,7 @@ def main():
 
         # calls
         call_objs = []
-        for oid in links.get('calls', []):
+        for oid in dict.fromkeys(links.get('calls', [])):
             op, ofetched = objects['calls'].get(oid, (None, None))
             if op is None:
                 continue
@@ -598,7 +629,7 @@ def main():
 
         # hubspot meetings
         mtg_objs = []
-        for oid in links.get('meetings', []):
+        for oid in dict.fromkeys(links.get('meetings', [])):
             op, ofetched = objects['meetings'].get(oid, (None, None))
             if op is None:
                 continue
@@ -612,12 +643,13 @@ def main():
                              'start': op.get('hs_meeting_start_time'),
                              'outcome': op.get('hs_meeting_outcome'),
                              'owner': owner_label(op.get('hubspot_owner_id')),
+                             'invitees': meeting_invitees(oid),
                              'refs': [mref]})
         mtg_objs.sort(key=lambda m: m['start'] or '', reverse=True)
 
         # emails (cap 20, newest first)
         email_rows = []
-        for oid in links.get('emails', []):
+        for oid in dict.fromkeys(links.get('emails', [])):
             op, ofetched = objects['emails'].get(oid, (None, None))
             if op is None:
                 continue
@@ -776,7 +808,7 @@ def main():
                       'recordedBy': rec_by_name})
         rec = {'id': f'recording-{rid_s}', 'nativeId': rid_s, 'title': title,
                'date': rec_start, 'minutes': mins,
-               'recordedBy': rec_by_name or rec_by_email,
+               'recordedBy': person_name(rec_by_name) or rec_by_email,
                'invitees': [{'name': (i.get('name') if isinstance(i, dict) else None),
                              'email': (i.get('email') if isinstance(i, dict) else None)}
                             for i in invitees if isinstance(i, dict)],
@@ -834,8 +866,6 @@ def main():
         cname = ''
         if cid:
             cname = company_name_by_id.get(cid) or ''
-            if is_browser_label(cname):
-                cname = ''
         if re.fullmatch(r'renewal|current agreement', cname or '', flags=re.I):
             cname = ''
         if not cname:
@@ -998,7 +1028,7 @@ def main():
            'engagedSessions': None, 'pageViews': None, 'aiCited': None,
            'aiMentioned': None, 'aiCount': None, 'aiEnd': None,
            'visits': [], 'channels': [], 'pages': []}
-    ga = q(cur, 'select result_json, fetched_at from ga4_reports limit 1')
+    ga = q(cur, "select result_json, fetched_at from ga4_reports where report_key='sessions_30d'")
     if ga:
         try:
             res = json.loads(ga[0][0])

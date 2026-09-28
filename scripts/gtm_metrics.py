@@ -153,11 +153,6 @@ def probability_fraction(value):
     return min(n, 100) / 100 if n > 1 else n
 
 
-def is_browser_label(value):
-    """A browser user-agent string stored as a company name, not the company."""
-    return re.search(r"mozilla firefox\b", str(value or ""), flags=re.I) is not None
-
-
 def is_test_record(deal):
     blob = " ".join(str((deal or {}).get(k) or "") for k in ("name", "dealName", "company", "title", "rationale"))
     return "system verification test" in blob.lower()
@@ -339,7 +334,7 @@ def renewal_book(deals, today):
     }
 
 
-def legacy_open_pipeline(deal, today):
+def hubspot_looks_open(deal, today):
     """HubSpot-shaped open check. The sheet, not this function, defines the book."""
     if not deal or deal.get("closed") is True:
         return False
@@ -378,7 +373,7 @@ def is_hubspot_only_open(deal, today):
         return False
     if is_renewal_record(deal):
         return False
-    return legacy_open_pipeline(deal, today)
+    return hubspot_looks_open(deal, today)
 
 
 def _money_sum(deals):
@@ -923,6 +918,8 @@ def sheet_overrides(review):
             slot["owner"] = str(deal["owner"]).strip()
         if deal.get("company"):
             slot["company"] = str(deal["company"]).strip()
+        if deal.get("probability") not in (None, ""):
+            slot["probability"] = float(deal["probability"])
     for row in (review or {}).get("mismatches") or []:
         did = str(row.get("dealId") or "").replace("deal-", "")
         if not did:
@@ -978,8 +975,14 @@ def apply_sheet_deal(deal, overrides):
         nxt["hubspotOwner"] = nxt.get("owner")
         nxt["owner"] = ov["owner"]
         diffs.append("owner")
+    if ov.get("probability") is not None:
+        sheet_p = probability_fraction(ov["probability"])
+        if probability_fraction(nxt.get("probability")) != sheet_p:
+            nxt["hubspotProbability"] = nxt.get("probability")
+            diffs.append("probability")
+        nxt["probability"] = sheet_p
     sheet_company = ov.get("company")
-    if sheet_company and not is_browser_label(sheet_company) and nxt.get("name") != sheet_company:
+    if sheet_company and nxt.get("name") != sheet_company:
         nxt["name"] = sheet_company
     nxt["sheetClass"] = sheet_class_name(ov.get("stage") or nxt.get("stage"))
     if diffs:
@@ -1087,8 +1090,6 @@ def account_name(company_name_value, deal_name=None):
     name = company_name(company_name_value)
     deal = company_name(deal_name)
     if is_junk_name(name) or is_junk_name(deal):
-        return None
-    if is_browser_label(name):
         return None
     if re.fullmatch(r"renewal|current agreement", name or "", flags=re.I):
         return None

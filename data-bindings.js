@@ -5,9 +5,12 @@ const verifiedFormat = {
   percent:n=>n==null?'—':(n*100).toLocaleString('en-US',{maximumFractionDigits:1})+'%',
   add:(d,n)=>new Date(Date.parse(d+'T12:00:00Z')+n*86400000).toISOString().slice(0,10)
 };
-const verifiedEvidenceText=e=>[e.content,e.fields&&Object.keys(e.fields).length?Object.entries(e.fields).map(([key,value])=>key+': '+(typeof value==='object'?JSON.stringify(value):value)).join('\n'):null].filter(Boolean).join('\n\n');
+// Field values as people read them: Phoenix times and words instead of CRM enums.
+const readableValue=value=>{if(value==null||value==='')return '—';if(typeof value==='object')return JSON.stringify(value);const t=String(value);if(/^[A-Z][A-Z0-9_]+$/.test(t)&&t.includes('_'))return t.charAt(0)+t.slice(1).toLowerCase().replace(/_/g,' ');return workspaceModel.phoenixProse(t);};
+const verifiedEvidenceText=e=>[workspaceModel.phoenixProse(e.content||''),e.fields&&Object.keys(e.fields).length?Object.entries(e.fields).map(([key,value])=>key+': '+readableValue(value)).join('\n'):null].filter(Boolean).join('\n\n');
 Component.prototype._loadVerified = async function () {
-  const read=async name=>{const r=await fetch('data/'+name+'.json',{cache:'no-store'});if(!r.ok)throw new Error('Collection unavailable');return r.json();};
+  // A brief server or network hiccup is retried three times before the page says so.
+  const read=async name=>{let last;for(let attempt=0;attempt<4;attempt++){try{const r=await fetch('data/'+name+'.json',{cache:'no-store'});if(r.ok)return r.json();last=new Error(r.status===404?'Collection unavailable':'The workspace did not answer (HTTP '+r.status+'). It will keep trying.');if(r.status===404)break;}catch{last=new Error('The workspace did not answer. Check your connection; it will keep trying.');}await new Promise(res=>setTimeout(res,600*(attempt+1)));}throw last;};
   try {
     const [verified,records,evidence,draftSeeds,sheetLabels]=await Promise.all(['verified','records','evidence','draft-seeds','evidence-sheet-labels'].map(read));
     if(verified.snapshotId!==records.verifiedSnapshotId)throw new Error('Collection versions differ');
@@ -62,7 +65,7 @@ Component.prototype._verifiedLeadRows = function () {
 };
 Component.prototype.loadTranscript = async function (id) {
   if(!id||this.state.transcripts?.[id]!==undefined)return;
-  try{const response=await fetch('data/transcripts/'+encodeURIComponent(id)+'.json');if(!response.ok)throw new Error();const lines=await response.json();this.setState({transcripts:{...this.state.transcripts,[id]:lines},transcriptError:null});}
+  try{const response=await fetch('data/transcripts/'+encodeURIComponent(id)+'.json');if(!response.ok)throw new Error();const raw=await response.json();const lines=(Array.isArray(raw)?raw:[]).map(l=>({t:String(l.timestamp??l.t??''),s:String(l.speaker??l.s??''),x:String(l.text??l.x??'')})).filter(l=>l.x);this.setState({transcripts:{...this.state.transcripts,[id]:lines},transcriptError:null});}
   catch{this.setState({transcriptError:'The transcript could not be loaded. Close it and try again.'});}
 };
 Component.prototype._verifiedOpenRefs = function (refs,title) {
@@ -136,6 +139,10 @@ Component.prototype.renderVals = function () {
   v.hasMeetingKind=!!meetingKindName&&s.meetings==='past';
   v.meetingKindLine=v.hasMeetingKind?f.number(s.meetingKind==='completed'?completedMeetings:recordedMeetings)+' '+meetingKindName+' · '+period:'';
   v.clearMeetingKind=()=>this.setState({meetingKind:null});
+  v.meetingScopeLine=s.meetings==='upcoming'?(s.meetingScope==='all'?'Showing every upcoming meeting, including customer success.':'Showing meetings with accounts that have an open new-business deal. Holds and placeholders are hidden.'):'';
+  v.meetingScopeLabel=s.meetingScope==='all'?'Show sales and marketing only':'Show all meetings';
+  v.toggleMeetingScope=()=>this.setState({meetingScope:s.meetingScope==='all'?null:'all'});
+  v.hasMeetingScope=s.meetings==='upcoming';
   v.meetingTabs.forEach(t=>{const go=t.go;t.go=()=>{this.setState({meetingKind:null});go();};});
   const prepCount=((s.hollie||{}).prep||[]).length;
   v.hasPrepBriefs=prepCount>0;v.prepBriefsLabel='See '+prepCount+' meeting prep brief'+(prepCount===1?'':'s')+' (Today › Sales & CS) →';
@@ -146,6 +153,8 @@ Component.prototype.renderVals = function () {
   const bars=[];
   while(at<=end){const next=monthly?new Date(Date.UTC(+at.slice(0,4),+at.slice(5,7),1,12)).toISOString().slice(0,10):f.add(at,7);const last=f.add(next,-1);const leads=trackerRows.filter(r=>{const ft=workspaceModel.firstTouch(r);return inRange(ft)&&ft>=at&&ft<=last;}).length;bars.push({date:at,label:monthly?new Date(at+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',timeZone:'UTC'}):f.date(at),leads});at=next;}
   const max=Math.max(1,...bars.map(b=>b.leads));v.weeks=bars.map(b=>({...b,title:(monthly?'':'Week of ')+b.label+': '+b.leads+' new leads',leadH:Math.round(b.leads/max*100)+'%'}));v.barCols=bars.length;v.barsTitle=monthly?'New leads by month':'New leads by week';
+  const firstLead=trackerRows.map(r=>workspaceModel.firstTouch(r)).filter(Boolean).sort()[0];
+  v.barsNote=firstLead&&firstLead>start?'The Lead Tracker starts on '+f.date(firstLead)+'; earlier '+(monthly?'months':'weeks')+' show 0 because there is no tracker data for them.':'';
   v.channels=funnelCounts.sources.map(r=>({channel:r.channel,leads:r.leads,mql:r.mql,sql:r.sql,rate:r.leads?Math.round(r.sql/r.leads*100)+'%':'—'}));
   v.showChannelLinkNote=false;v.channelLinkNote='';
   v.channelFoot=trackerLabel+', each stage counted on its own date, so a source can have more MQLs or SQLs than leads in a short period. The rows add up to the cards above.';
@@ -219,8 +228,14 @@ Component.prototype.renderVals = function () {
   v.eventPayments=((mkt.shows||{}).unattributed||[]).map(u=>({vendor:u.vendor,amount:mk(u.amount)}));
   v.hasEventPayments=v.eventPayments.length>0;
   const outbound=mkt.outbound||{};
-  v.ads=(outbound.campaignStats||[]).map(c=>({name:c.name+' · LemList',sent:f.number(c.sent),replies:f.number(c.replied),bounces:f.number(c.bounced),note:[c.opened?f.number(c.opened)+' opened':c.sent?'opens not tracked':'',c.delivered!=null?f.number(c.delivered)+' delivered':'',c.meetings!=null?f.number(c.meetings)+' meetings booked':'',c.status||''].filter(Boolean).join(' · ')+'. LemList, collected '+v.collectedShort+'.'}));
-  for(const a of mkt.ads||[])v.ads.push({name:a.name,sent:f.number(a.impressions),replies:f.number(a.conversions),bounces:'—',note:(a.window?a.window+' · ':'')+mk(a.spend)+' spend · '+f.number(a.clicks)+' clicks. Platform conversions, not qualified leads.'});
+  // LemList does not track meetings, and a campaign with no sends is a draft, not a result.
+  const sentCampaigns=(outbound.campaignStats||[]).filter(c=>c.sent);
+  const idleCampaigns=(outbound.campaignStats||[]).filter(c=>!c.sent);
+  v.ads=sentCampaigns.map(c=>({name:c.name+' · LemList',sent:f.number(c.sent),replies:f.number(c.replied),bounces:f.number(c.bounced),note:[c.opened?f.number(c.opened)+' opened':'opens not tracked',c.delivered!=null?f.number(c.delivered)+' delivered':'','meetings not tracked in LemList',c.status||''].filter(Boolean).join(' · ')+'. LemList, collected '+v.collectedShort+'.'}));
+  v.idleCampaignsLine=idleCampaigns.length?'Drafts ('+idleCampaigns.length+') with no sends yet: '+idleCampaigns.map(c=>c.name).join(', ')+'.':'';
+  v.hasIdleCampaigns=!!v.idleCampaignsLine;
+  const adWindow=w=>{const m=String(w||'').match(/(\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/);return m?f.date(m[1])+' – '+f.date(m[2])+' (the platform report’s own window, not calendar 2026)':'';};
+  for(const a of mkt.ads||[])v.ads.push({name:a.name,sent:f.number(a.impressions),replies:f.number(a.conversions),bounces:'—',note:(a.window?adWindow(a.window)+' · ':'')+mk(a.spend)+' spend · '+f.number(a.clicks)+' clicks. Platform conversions, not qualified leads.'});
   v.outboundNote=outbound.connected?'':(outbound.reason||'LemList is not connected yet.');
   v.hasOutboundNote=!!v.outboundNote;
   const web=d.web||{},webRange=f.date(web.start)+' – '+f.date(web.end),webVisits=web.visits||[],webChannels=web.channels||[],webPages=web.pages||[];
@@ -246,11 +261,11 @@ Component.prototype.renderVals = function () {
   v.showDecisions=s.perf!=='spend'&&s.perf!=='web'&&(v.briefingDecisions||[]).length>0;
   v.webRangeLabel=webRange;
   const cw=(mkt.web&&mkt.web.channelsWindow)||null;
-  v.webChannelsRangeLabel=cw?'last '+cw.days+' days, '+f.date(cw.start)+' – '+f.date(cw.end):webRange;
+  const chFetched=workspaceModel.dateOnly(mkt.web&&mkt.web.channelsFetchedAt),collectedDay=workspaceModel.dateOnly(s.records&&s.records.generatedAt);
+  v.webChannelsRangeLabel=(cw?'last '+cw.days+' days, '+f.date(cw.start)+' – '+f.date(cw.end):webRange)+(chFetched&&collectedDay&&chFetched<collectedDay?' · GA4 channel data from '+f.date(chFetched)+'; the latest refresh did not return a newer report':'');
   const untagged=(mkt.web&&mkt.web.untaggedSessions)||0;
   v.webNoiseNote=untagged?f.number(untagged)+' of these sessions are “Unassigned” or “(not set)” in GA4: usually bots, redirects or missing tags, not real visitors from a channel.':'';
   v.hasWebNoiseNote=!!v.webNoiseNote;
-  v.showOwnerNotes=!(v.movementsEmpty);
   const runId=s.hollie&&s.hollie.runId;
   v.runMismatch=!!(runId&&((s.agentBrief&&s.agentBrief.runId&&s.agentBrief.runId!==runId)||(s.heartbeat&&s.heartbeat.runId&&s.heartbeat.runId!==runId)||(s.heartbeatFixes&&s.heartbeatFixes.runId&&s.heartbeatFixes.runId!==runId)));
   v.runMismatchNote=v.runMismatch?'This section is from a different run than the queue. It is hidden so the page shows one set of numbers.':'';
@@ -279,8 +294,9 @@ Component.prototype.renderVals = function () {
   ];
   if(s.perf==='web')v.scopeNote='Website: '+webRange+' · www.opstream.ai only.'+(typeof web.aiCount==='number'?' AI: '+f.number(web.aiCount)+' completed monitored answers'+(web.aiEnd?' through '+f.date(web.aiEnd):'')+'.':'')+' No period filter applies.';
   else if(s.perf==='spend')v.scopeNote='Spend: Jan – Dec 2026, as entered in the workbook. Campaign counts use the '+v.collectedShort+' collection; advertising dates are shown per source.';
-  else v.scopeNote='The period '+period+' applies to leads, MQLs and SQLs (Lead Tracker dates) and to completed meetings. Open pipeline is the current book. All dates are America/Phoenix.';
+  else v.scopeNote='The period '+period+' applies to leads, MQLs and SQLs (Lead Tracker dates) and to completed meetings. The pipeline figures are today\'s totals, not the period. All dates are America/Phoenix.';
   const query=(s.search||'').trim().toLowerCase(),owner=s.owner||'Everyone',todayPhx=workspaceModel.phoenixToday();
+  const quietIds=new Set(workspaceModel.quietDeals(opportunities,s.records,asOf).map(o=>o.id));
   const prelim=opportunities.map(o=>{
     const company=workspaceModel.companyForOpportunity(o,s.records);
     return {o,company,rawOwner:o.owner||company?.owner||''};
@@ -293,11 +309,11 @@ Component.prototype.renderVals = function () {
     const quietDays=company?workspaceModel.daysQuiet(company,todayPhx):null;
     const liveQuiet=company?workspaceModel.relativeDays(last,workspaceModel.phoenixToday()):null;
     return {...o,owner:info.label,ownerKey:info.key,ownerTitle:info.title,lastEngagement:last,quietDays:liveQuiet!=null?liveQuiet:quietDays,companyRecord:company};
-  }).filter(o=>(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage,o.owner].join(' ').toLowerCase().includes(query))&&(!s.closeOn||(workspaceModel.dateOnly(o.close)===s.closeOn&&workspaceModel.isOpenPipeline(o,asOf))));
+  }).filter(o=>(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage,o.owner].join(' ').toLowerCase().includes(query))&&(!s.closeOn||(workspaceModel.dateOnly(o.close)===s.closeOn&&workspaceModel.isOpenPipeline(o,asOf)))&&(s.dealFilter!=='quiet'||quietIds.has(o.id)));
   const deduped=new Map();
   for(const o of accountRows){
     // One row per account, except when listing the deals that share a close date.
-    const key=s.closeOn?String(o.id||o.name):String(o.companyId||o.name).replace(/^company:/,'');
+    const key=(s.closeOn||s.dealFilter)?String(o.id||o.name):String(o.companyId||o.name).replace(/^company:/,'');
     const prev=deduped.get(key);
     if(!prev){deduped.set(key,o);continue;}
     const better=workspaceModel.listStatus(o,todayPhx)!=='past'&&workspaceModel.listStatus(prev,todayPhx)==='past'
@@ -318,17 +334,16 @@ Component.prototype.renderVals = function () {
   const shared=[...placeholderDates].sort((a,b)=>closeCounts.get(b)-closeCounts.get(a)).map(d=>closeCounts.get(d)+' share '+workspaceModel.formatDate(d));
   v.placeholderNote=shared.length?'Of '+openTotal+' open deals, '+shared.join(' and ')+'. '+(shared.length>1?'These are':'This is')+' probably a placeholder close date, not a forecast. Dates are shown as entered.':'';
   v.hasPlaceholderNote=!!v.placeholderNote;
-  const diffText=o=>(o.hubspotDiffers||[]).map(k=>k==='amount'?'HubSpot amount '+moneyShort(o.hubspotAmount):k==='close'?'HubSpot close '+workspaceModel.formatDate(o.hubspotClose):k==='stage'?'HubSpot stage '+workspaceModel.stageDisplay(o.hubspotStage):k==='owner'?'HubSpot owner '+workspaceModel.displayOwner(o.hubspotOwner):'').filter(Boolean).join(' · ');
+  const diffText=o=>(o.hubspotDiffers||[]).map(k=>k==='amount'?'HubSpot amount '+moneyShort(o.hubspotAmount):k==='close'?'HubSpot close '+workspaceModel.formatDate(o.hubspotClose):k==='stage'?'HubSpot stage '+workspaceModel.stageDisplay(o.hubspotStage):k==='owner'?'HubSpot owner '+workspaceModel.displayOwner(o.hubspotOwner):k==='probability'?'HubSpot probability '+f.percent(workspaceModel.probabilityFraction(o.hubspotProbability)):'').filter(Boolean).join(' · ');
+  const dealFlags=o=>[diffText(o),placeholderDates.has(workspaceModel.dateOnly(o.close))?'likely placeholder close date':'',workspaceModel.closeDatePassed(o,asOf)?'close date passed':'',String(o.note||'').trim()].filter(Boolean).join(' · ');
   v.deals=selected.map(o=>{
     const companyName=workspaceModel.pipelineCompanyName(o.companyRecord&&o.companyRecord.name,o.dealName||o.name,o.name);
-    const flag=[diffText(o),placeholderDates.has(workspaceModel.dateOnly(o.close))?'likely placeholder close date':''].filter(Boolean).join(' · ');
-    const passed=workspaceModel.closeDatePassed(o,asOf)?'close date passed':'';
-    const note=[flag,passed,String(o.note||'').trim()].filter(Boolean).join(' · ');
-    return {company:companyName,owner:o.owner,ownerTitle:o.ownerTitle||'',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement)+(o.quietDays!=null?' · '+workspaceModel.relativeLabel(o.lastEngagement,workspaceModel.phoenixToday()):''):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}};
+    const note=dealFlags(o);
+    return {company:companyName,owner:o.owner,ownerTitle:o.ownerTitle||'',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement)+(o.quietDays!=null?' · '+workspaceModel.relativeLabel(o.lastEngagement,workspaceModel.phoenixToday()):''):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Deal record · '+o.name);}};
   }).filter(Boolean);
   v.dealsCount=selected.length+' accounts · '+pipe.count+' open deals';
-  v.hasCloseOn=!!s.closeOn&&s.accounts==='deals';
-  v.closeOnLine=v.hasCloseOn?f.number(selected.length)+' open deals closing '+workspaceModel.formatDate(s.closeOn):'';
+  v.hasCloseOn=(!!s.closeOn||s.dealFilter==='quiet')&&s.accounts==='deals';
+  v.closeOnLine=!v.hasCloseOn?'':s.dealFilter==='quiet'?f.number(selected.length)+' open deals with no engagement in '+workspaceModel.QUIET_DAYS+'+ days':f.number(selected.length)+' open deals closing '+workspaceModel.formatDate(s.closeOn);
   const leadBase=trackerRows;
   v.leadTrackerNote='';
   const stageNames={'mql-no-sql':'MQL, no SQL yet','no-mql':'No MQL date'};
@@ -345,16 +360,19 @@ Component.prototype.renderVals = function () {
   v.setLeadStage=e=>this.setState({leadStage:e.target.value||null});v.setLeadSource=e=>this.setState({leadSource:e.target.value||null});
   v.leadFilterLine=[s.leadSource?'Source: '+s.leadSource:'',owner!=='Everyone'?'Owner: '+owner:'',s.leadStage?stageNames[s.leadStage]:'',s.leadFlag==='hot'?'Buying intent in the note':s.leadFlag==='live'?'Dead or disqualified notes left out':'',query?'Search: “'+(s.search||'').trim()+'”':''].filter(Boolean).join(' · ');
   v.hasLeadFilters=!!v.leadFilterLine;v.leadsShown=f.number(leadRows.length)+' lead'+(leadRows.length===1?'':'s');
-  v.clearSearch=()=>this.setState({search:'',owner:'Everyone',contributor:null,leadStage:null,leadSource:null,leadFlag:null,closeOn:null});
-  v.accountTabs.forEach(t=>{const go=t.go;t.go=()=>{this.setState({contributor:null,leadStage:null,leadSource:null,leadFlag:null,closeOn:null});go();};});
+  v.clearSearch=()=>this.setState({search:'',owner:'Everyone',contributor:null,leadStage:null,leadSource:null,leadFlag:null,closeOn:null,dealFilter:null});
+  v.accountTabs.forEach(t=>{const go=t.go;t.go=()=>{this.setState({contributor:null,leadStage:null,leadSource:null,leadFlag:null,closeOn:null,dealFilter:null});go();};});
   v.exportLabel=s.accounts==='leads'?'Export '+leadRows.length+' leads':s.accounts==='follow'?'Export follow-ups':'Export '+selected.length+' opportunities';
   if(s.accounts==='leads')v.exportAccounts=()=>this.csv('leads.csv',['Company','Contact','Title','Email','Source','Owner','Lead date','Notes','MQL date','SQL date','Lead Tracker row'],leadRows.map(r=>[r.name,r.contact?.name||'',r.contact?.title||'',r.contact?.email||'',r.source,r.owner,r.lead,r.note,r.mql,r.sql,r.sheetRow?.url||'']));
-  else if(s.accounts==='deals')v.exportAccounts=()=>this.csv('opportunities.csv',['Company','Owner','Stage','ARR','Probability','Weighted ARR','Close','Days in stage'].concat(v.showLastNote?['Last note']:[]),selected.map(o=>[workspaceModel.companyName(o.name),o.owner,o.stage,o.amount,o.probability,workspaceModel.weighted(o),workspaceModel.closeLabel(o.close),o.days].concat(v.showLastNote?[o.note]:[])));
+  else if(s.accounts==='deals')v.exportAccounts=()=>this.csv('opportunities.csv',['Company','Owner','Stage','Amount','Probability','Weighted','Close','Days in stage'].concat(v.showLastNote?['Flags']:[]),selected.map(o=>[workspaceModel.companyName(o.name),o.owner,o.stage,o.amount,workspaceModel.probabilityFraction(o.probability),workspaceModel.weighted(o),workspaceModel.closeLabel(o.close),o.days].concat(v.showLastNote?[dealFlags(o)]:[])));
   v.exportSources=()=>this.csv('leads-by-source.csv',['Source','This week','6-week average','Quarter to date','Quarter cost per lead'],(v.marketingSources||[]).map(r=>[r.channel,r.week,r.six,r.quarter,r.cpl]));
   v.exportSpend=()=>this.csv('spend-2026.csv',['Month','Planned','Recorded','Note'],budgetMonths.map(m=>[m.month,m.planned,m.actual,m.actual==null?'Not entered':'']));
-  v.movements=v.movements.map(shown=>{const o=d.opportunities.find(o=>o.name===shown.name);return o?{name:workspaceModel.companyName(o.name),meta:workspaceModel.displayOwner(o.owner)+' · '+workspaceModel.stageDisplay(o.stage),change:o.note,go:()=>this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name)}:shown;});
+  // The newest CRM notes on accounts with an open deal: text, date and who wrote it.
+  const openCompanies=new Map();for(const o of opportunities.filter(o=>workspaceModel.isOpenPipeline(o,asOf))){const c=workspaceModel.companyForOpportunity(o,s.records);if(c&&!openCompanies.has(c.id))openCompanies.set(c.id,c);}
+  v.movements=[...openCompanies.values()].flatMap(c=>(c.notes||[]).filter(n=>n.date&&workspaceModel.plainNote(n.text)).map(n=>({c,n}))).sort((a,b)=>String(b.n.date).localeCompare(String(a.n.date))).slice(0,6).map(({c,n})=>{const text=workspaceModel.plainNote(n.text);return {name:workspaceModel.companyName(c.name),meta:workspaceModel.formatDate(n.date)+' · '+workspaceModel.displayOwner(n.owner),change:text.length>180?text.slice(0,177).replace(/\s+\S*$/,'')+'…':text,go:this.go('account',{accountId:c.id})};});
+  v.showOwnerNotes=v.movements.length>0;
   v.checkUpdates=()=>{this.setState({checking:true});return this._loadVerified();};v.checkNote=s.verifiedError||('Verified collection · '+v.collectedShort+(s.checkedAt?' · last checked '+s.checkedAt:''));
-  v.coverageNote=s.records.companies.length+' account pages; '+f.number(s.records.coverage.contacts)+' linked contacts, '+f.number(s.records.coverage.notes)+' notes, '+s.records.coverage.fathomTotal+' unique recordings and '+s.records.coverage.transcripts+' complete transcripts. The opportunity list covers companies with open deals in the CRM extract; lead numbers use '+f.number(trackerRows.length)+' '+trackerLabel+' rows with lead, MQL and SQL dates where recorded.';
+  v.coverageNote=s.records.companies.length+' account pages; '+f.number(s.records.coverage.contacts)+' linked contacts, '+f.number(s.records.coverage.notes)+' notes, '+s.records.coverage.fathomTotal+' unique recordings and '+s.records.coverage.transcripts+' complete transcripts. The open deals list covers companies with open deals in HubSpot; lead numbers use '+f.number(trackerRows.length)+' '+trackerLabel+' rows with lead, MQL and SQL dates where recorded.';
   if(v.readingRules[4])v.readingRules[4].text='The workspace uses the retained '+v.collectedShort+' collection. Website reports cover '+webRange+'.';
   if(s.transcriptError&&v.mtg)v.mtg.transcriptNote=s.transcriptError;
   const attachToNew=(action,refs)=>()=>{const before=(this.state.newDrafts||[]).length;action();if((this.state.newDrafts||[]).length>before){const additions=[...this.state.newDrafts];additions[before]={...additions[before],supportRefs:refs,refs:refs.length};this.setState({newDrafts:additions});}};
@@ -377,14 +395,13 @@ Component.prototype.renderVals = function () {
     if(!refs?.length&&String(s.evidence).startsWith('sheet:'))refs=d.opportunities.find(o=>o.name===s.evidence.slice(6))?.refs;
     if(!refs?.length)refs=String(v.ev?.ids||'').match(/evidence:[a-f0-9-]{36}/g)||[];
     const found=(refs||[]).map(ref=>s.verifiedEvidence[ref]).filter(Boolean);
-    if(found.length)v.ev={kicker:'Original collected record',title:s.evidence==='verified-refs'?s.verifiedTitle:v.ev.title,meta:found.map(e=>e.source+' · '+e.capturedAt).filter((x,i,a)=>a.indexOf(x)===i).join(' · '),rows:found.map(e=>({label:e.title,value:verifiedEvidenceText(e)})),note:'Exact retained source text and fields. Dates and forecasts remain as recorded.',ids:found.map(e=>e.ref+' · '+e.nativeId).join(' · '),missing:found.length!==refs.length,hasRows:true};
+    if(found.length)v.ev={kicker:'Original collected record',title:s.evidence==='verified-refs'?s.verifiedTitle:v.ev.title,meta:found.map(e=>e.source+' · collected '+workspaceModel.formatDateTime(e.capturedAt)).filter((x,i,a)=>a.indexOf(x)===i).join(' · '),rows:found.map(e=>({label:e.title,value:verifiedEvidenceText(e)})),note:'Exact retained source text and fields. Dates and forecasts remain as recorded.',ids:found.map(e=>e.ref+' · '+e.nativeId).join(' · '),missing:found.length!==refs.length,hasRows:true};
     if(s.evidence==='draft-refs'){
       const addition=s.newDrafts?.[s.draft-d.drafts.length-(d.presentation.suggestedDrafts?.length||0)];
       const source=addition?{refs:addition.supportRefs||[]}:d.drafts[s.draft]?.draft||d.presentation.suggestedDrafts?.[s.draft-d.drafts.length];
       const items=(source?.refs||[]).map(ref=>s.verifiedEvidence[ref]).filter(Boolean);
       v.ev={kicker:'Supporting material',title:'Records behind this draft',meta:'',rows:items.map(e=>({label:e.title,value:verifiedEvidenceText(e)})),note:items.length?'':'No supporting records are attached to this new draft.',missing:false,hasRows:items.length>0};
     }
-    v.proposeCorrection=()=>{const sourceRefs=(refs||[]).filter(ref=>s.verifiedEvidence[ref]);const draft={kind:'Proposed correction',title:'Correction: '+v.ev.title,company:c?.name||'Not linked',text:'Describe the correction to '+v.ev.title+'. Original records remain unchanged.',rationale:v.ev.ids,refs:sourceRefs.length,supportRefs:sourceRefs,version:0,type:'Proposed correction',status:'Draft',recipients:'',saved:false};this.setState({newDrafts:[...s.newDrafts||[],draft],draft:v.saved.length+v.suggested.length,screen:'drafts',evidence:false});};
     v.exportEvidence=()=>this.csv('collected-record.csv',['Field','Value'],v.ev.rows.map(r=>[r.label,r.value]));
   }
   return v;

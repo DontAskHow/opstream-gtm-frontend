@@ -1,18 +1,19 @@
 // Browser-local workspace store, signed-in Google state, and the confirmed Gmail send.
-let demoState;
+// The storage key predates the rename; changing it would drop saved drafts and preferences.
+let browserStore;
 Component.prototype._workspaceApi=async function(path,body){
- if(!demoState){const seed=await fetch('/data/bootstrap.json').then(r=>r.json());try{demoState=JSON.parse(localStorage.getItem('gtm-public-demo-v1'))||seed;}catch{demoState=seed;}}
- const save=()=>localStorage.setItem('gtm-public-demo-v1',JSON.stringify(demoState));
- if(path==='/bootstrap')return structuredClone(demoState);
- if(path==='/comments')return {comments:structuredClone(demoState.comments)};
- if(path==='/preferences'){demoState.preferences=body.preferences;demoState.preferencesRevision++;save();return {revision:demoState.preferencesRevision};}
- if(path.startsWith('/priorities/')&&path.endsWith('/comments')){const now=new Date().toISOString(),id=body.id||crypto.randomUUID(),prior=demoState.comments.find(c=>c.id===id);const comment={...body,id,priorityId:decodeURIComponent(path.split('/')[2]),authorName:'You',mine:true,createdAt:prior?.createdAt||now,updatedAt:now,revision:(prior?.revision||0)+1,notifications:[]};demoState.comments=[...demoState.comments.filter(c=>c.id!==id),comment];save();return {comments:structuredClone(demoState.comments),comment};}
- if(path.startsWith('/drafts/')&&!path.endsWith('/send')){const id=decodeURIComponent(path.split('/')[2]),prior=demoState.drafts.find(d=>d.id===id);if(path.endsWith('/history'))return {history:prior?.history||[]};if(!body)return {draft:structuredClone(prior)};const draft={...body.draft,version:(prior?.version||0)+1,updatedAt:new Date().toISOString(),history:[...(prior?.history||[]),...(prior?[prior]:[])]};demoState.drafts=[...demoState.drafts.filter(d=>d.id!==id),draft];save();return {draft:structuredClone(draft)};}
+ if(!browserStore){const seed=await fetch('/data/bootstrap.json').then(r=>r.json());try{browserStore=JSON.parse(localStorage.getItem('gtm-public-demo-v1'))||seed;}catch{browserStore=seed;}}
+ const save=()=>localStorage.setItem('gtm-public-demo-v1',JSON.stringify(browserStore));
+ if(path==='/bootstrap')return structuredClone(browserStore);
+ if(path==='/comments')return {comments:structuredClone(browserStore.comments)};
+ if(path==='/preferences'){browserStore.preferences=body.preferences;browserStore.preferencesRevision++;save();return {revision:browserStore.preferencesRevision};}
+ if(path.startsWith('/priorities/')&&path.endsWith('/comments')){const now=new Date().toISOString(),id=body.id||crypto.randomUUID(),prior=browserStore.comments.find(c=>c.id===id);const comment={...body,id,priorityId:decodeURIComponent(path.split('/')[2]),authorName:'You',mine:true,createdAt:prior?.createdAt||now,updatedAt:now,revision:(prior?.revision||0)+1,notifications:[]};browserStore.comments=[...browserStore.comments.filter(c=>c.id!==id),comment];save();return {comments:structuredClone(browserStore.comments),comment};}
+ if(path.startsWith('/drafts/')&&!path.endsWith('/send')){const id=decodeURIComponent(path.split('/')[2]),prior=browserStore.drafts.find(d=>d.id===id);if(path.endsWith('/history'))return {history:prior?.history||[]};if(!body)return {draft:structuredClone(prior)};const draft={...body.draft,version:(prior?.version||0)+1,updatedAt:new Date().toISOString(),history:[...(prior?.history||[]),...(prior?[prior]:[])]};browserStore.drafts=[...browserStore.drafts.filter(d=>d.id!==id),draft];save();return {draft:structuredClone(draft)};}
  throw Error('Sending is disabled \u2014 drafts stay in this browser.');
 };
-const demoRender=Component.prototype.renderVals;
+const sessionRender=Component.prototype.renderVals;
 Component.prototype.renderVals=function(){
- const v=demoRender.call(this);
+ const v=sessionRender.call(this);
  const s=this.state.googleSession||{};
  const brief=this.state.personalBrief||null;
  v.signedIn=!!s.signedIn;

@@ -177,11 +177,10 @@ check('the URL keeps the lead filters', /leadSource=Webinar/.test(page.url()) &&
 const leadsCsv = await download(() => page.getByRole('button', { name: /^Export \d+ leads$/ }).click());
 check('lead export has contact columns and only the filtered rows', /^Company,Contact,Title,Email,/.test(leadsCsv.text) && csvRows(leadsCsv.text).length === p2rows + 1, leadsCsv.text.split('\n')[0]);
 await home();
-await priority('mkt:webinar-unowned').getByRole('button', { name: 'See webinar conversion' }).click();
-await page.locator('#leads-by-source').waitFor();
-await page.waitForTimeout(200);
-const byTop = await page.locator('#leads-by-source').evaluate(el => el.getBoundingClientRect().top);
-check('P2 secondary opens Pipeline › Selected period by source', /view=pipeline/.test(page.url()) && byTop >= 0 && byTop < 300, 'top ' + byTop);
+await priority('mkt:webinar-unowned').getByRole('button', { name: p2.secondary.label }).click();
+await page.locator('.lead-filter-line').waitFor();
+const webinarRows = await leadRows().count();
+check('P2 secondary opens every webinar lead', /leadSource=Webinar/.test(page.url()) && webinarRows === Number((p2.why.match(/of the (\d+) webinar leads/) || [])[1]) && (await leadCells(3)).every(t => t === 'Webinar'), webinarRows + ' rows');
 
 // ---- P3 · spend ----
 await home();
@@ -227,8 +226,8 @@ const nyCsv = await download(() => priority('mkt:show-followups').getByRole('but
 const nyLines = csvRows(nyCsv.text);
 const withEmail = nyLines.slice(1).filter(r => r[2]);
 const nyCampaign = dpwNy.leadRows.filter(r => !r.flags?.hot && !r.flags?.dead);
-const nyUnique = new Set(nyCampaign.map(r => String(r.email || '').toLowerCase() || r.company + '|' + (r.contact || ''))).size;
-check('P4 CSV is LemList-ready: each person once, no hot or dead leads', nyLines[0].slice(0, 4).join(',') === 'firstName,lastName,email,companyName' && nyLines.length === nyUnique + 1 && nyUnique < dpwNy.leads.count && new Set(withEmail.map(r => r[2].toLowerCase())).size === withEmail.length, nyLines.length - 1 + ' rows, ' + nyUnique + ' unique of ' + dpwNy.leads.count);
+const nyUnique = new Set(nyCampaign.filter(r => r.email).map(r => String(r.email).toLowerCase())).size;
+check('P4 CSV is LemList-ready: each emailable person once, no hot or dead leads', nyLines[0].slice(0, 4).join(',') === 'firstName,lastName,email,companyName' && nyLines.length === nyUnique + 1 && nyUnique === dpwNy.people.withEmail && withEmail.length === nyLines.length - 1 && new Set(withEmail.map(r => r[2].toLowerCase())).size === withEmail.length, nyLines.length - 1 + ' rows, ' + nyUnique + ' vs ' + dpwNy.people.withEmail);
 const second = (p4.more || []).find(m => m.target.kind === 'event-followup');
 if (second) {
   await priority('mkt:show-followups').getByRole('button', { name: second.label }).click();
@@ -273,13 +272,9 @@ await page.locator('#show-dpw-new-york').getByRole('button', { name: 'Open the f
 await page.locator('.draft-show-line').waitFor();
 check('past-show row opens its follow-up', /Drafts for DPW New York/.test((await draftFields()).showLine));
 
-// ---- Coming up ----
+// ---- Coming up was a copy of Events & shows; the Events cards are the one list ----
 await home();
-await page.locator('.coming-row', { hasText: 'DPW Amsterdam' }).click();
-await page.waitForTimeout(300);
-const amsTop = await page.locator('#show-dpw-amsterdam').evaluate(el => el.getBoundingClientRect().top);
-check('Coming up row scrolls to its show card', amsTop >= 0 && amsTop < 200, 'top ' + amsTop);
-check('Coming up row highlights the show', (await page.locator('#show-dpw-amsterdam').getAttribute('data-highlight')) === 'true');
+check('the duplicate Coming up block is gone', (await page.locator('.coming-row').count()) === 0 && (await page.locator('#show-dpw-amsterdam').count()) === 1);
 
 // ---- Pipeline ----
 await page.goto(base + '/?view=pipeline&perf=demand', { waitUntil: 'networkidle' });
@@ -338,12 +333,12 @@ f = await draftFields();
 check('meeting follow-up: To is email addresses, no repeats', f.to && emailsOnly(f.to) && noRepeats(f.to), f.to);
 
 await page.goto(base + '/?view=pipeline&perf=demand', { waitUntil: 'networkidle' });
-const noteRow = page.locator('section', { has: page.locator('h6', { hasText: 'Latest owner notes' }) }).locator('button').nth(1);
+const notesSection = page.locator('section', { has: page.locator('h6', { hasText: 'Latest notes on open deals' }) });
+const noteRow = notesSection.locator('button').nth(1);
+const noteText = await noteRow.innerText();
 await noteRow.click();
-await page.locator('[aria-modal="true"]').waitFor();
-const noteLinks = await page.locator('.evidence-source-links a').evaluateAll(as => as.map(a => a.href));
-check('owner-note panel links to the HubSpot deal', noteLinks.some(h => h.startsWith(HUBSPOT + '0-3/')), noteLinks.join(' ') || 'no links');
-await page.keyboard.press('Escape');
+await page.getByRole('link', { name: /Open in HubSpot/ }).first().waitFor();
+check('latest notes show text and a date, and open the account with its HubSpot link', /\w{3} \d{1,2}, \d{4}/.test(noteText) && noteText.split('\n').length >= 3 && /view=account/.test(page.url()), noteText.slice(0, 120));
 await page.goto(base + '/?view=meetings&meetings=upcoming', { waitUntil: 'networkidle' });
 await page.locator('.meeting-row').first().waitFor();
 const rows = await page.locator('.meeting-row').count();

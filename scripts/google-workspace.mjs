@@ -303,7 +303,7 @@ export function gtmIndex(records, sheetReview) {
   const byDomain = new Map();
   for (const company of (records && records.companies) || []) {
     if (companies.length >= 500) break;
-    const deal = (company.deals || []).find(item => item && (item.isOpen || item.stage));
+    const deal = (company.deals || []).find(item => item && item.closed === false);
     const row = {
       name: String(company.name || ''),
       domain: String(company.domain || '').toLowerCase(),

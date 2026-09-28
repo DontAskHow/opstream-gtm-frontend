@@ -246,7 +246,7 @@ const listedJson = JSON.parse(listed.body);
 check('profile audit list', listedJson.sends.length === 1 && listedJson.sends[0].gmailMessageId === 'msg-1' && !listed.body.includes(SECRET_BODY));
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const demo = fs.readFileSync(path.join(root, 'demo-mode.js'), 'utf8');
+const demo = fs.readFileSync(path.join(root, 'account-session.js'), 'utf8');
 const serverSrc = fs.readFileSync(path.join(root, 'scripts/agent-server.mjs'), 'utf8');
 const toolsSrc = fs.readFileSync(path.join(root, 'scripts/google-workspace.mjs'), 'utf8');
 const schemaBlock = serverSrc.slice(serverSrc.indexOf('const TOOLS'), serverSrc.indexOf('function runChatCli'));

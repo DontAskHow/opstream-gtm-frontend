@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from datetime import date, timedelta
 
+from draft_seeds import people_sentence
 from gtm_metrics import first_touch, lead_owner, money_k, tracker_rows, unworked_rows
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
@@ -149,7 +150,7 @@ def webinar_unowned(leads, collected):
         RESPONSIBLE, newest, "newest registrant",
         {"label": "Open the %d unassigned registrants" % len(unowned),
          "target": {"kind": "leads", "source": "Webinar", "owner": "Unassigned"}},
-        {"label": "See webinar conversion", "target": {"kind": "view", "view": "pipeline", "tab": "demand", "anchor": "leads-by-source"}},
+        {"label": "See all %d webinar leads" % len(rows), "target": {"kind": "leads", "source": "Webinar"}},
         kind="webinar", extra={"expectedRows": len(unowned)},
     )
 
@@ -209,7 +210,7 @@ def show_followups(marketing, today):
     total = sum(s["leads"]["count"] for s in stuck)
     owners = sorted({o for s in stuck for o in s["leads"].get("owners") or []})
     parts = ["%s (%s): %d leads (%s), none at MQL%s" % (
-        s["name"], s["dateLabel"], s["leads"]["count"], people_line(s.get("leadRows") or []),
+        s["name"], s["dateLabel"], s["leads"]["count"], people_sentence(s.get("people")),
         ", %d without an owner" % s["leads"]["unowned"] if s["leads"].get("unowned") else "") for s in stuck]
     newest = max((s["leads"].get("newest") or "" for s in stuck), default="") or None
     return card(
@@ -280,7 +281,7 @@ def unworked_by_source(leads, collected):
     order = ", ".join("%s %d" % (k, n) for k, n in by.most_common())
     newest = max((lead_day(l) or "" for l in rows), default="") or None
     return card(
-        "mkt:unworked-by-source", "%d leads have no MQL date yet" % len(rows),
+        "mkt:unworked-by-source", "%d leads have no MQL date yet (all time)" % len(rows),
         "By source: %s. Newsletter subscribers are not counted." % order,
         "Start with the sources that usually convert, and ask owners to mark the ones that are not a fit.",
         "Lead Tracker, collected %s. A lead without an MQL date may still be in conversation." % collected,

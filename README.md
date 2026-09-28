@@ -1,6 +1,6 @@
 # Opstream GTM frontend
 
-Public frontend source for the GTM workspace, with entirely synthetic companies, contacts, pipeline, marketing metrics, meetings and drafts.
+Frontend and refresh job for the Opstream GTM workspace: pipeline, marketing, meetings and drafts from HubSpot, the master Sheet, Fathom, GA4, LemList and Otterly.
 
 ## Run locally
 
@@ -19,9 +19,9 @@ Open http://127.0.0.1:4173. The build writes static files to `out/`.
 - Responsive Today, Performance, Accounts, Meetings, Drafts and Data views.
 - Priority stars, comments and mentions, account details, evidence drawers, filters, charts, CSV exports, draft composition and version controls.
 - Component template in `source/workspace.html`, original UI modules at the root, styles and design-system runtime under `source/`.
-- Fictional fixture generator in `scripts/synthetic-data.cjs` and browser-local demo adapter in `demo-mode.js`.
+- Signed-in Google session, browser-local drafts and preferences, and the confirmed Gmail send in `account-session.js`.
 
-The demo stores changes only in the current browser. Email, Slack and authentication are disabled. The production backend, databases, credentials, company snapshots, transcripts, original draft text, deployment settings and private Git history are excluded. Production API integration code remains in `collaboration.js`; the demo adapter substitutes local behavior.
+The database, credentials, company snapshots, transcripts and deployment settings are not in this repository. The refresh job publishes the collection to S3 and each server instance swaps it in.
 
 `source/workspace.html` is the assembled, data-cleaned UI template. The standalone HTML fragments and CSS are also retained for reference; the build uses the assembled template.
 
