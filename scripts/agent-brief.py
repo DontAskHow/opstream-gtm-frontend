@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gtm_metrics import date_only, greeting, snapshot_metrics
+from openai_direct import chat_completion, complete_json
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.environ.get("OUT_DATA") or os.path.join(REPO, "out", "data")
@@ -46,7 +47,6 @@ def load_json(path):
 def call_openai(payload):
     key = os.environ.get("OPENAI_API_KEY") or ""
     if key and not os.path.exists(CHAT_CLI):
-        from openai_direct import chat_completion
         return chat_completion(payload, key)
     # NOTE: do not use subprocess.run(input=...) here — in this environment
     # writing to stdin explicitly is the reliable pattern (see agent-server.mjs).
@@ -174,30 +174,19 @@ def main():
     )
 
     try:
-        resp = call_openai(
-            {
-                "model": MODEL,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "max_completion_tokens": 1200,
-                "response_format": {"type": "json_object"},
-            }
-        )
+        parsed = complete_json(call_openai, {
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "response_format": {"type": "json_object"},
+        }, log)
     except Exception as e:
-        log(f"OpenAI call failed, keeping previous brief: {e}")
+        log(f"No usable model output, keeping previous brief: {type(e).__name__}: {str(e)[:200]}")
         return 0
-    try:
-        content = (resp.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
-        content = content.strip()
-        # Tolerate markdown fences if the model adds them despite json_object.
-        if content.startswith("```"):
-            content = content.split("\n", 1)[1] if "\n" in content else ""
-            content = content.rsplit("```", 1)[0]
-        parsed = json.loads(content)
-    except Exception as e:
-        log(f"Could not parse model output, keeping previous brief: {e}; content head: {content[:200]!r}")
+    if not isinstance(parsed, dict):
+        log("Model output is not a JSON object, keeping previous brief.")
         return 0
 
     # Validate shape; drop anything malformed rather than shipping it.
