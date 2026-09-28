@@ -21,11 +21,11 @@ exits non-zero **without touching watermarks**.
 | Script | Source | Incremental key | Notes |
 |---|---|---|---|
 | `hubspot_sync.py` | HubSpot portal 21303277 | per-object-type `hs_lastmodifieddate` / `lastmodifieddate` watermark | OAuth refresh of the existing Marketing Dashboard app; GET and CRM search only; 10 object types; **tickets excluded**; owners catalog (`GET /crm/v3/owners`, including archived) into `hubspot_owners`; deal pipelines (`GET /crm/v3/pipelines/deals`) into `hubspot_pipelines`; associations refreshed for changed objects only; 100 req/10s pacing; long text truncated at 8000 chars |
-| `fathom_sync.py` | Fathom | `recording_start_time` watermark | New meetings get detail + transcript + summary + action items; `meetings`, `transcripts`, `transcript_fts` updated |
+| `fathom_sync.py` | Fathom | newest `created_at` (sent as `created_after`) | `GET https://api.fathom.ai/external/v1/meetings` with `include_summary`, `include_transcript`, `include_action_items`, `include_highlights`, paged by `next_cursor`; `meetings`, `transcripts`, `transcript_fts` updated |
 | `sheets_sync.py` | Google Sheets | n/a (full re-pull) | Re-pulls the tracked spreadsheets, all tabs, with the owner's refresh token; read-only `spreadsheets.get` and `values.batchGet`; per-spreadsheet replace |
-| `lemlist_sync.py` | Lemlist | n/a (full campaign refresh, 20 campaigns) | Fills per-campaign stats where the API exposes them; leaves null otherwise |
+| `lemlist_sync.py` | Lemlist | n/a (full campaign refresh) | `GET /api/campaigns`, then `GET /api/v2/campaigns/{id}/stats` with Basic auth; each campaign records the stats route and HTTP status |
 | `ga4_sync.py` | GA4 property 304508954 | n/a (re-runs 30d report) | sessions / totalUsers / screenPageViews |
-| `otterly_sync.py` | Otterly | n/a (re-fetches 2 brand reports) | **Quota-gated**: checks usage first; skips entirely if >50% of monthly quota used, or if quota can't be determined (fail closed) |
+| `otterly_sync.py` | Otterly | n/a (all brand reports) | `https://data.otterly.ai/v1`: `accounts/info` first (**quota-gated**: skips if more than 50% of the period's API requests are used or usage is unknown), then `workspaces`, `reports/brand`, `reports/brand/{id}/stats` (last 30 days, the report's first country) and `reports/brand/{id}/prompts` |
 
 ## Credentials
 
@@ -37,9 +37,9 @@ Secrets Manager names the refresh job reads. A missing secret exits 3 and does n
 | `opstream-gtm/google-oauth-client-id` | Sheets and GA4, with the secret below |
 | `opstream-gtm/google-oauth-client-secret` | Sheets and GA4 |
 | `opstream-gtm/hubspot-oauth` | HubSpot OAuth for the existing Marketing Dashboard app, portal 21303277. Refresh token is written back only when HubSpot rotates it. |
-| `opstream-gtm/fathom-token` | Fathom |
-| `opstream-gtm/lemlist-token` | Lemlist (`access_token` query on api.lemlist.com only) |
-| `opstream-gtm/otterly-token` | Otterly |
+| `opstream-gtm/fathom-token` | Fathom (`X-Api-Key` header on api.fathom.ai only; Bearer is refused) |
+| `opstream-gtm/lemlist-token` | Lemlist (`access_token` query for the campaign list, Basic auth for v2 stats; api.lemlist.com only) |
+| `opstream-gtm/otterly-token` | Otterly (`Authorization: Bearer` on data.otterly.ai only) |
 
 The one-time consent URL is `/admin/connect-sheets` on the dashboard. Its callback is `/api/gmail/oauth/callback` with a `sheets:` state. See `refresh/README.md`.
 
@@ -77,3 +77,7 @@ Logs: `logs/<source>-YYYYMMDD.log`.
 All times America/Phoenix. Order in the morning batch: hubspot → fathom → sheets → lemlist → ga4 → otterly.
 After syncs run, rebuild the dashboard data (`npm run build` in
 `~/workspace/opstream-gtm-frontend`) so Hollie's operator sees fresh data.
+
+## Outcomes
+
+Every sync records its last outcome in the brain's `sync_outcomes` table: source, route, HTTP status, a short reason, and the time of the last good run. A refusal or error never stops the refresh. That source keeps its last good data, and the Sales & CS Pulse says which source was not refreshed, the route, and the status.

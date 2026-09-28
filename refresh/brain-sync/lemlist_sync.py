@@ -15,6 +15,7 @@ A missing secret exits 3 and does not move the watermark.
 import base64
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from datetime import datetime, timezone
 from common import (
     NeedsConnection,
     RateLimiter,
+    SourceError,
+    SourceRefused,
     access_token_for,
     db_connect,
     run_main,
@@ -57,7 +60,8 @@ def _fetch(req):
 def _get(path: str):
     status, payload = _fetch(urllib.request.Request(_authed_url(path), headers={"Accept": "application/json"}))
     if status in (401, 403):
-        raise NeedsConnection("Lemlist rejected the credential (HTTP %s); not touching watermarks" % status)
+        raise SourceRefused(HOST, "GET " + urllib.parse.urlparse("https://" + HOST + path).path, status,
+                            "credential rejected")
     return status, payload
 
 
@@ -92,7 +96,7 @@ def _stats(cid, start, end):
 def main_sync(log):
     status, payload = _get("/api/campaigns")
     if status != 200 or not isinstance(payload, list):
-        raise RuntimeError(f"Lemlist /api/campaigns returned HTTP {status}: {str(payload)[:300]}")
+        raise SourceError(HOST, "GET /api/campaigns", status, str(payload)[:200])
 
     con = db_connect()
     fetched_at = now_iso()

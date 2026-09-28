@@ -1,159 +1,129 @@
 #!/usr/bin/env python3
 """Incremental Otterly sync into the company brain.
 
-Quota policy (hard rule): check API usage FIRST. If more than 50% of the
-monthly quota is consumed, skip the refresh entirely. If quota cannot be
-determined, skip as well (fail closed) rather than risk burning quota.
+Otterly's public data API is https://data.otterly.ai/v1 (docs.otterly.ai,
+spec at data.otterly.ai/v1/openapi.json). Bearer auth. Read-only.
 
-Otherwise re-fetches the brand reports already in otterly_reports and upserts
-stats/competitors. Read-only against the Otterly API.
+  GET /v1/accounts/info                      API requests used / allowed
+  GET /v1/workspaces                         workspaces the key can read
+  GET /v1/reports/brand                      brand reports (cursor paging)
+  GET /v1/reports/brand/{id}/stats           last 30 days, report's first country
+  GET /v1/reports/brand/{id}/prompts         prompt count per report
 
-NOTE: Otterly's public API surface is small and has changed before. Endpoint
-candidates are tried in order; if none match, the script logs clearly and
-exits non-zero WITHOUT touching watermarks so a human can review.
+Quota rule: check API usage first. Over 50% of the period's requests used, or
+usage unknown, skips the refresh (recorded, not an error).
 
-Auth: Secrets Manager opstream-gtm/otterly-token. A missing or rejected token
-exits 3 and does not move watermarks.
+Auth: Secrets Manager opstream-gtm/otterly-token, sent only to data.otterly.ai.
 """
 
 import json
+import urllib.parse
+from datetime import datetime, timedelta, timezone
 
 from common import (
-    NeedsConnection,
     RateLimiter,
+    SourceError,
+    SourceSkipped,
     authed_request,
     db_connect,
-    get_sync_state,
     run_main,
     set_sync_state,
     now_iso,
 )
 
 SOURCE = "otterly"
-ALLOWED_HOSTS = ["api.otterly.ai"]
+HOST = "data.otterly.ai"
+BASE = "https://data.otterly.ai/v1"
+ALLOWED_HOSTS = [HOST]
 CONNECTORS = ["custom.otterly", "otterly"]
 QUOTA_THRESHOLD = 0.50
+STATS_DAYS = 30
+MAX_PAGES = 20
 pace = RateLimiter(1.0)
 
-QUOTA_ENDPOINTS = [
-    "https://api.otterly.ai/api/v1/account/usage",
-    "https://api.otterly.ai/v1/account/usage",
-    "https://api.otterly.ai/api/v1/account",
-]
-REPORT_ENDPOINTS = [
-    "https://api.otterly.ai/api/v1/brand-reports/{rid}",
-    "https://api.otterly.ai/v1/brand-reports/{rid}",
-    "https://api.otterly.ai/api/v1/reports/{rid}",
-]
 
-
-def _try(url: str):
+def _get(path: str, params: dict | None = None, route: str | None = None):
+    url = BASE + path + (("?" + urllib.parse.urlencode(params, doseq=True)) if params else "")
     pace.wait()
-    return authed_request("GET", url, CONNECTORS, ALLOWED_HOSTS)
+    status, payload = authed_request("GET", url, CONNECTORS, ALLOWED_HOSTS, auth="bearer")
+    if status != 200 or not isinstance(payload, dict):
+        raise SourceError(HOST, "GET /v1" + (route or path), status, str(payload)[:200])
+    return payload
 
 
-def parse_quota(payload) -> tuple[float, float] | None:
-    """Return (used, limit) or None if the shape is unrecognized."""
-    if not isinstance(payload, dict):
-        return None
-    for used_k, limit_k in [
-        ("used", "limit"),
-        ("apiCallsUsed", "apiCallsLimit"),
-        ("callsUsed", "callsLimit"),
-        ("current", "total"),
-    ]:
-        if used_k in payload and limit_k in payload:
-            try:
-                return float(payload[used_k]), float(payload[limit_k])
-            except (TypeError, ValueError):
-                return None
-    # Nested shapes: {"usage": {"used":..,"limit":..}} or {"quota": {...}}
-    for nest in ("usage", "quota", "plan"):
-        sub = payload.get(nest)
-        if isinstance(sub, dict):
-            r = parse_quota(sub)
-            if r:
-                return r
-    return None
+def _all(path: str, route: str, params: dict | None = None):
+    items, cursor = [], None
+    for _page in range(MAX_PAGES):
+        query = dict(params or {})
+        if cursor:
+            query["cursor"] = cursor
+        payload = _get(path, query or None, route)
+        items.extend(payload.get("items") or [])
+        paging = payload.get("paging") or {}
+        cursor = paging.get("nextCursor")
+        if not paging.get("hasMore") or not cursor:
+            break
+    return items
 
 
 def main_sync(log):
-    quota = None
-    quota_src = None
-    for url in QUOTA_ENDPOINTS:
-        try:
-            status, payload = _try(url)
-        except NeedsConnection:
-            raise
-        except Exception as e:
-            log.info("quota endpoint %s failed: %s", url, e)
-            continue
-        if status == 200:
-            quota = parse_quota(payload)
-            quota_src = url
-            if quota:
-                break
-            log.info("quota endpoint %s returned unrecognized shape: %s", url, str(payload)[:200])
-        else:
-            log.info("quota endpoint %s HTTP %s", url, status)
+    info = _get("/accounts/info")
+    used, limit = info.get("apiRequestsUsedCount"), info.get("apiRequestsMaxCount")
+    if not isinstance(used, (int, float)) or not isinstance(limit, (int, float)) or limit <= 0:
+        raise SourceSkipped("API request usage is not reported by /v1/accounts/info; not spending quota")
+    log.info("Otterly API requests: %s/%s used (%.0f%%), plan %s", used, limit, used / limit * 100,
+             info.get("subscriptionPlan"))
+    if used / limit > QUOTA_THRESHOLD:
+        raise SourceSkipped("API requests %d/%d used (%.0f%%), over the %.0f%% limit"
+                            % (used, limit, used / limit * 100, QUOTA_THRESHOLD * 100))
 
-    if not quota:
-        log.error("could not determine Otterly quota from %s; failing closed (no refresh), watermarks untouched",
-                  QUOTA_ENDPOINTS)
-        raise RuntimeError("Otterly quota unavailable; failing closed per policy")
-    used, limit = quota
-    log.info("Otterly quota: %s/%s used (%.1f%%) [source %s]", used, limit,
-             (used / limit * 100) if limit else 0, quota_src)
-    if limit and used / limit > QUOTA_THRESHOLD:
-        msg = (f"SKIPPED: Otterly quota {used}/{limit} ({used/limit:.0%}) exceeds "
-               f"{QUOTA_THRESHOLD:.0%} threshold; no refresh, watermarks untouched")
-        log.warning(msg)
-        return msg  # exit 0, but run_main only marks success; we do NOT update sync_state here
-
-    con = db_connect()
-    try:
-        reports = con.execute("SELECT report_id, brand, domain FROM otterly_reports").fetchall()
-    finally:
-        con.close()
+    workspaces = {w.get("id"): w.get("name") for w in _all("/workspaces", "/workspaces")}
+    reports = _all("/reports/brand", "/reports/brand")
     if not reports:
-        raise RuntimeError("otterly_reports is empty; nothing to refresh")
-
+        raise SourceError(HOST, "GET /v1/reports/brand", 200, "no brand reports readable with this key")
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=STATS_DAYS - 1)
     fetched_at = now_iso()
-    refreshed = 0
+    stored = []
     con = db_connect()
     try:
-        for rid, brand, domain in reports:
-            data = None
-            for tmpl in REPORT_ENDPOINTS:
-                url = tmpl.format(rid=rid)
-                try:
-                    status, payload = _try(url)
-                except Exception as e:
-                    log.info("report endpoint %s failed: %s", url, e)
-                    continue
-                if status == 200 and isinstance(payload, dict):
-                    data = payload
-                    break
-                log.info("report endpoint %s HTTP %s", url, status)
-            if data is None:
-                raise RuntimeError(
-                    f"no recognized report endpoint for {rid}; tried {REPORT_ENDPOINTS}. "
-                    "Otterly API shape may have changed; manual review needed. Watermarks untouched.")
-            stats = data.get("stats") or data
-            competitors = data.get("competitors") or data.get("detectedBrands") or []
+        for r in reports:
+            rid = r.get("id")
+            if not rid:
+                continue
+            country = ((r.get("countries") or ["us"])[0] or "us").lower()
+            stats = _get(f"/reports/brand/{rid}/stats",
+                         {"startDate": start.isoformat(), "endDate": end.isoformat(), "country": country},
+                         "/reports/brand/{reportId}/stats")
+            prompts = _all(f"/reports/brand/{rid}/prompts", "/reports/brand/{reportId}/prompts")
+            kept = {
+                "id": stats.get("id") or rid,
+                "status": stats.get("status"),
+                "totalPrompts": stats.get("totalPrompts"),
+                "brand": stats.get("brand") or {"brand": r.get("brand"), "brandDomain": r.get("brandDomain")},
+                "summary": stats.get("summary") or {},
+                "detectedBrands": (stats.get("detectedBrands") or [])[:30],
+                "country": country,
+                "window": {"startDate": start.isoformat(), "endDate": end.isoformat()},
+                "promptCount": len(prompts),
+                "workspace": workspaces.get(r.get("workspaceId")),
+                "reportTitle": r.get("reportTitle"),
+            }
+            con.execute("DELETE FROM otterly_reports WHERE report_id=?", (rid,))
             con.execute(
-                "UPDATE otterly_reports SET competitors_json=?, stats_json=?, fetched_at=? WHERE report_id=?",
-                (json.dumps(competitors, ensure_ascii=False),
-                 json.dumps(stats, ensure_ascii=False), fetched_at, rid),
+                "INSERT INTO otterly_reports(report_id, brand, domain, competitors_json, stats_json, fetched_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (rid, r.get("brand"), r.get("brandDomain"),
+                 json.dumps(r.get("competitors") or [], ensure_ascii=False),
+                 json.dumps(kept, ensure_ascii=False), fetched_at),
             )
-            refreshed += 1
-            log.info("report %s (%s) refreshed", rid, brand)
+            stored.append(rid)
+            log.info("report %s (%s) stored: %s prompts", rid, r.get("brand"), len(prompts))
         con.commit()
     finally:
         con.close()
-
-    note = (f"{refreshed} brand reports refreshed; quota at refresh {used}/{limit} "
-            f"({used/limit:.0%}) < {QUOTA_THRESHOLD:.0%} threshold")
+    note = "%d brand reports from %d workspaces; API requests %d/%d before this run" % (
+        len(stored), len(workspaces), used, limit)
     set_sync_state(SOURCE, fetched_at, note)
     return note
 

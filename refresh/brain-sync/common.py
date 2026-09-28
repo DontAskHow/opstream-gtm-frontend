@@ -81,6 +81,26 @@ class NeedsConnection(Exception):
     """No usable credential for this source in the current environment."""
 
 
+class SourceRefused(NeedsConnection):
+    """The API answered 401 or 403: this key cannot read the route."""
+
+    def __init__(self, host, route, status, detail=""):
+        self.host, self.route, self.status = host, route, status
+        super().__init__("%s %s answered HTTP %s%s" % (host, route, status, (": " + detail) if detail else ""))
+
+
+class SourceError(Exception):
+    """The API answered with an unexpected status for a route."""
+
+    def __init__(self, host, route, status, detail=""):
+        self.host, self.route, self.status = host, route, status
+        super().__init__("%s %s answered HTTP %s%s" % (host, route, status, (": " + detail) if detail else ""))
+
+
+class SourceSkipped(Exception):
+    """The sync chose not to call the API (for example, a quota rule)."""
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -331,8 +351,13 @@ def authed_request(
     body: dict | None = None,
     extra_headers: dict | None = None,
     timeout: float = 60.0,
+    auth: str = "bearer",
 ) -> tuple[int, dict | list | str]:
-    """Authenticated request. Bearer token, only to an allowed host."""
+    """Authenticated request, only to an allowed host.
+
+    auth="bearer" sends Authorization: Bearer; auth="x-api-key" sends X-Api-Key
+    and no Authorization header. 401/403 raise SourceRefused with the route.
+    """
     parsed = urllib.parse.urlparse(url)
     host = parsed.hostname or ""
     if allowed_hosts and host not in allowed_hosts:
@@ -343,7 +368,12 @@ def authed_request(
             scope = HOST_SCOPES[allowed]
     token = access_token_for(connector_names, scope)
     data = None
-    headers = {"Accept": "application/json", "Authorization": "Bearer " + token}
+    if auth == "x-api-key":
+        headers = {"Accept": "application/json", "X-Api-Key": token}
+    elif auth == "bearer":
+        headers = {"Accept": "application/json", "Authorization": "Bearer " + token}
+    else:
+        raise ValueError("unknown auth style " + auth)
     if extra_headers:
         headers.update(extra_headers)
     if body is not None:
@@ -358,9 +388,7 @@ def authed_request(
         raw = exc.read().decode("utf-8", errors="replace")
         status = exc.code
         if status in (401, 403):
-            raise NeedsConnection(
-                "%s returned %s: credential rejected. Not touching watermarks." % (host, status)
-            )
+            raise SourceRefused(host, "%s %s" % (method.upper(), parsed.path), status, "credential rejected")
     try:
         return status, json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError:
@@ -438,19 +466,55 @@ def truncate_props(props: dict, limit: int = LONG_TEXT_LIMIT) -> dict:
     return {k: truncate_value(v, limit) for k, v in props.items()}
 
 
+_SECRETISH = re.compile(r"(access_token=|api_key=|key=)[^&\s]+", re.I)
+
+
+def record_outcome(source: str, ok: bool, route: str | None = None, http: int | None = None, detail: str = "") -> None:
+    """Last outcome per source, shown on the page. last_ok_at keeps the last good run."""
+    text = _SECRETISH.sub(r"\1<redacted>", str(detail or ""))[:400]
+    try:
+        con = db_connect()
+    except Exception:
+        return
+    try:
+        con.execute("""CREATE TABLE IF NOT EXISTS sync_outcomes(
+            source TEXT PRIMARY KEY, at TEXT, ok INTEGER, route TEXT, http INTEGER, detail TEXT, last_ok_at TEXT)""")
+        at = now_iso()
+        con.execute(
+            "INSERT INTO sync_outcomes(source, at, ok, route, http, detail, last_ok_at) VALUES(?,?,?,?,?,?,?) "
+            "ON CONFLICT(source) DO UPDATE SET at=excluded.at, ok=excluded.ok, route=excluded.route, "
+            "http=excluded.http, detail=excluded.detail, "
+            "last_ok_at=CASE WHEN excluded.ok=1 THEN excluded.at ELSE sync_outcomes.last_ok_at END",
+            (source, at, 1 if ok else 0, route, http, text, at if ok else None),
+        )
+        con.commit()
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+
+
 def run_main(source: str, fn) -> None:
-    """Standard entrypoint wrapper: logging + exit codes, watermarks only on success."""
+    """Entrypoint: logging, exit codes, and a recorded outcome. Watermarks move only on success."""
     log = setup_logger(source)
     log.info("starting %s incremental sync", source)
     try:
         summary = fn(log)
+    except SourceSkipped as e:
+        log.warning("SKIPPED: %s", e)
+        record_outcome(source, False, None, None, "skipped: %s" % e)
+        sys.exit(EXIT_OK)
     except NeedsConnection as e:
         log.error("NEEDS CONNECTION: %s", e)
+        record_outcome(source, False, getattr(e, "route", None), getattr(e, "status", None), str(e))
         sys.exit(EXIT_NEEDS_CONNECTION)
-    except Exception:
+    except Exception as e:
         log.exception("sync failed with an unexpected error; watermarks untouched")
+        record_outcome(source, False, getattr(e, "route", None), getattr(e, "status", None),
+                       "%s: %s" % (type(e).__name__, str(e)[:200]))
         sys.exit(EXIT_ERROR)
     log.info("sync complete: %s", summary)
+    record_outcome(source, True, None, None, str(summary))
     sys.exit(EXIT_OK)
 
 
