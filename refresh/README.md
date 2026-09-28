@@ -9,7 +9,7 @@ Bucket: `opstream-gtm-data-080403790510` in `us-east-2`, account `080403790510`.
 1. Download `data/brain/brain.db` and operator state from `state/`.
 2. Run the vendored scripts in `refresh/brain-sync/` (`sheets_sync.py`, `hubspot_sync.py`, `fathom_sync.py`, `ga4_sync.py`, `lemlist_sync.py`, `otterly_sync.py`). These are the canonical syncs. `common.py` reads Secrets Manager (`opstream-gtm/<name>`) instead of the vault CLI. A missing secret is a logged warning (`skipping <script> because secret opstream-gtm/<name> is not present`) and that script is skipped. Sheets and GA4 both use `opstream-gtm/google-sheets-refresh-token` plus the OAuth client id and secret. A script that starts and exits 3 is logged (`needs a connection (exit 3)`) and skipped; the existing snapshot is still published. Exit 1 publishes nothing. The job then prints `sync summary: ran …` and `sync summary: skipped …`. The container does not download `code/brain-sync/` from S3 over these copies.
 3. Upload `brain.db` back only when a sync actually succeeded. If every sync was skipped, the database already in the bucket is left unchanged and the build continues.
-4. Run the same chain the 6-hour dashboard job described: `brain-data.py`, then `sheet-review.py`, then `align-run.py` (which runs `hollie-operator.py` and writes one run id). If `openai-api-key` exists, `agent-brief.py` and `heartbeat.py` call OpenAI directly with `gpt-6-luna`. Then esbuild bundles `evidence-renderer.mjs`. The container does not restart Elastic Beanstalk and does not send a chat message. The Monday operator review stays a separate weekly pass; it is not a second scheduler here. The old schedules are copied in `refresh/crons/`.
+4. Run the same chain the 6-hour dashboard job described: `brain-data.py`, then `sheet-review.py`, then `align-run.py` (which runs `hollie-operator.py` and writes one run id, `run-YYYY-MM-DD-HHMMSS` in UTC). If `openai-api-key` exists, `agent-brief.py` and `heartbeat.py` call OpenAI directly with `gpt-6-luna`. Then esbuild bundles `evidence-renderer.mjs`. The container does not restart Elastic Beanstalk and does not send a chat message. The Monday operator review stays a separate weekly pass; it is not a second scheduler here. The old schedules are copied in `refresh/crons/`.
 5. If `brain.db` is missing, or the snapshot id is synthetic, the process exits non-zero and does not write `published/LATEST.json`.
 6. On success, upload `out/data` to `published/<run-id>/` and then write `published/LATEST.json`. Older runs are deleted after 10.
 
@@ -69,13 +69,13 @@ CloudShell cannot build this image reliably, and there is no local Docker. The s
 
 ### 2. CloudShell: upload the source zip
 
-In CloudShell, Actions → Upload file, and choose `refresh-src-v11.2.zip`. Then:
+In CloudShell, Actions → Upload file, and choose `refresh-src-v12.zip`. Then:
 
 ```bash
-aws s3 cp refresh-src-v11.2.zip s3://opstream-gtm-data-080403790510/code/refresh-src/v11.2.zip --region us-east-2
+aws s3 cp refresh-src-v12.zip s3://opstream-gtm-data-080403790510/code/refresh-src/v12.zip --region us-east-2
 ```
 
-The object key must match the `SourceKey` parameter (`code/refresh-src/v11.2.zip` unless you change it). The zip root must contain `refresh/Dockerfile`, not a parent folder.
+The object key must match the `SourceKey` parameter (`code/refresh-src/v12.zip` unless you change it). The zip root must contain `refresh/Dockerfile`, not a parent folder.
 
 ### 3. CloudShell: deploy the stack
 
@@ -89,7 +89,7 @@ aws cloudformation deploy \
   --stack-name opstream-gtm-refresh \
   --template-file gtm-refresh.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides ImageTag=latest SourceKey=code/refresh-src/v11.2.zip VpcId=$VPC PublicSubnetIds=$SUBNETS
+  --parameter-overrides ImageTag=latest SourceKey=code/refresh-src/v12.zip VpcId=$VPC PublicSubnetIds=$SUBNETS
 ```
 
 `PublicSubnetIds` is a comma-separated list. `aws cloudformation deploy` accepts that for `List<AWS::EC2::Subnet::Id>`.
@@ -110,7 +110,7 @@ while true; do
 done
 ```
 
-Logs: CloudWatch → Log groups → `/aws/codebuild/opstream-gtm-refresh`. The project reads `s3://opstream-gtm-data-080403790510/code/refresh-src/v11.2.zip`, runs `docker build -f refresh/Dockerfile`, and pushes `latest` to the ECR repository the stack created. CodeBuild is not placed in the VPC, so it can reach Docker Hub and ECR.
+Logs: CloudWatch → Log groups → `/aws/codebuild/opstream-gtm-refresh`. The project reads `s3://opstream-gtm-data-080403790510/code/refresh-src/v12.zip`, runs `docker build -f refresh/Dockerfile`, and pushes `latest` to the ECR repository the stack created. CodeBuild is not placed in the VPC, so it can reach Docker Hub and ECR.
 
 ### 5. Attach the dashboard policy
 
@@ -136,7 +136,7 @@ aws cloudformation deploy \
   --stack-name opstream-gtm-refresh \
   --template-file gtm-refresh.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides SourceKey=code/refresh-src/v11.2.zip
+  --parameter-overrides SourceKey=code/refresh-src/v12.zip
 ```
 
 ### 6. Run the task once
