@@ -8,8 +8,7 @@ Component.prototype.componentDidMount=function(){
 };
 const showAnchor=id=>'show-'+String(id||'').replace(/^show:/,'');
 Component.prototype._scrollHome=function(id,patch){
-  this.setState({screen:'briefing',briefAudience:'marketing',evidence:false,...(patch||{})});
-  setTimeout(()=>{const el=document.getElementById(id);if(el)el.scrollIntoView({block:'start'});},0);
+  this.setState({screen:'briefing',briefAudience:'marketing',evidence:false,...(patch||{})},()=>requestAnimationFrame(()=>{const el=document.getElementById(id);if(el)el.scrollIntoView({block:'start'});}));
 };
 Component.prototype._verifiedTarget=function(target){
   if(target&&target.kind==='section')return()=>this._scrollHome(target.id);

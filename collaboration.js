@@ -224,7 +224,9 @@ Component.prototype.renderVals = function() {
   const show=s.draftShow?((s.marketing?.shows?.items)||[]).find(x=>x.id===s.draftShow):null,inShow=d=>!s.draftShow||d.showId===s.draftShow;
   v.draftTabs=Object.entries(purposeNames).map(([id,label])=>({label,count:drafts.filter(d=>d.purpose===id&&inShow(d)).length,selected:purpose===id,go:()=>this._selectWorkspaceDraft(drafts.find(d=>d.purpose===id&&inShow(d))?.id,id)}));
   const visible=drafts.filter(d=>d.purpose===purpose&&inShow(d));
-  v.hasDraftShow=!!s.draftShow;v.draftShowLine=s.draftShow?'Drafts for '+(show?.name||'this show')+' · '+drafts.filter(inShow).length:'';
+  const plural=(n,one,many)=>n+' '+(n===1?one:many);
+  const purposeWords={email:['email','emails'],event:['event follow-up','event follow-ups'],linkedin:['LinkedIn post','LinkedIn posts'],campaign:['campaign draft','campaign drafts'],'internal-note':['internal note','internal notes']};
+  v.hasDraftShow=!!s.draftShow;v.draftShowLine=s.draftShow?'Drafts for '+(show?.name||'this show')+': '+Object.entries(purposeWords).map(([id,[one,many]])=>{const n=drafts.filter(d=>d.purpose===id&&inShow(d)).length;return n?plural(n,one,many):'';}).filter(Boolean).join(' · '):'';
   v.clearDraftShow=()=>this.setState({draftShow:null});v.draftListTitle=purposeNames[purpose]||'Drafts';v.draftsEmpty=!visible.length;
   v.draftList=visible.map(d=>({title:d.title||d.subject||'Untitled draft',current:d.id===selectedDraft?.id,status:(s.sendAudit||[]).some(r=>r.draftId===d.id)?'Sent':d.status,
     meta:d.company+' · '+(d.version?'v'+d.version:'Not saved')+(d.dirty?' · unsaved changes':''),go:()=>this._selectWorkspaceDraft(d.id,d.purpose)}));

@@ -18,7 +18,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 KEYS = {"fathom-token": "fathom-key-fixture", "otterly-token": "otterly-key-fixture",
-        "lemlist-token": "lemlist-key-fixture", "openai-api-key": "openai-key-fixture"}
+        "lemlist-token": "lemlist-key-fixture", "openai-api-key": "openai-key-fixture",
+        "google-sheets-refresh-token": "google-refresh-fixture", "google-oauth-client-id": "client-id-fixture.apps.googleusercontent.com",
+        "google-oauth-client-secret": "google-client-secret-fixture"}
 failures = []
 
 
@@ -125,6 +127,21 @@ def openai(req, url):
         content = {"insights": [{"title": "Quiet pipeline", "detail": "Nothing changed.", "priority": "low", "kind": "info"}], "summary": "Quiet."}
     return Resp(200, {"model": body["model"], "choices": [{"message": {"content": json.dumps(content)}, "finish_reason": "stop"}]})
 
+def google(req, url, host, path):
+    if host == "oauth2.googleapis.com":
+        return Resp(200, {"access_token": "google-access-fixture", "expires_in": 3600, "token_type": "Bearer"})
+    if req.get_method() != "GET":
+        raise err(url, 405, {"error": "the refresh only reads Google"})
+    if host == "analyticsdata.googleapis.com":
+        return Resp(200, {"rows": []})
+    if path == "/v4/spreadsheets/ss-master":
+        return Resp(200, {"sheets": [{"properties": {"title": "Lead Tracker", "sheetId": 1718}}]})
+    if path.startswith("/v4/spreadsheets/ss-master/values:batchGet"):
+        return Resp(200, {"valueRanges": [{"range": "'Lead Tracker'!A1:Z3", "values": [
+            ["Company", "Source", "Owner", "Lead Date", "MQL", "SQL", "Notes"],
+            ["Acme", "Webinar", "", "09/01/2026", "", "", "Aug 26 webinar registrant"]]}]})
+    raise err(url, 404, {"error": "unknown sheets path " + path})
+
 real = urllib.request.urlopen
 def urlopen(req, *a, **k):
     if isinstance(req, str):
@@ -140,6 +157,7 @@ def urlopen(req, *a, **k):
     if host in ("api.otterly.ai", "data.otterly.ai"): return otterly(req, url, q, path)
     if host == "api.lemlist.com": return lemlist(req, url, path)
     if host == "api.openai.com": return openai(req, url)
+    if host in ("oauth2.googleapis.com", "sheets.googleapis.com", "analyticsdata.googleapis.com"): return google(req, url, host, path)
     raise err(url, 599, {"error": "network blocked in the test: " + str(host)})
 urllib.request.urlopen = urlopen
 '''
@@ -172,6 +190,7 @@ brain = fs_root / "data" / "brain" / "brain.db"
 con = sqlite3.connect(brain)
 con.executescript(SCHEMA)
 con.execute("insert into sync_state values('fathom', '2026-08-25..2026-09-24', null, 'older brain')")
+con.execute("insert into sheets_data values('ss-master', 'pipeline_meeting1_v2', 'Lead Tracker', 1, ?)", (json.dumps(["Company"]),))
 con.commit()
 con.close()
 for name, value in KEYS.items():
@@ -234,8 +253,16 @@ titles = [i["title"] for i in heartbeat.get("insights", [])]
 check("pulse lists refreshed sources", any(t == "Refreshed this run" for t in titles) and "Quiet pipeline" in titles, titles)
 check("each key only goes to its own host", all(
     set(c["keys"]) <= {"api.fathom.ai": {"fathom-token"}, "data.otterly.ai": {"otterly-token"},
-                       "api.lemlist.com": {"lemlist-token"}, "api.openai.com": {"openai-api-key"}}.get(c["host"], set())
+                       "api.lemlist.com": {"lemlist-token"}, "api.openai.com": {"openai-api-key"},
+                       "oauth2.googleapis.com": {"google-sheets-refresh-token", "google-oauth-client-id", "google-oauth-client-secret"}}.get(c["host"], set())
     for c in calls))
+check("sheets sync stores each tab's gid", rows("select gid from sheets_tabs where spreadsheet_id='ss-master' and tab='Lead Tracker'") == [(1718,)])
+sheet_calls = [c for c in calls if c["host"] == "sheets.googleapis.com"]
+check("sheets sync only reads", sheet_calls and all(c["auth"] == ["authorization"] for c in sheet_calls), sheet_calls[:2])
+review = published(latest, "sheet-review.json")
+acme = next((l for l in review.get("leads") or [] if l["company"] == "Acme"), {})
+check("lead rows link to their Lead Tracker row", (acme.get("sheetRow") or {}).get("url") ==
+      "https://docs.google.com/spreadsheets/d/ss-master/edit#gid=1718&range=A2:H2", acme.get("sheetRow"))
 check("no key in the logs", not any(v in out for v in KEYS.values()))
 first_prefix = latest["prefix"]
 
