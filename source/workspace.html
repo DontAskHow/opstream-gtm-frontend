@@ -6,8 +6,8 @@
 <title>Opstream GTM</title>
 <link rel="icon" href="data:,">
 <script src="./support.js"></script>
-<style>.priority-card{display:grid;grid-template-columns:34px minmax(0,1fr);gap:0 14px;padding:24px 0;border-bottom:1px solid var(--color-divider)}
-.priority-number{font-family:var(--font-heading);font-weight:800;font-size:28px;line-height:1;color:var(--color-accent)}
+<style>.priority-card{display:grid;grid-template-columns:44px minmax(0,1fr);gap:0 14px;padding:24px 0;border-bottom:1px solid var(--color-divider)}
+.priority-number{font-family:var(--font-heading);font-weight:800;font-size:28px;line-height:1;color:var(--color-accent);white-space:nowrap;font-variant-numeric:tabular-nums}
 .priority-content{min-width:0;display:flex;flex-direction:column;gap:12px}
 .priority-content h3{font-size:20px;margin:0;line-height:1.25;text-wrap:pretty}
 .priority-content p{margin:0;font-size:15px;line-height:1.55;text-wrap:pretty}
@@ -151,7 +151,7 @@ select.input{min-height:44px}
 .show-checklist li small{display:block;color:var(--color-neutral-700);font-size:12px}
 [data-highlight="true"]{background:var(--color-accent-50,#e8f7f3);box-shadow:inset 3px 0 0 var(--color-accent);padding-left:10px!important;scroll-margin-top:80px}.show-card{scroll-margin-top:80px}.lead-tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.02em;padding:1px 6px;border-radius:999px;background:#eef2f1;color:var(--color-neutral-800)}.lead-tag-hot{background:#e6f6f2;color:#0f766e}.kpi-block{display:flex;flex-direction:column;gap:12px;margin-bottom:32px}.kpi-asof{font-size:12px;color:var(--color-neutral-700);margin-left:8px}.kpi-print{margin-left:auto;font-size:12px;padding:4px 10px}
 .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 20px}.kpi-card{border-top:2px solid var(--color-accent);padding-top:8px}.kpi-label{font-size:12px;color:var(--color-neutral-700)}.kpi-value{font-family:var(--font-heading);font-weight:800;font-size:26px;font-variant-numeric:tabular-nums}.kpi-note{font-size:12px;color:var(--color-neutral-700);line-height:1.4}
-.kpi-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px 24px}.kpi-tables caption{text-align:left;font-size:12px;font-weight:700;padding:4px 0;color:var(--color-neutral-800)}
+.kpi-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(520px,1fr));gap:16px 32px}.kpi-tables td:first-child{min-width:150px}.kpi-tables th{white-space:nowrap}.kpi-tables caption{text-align:left;font-size:12px;font-weight:700;padding:4px 0;color:var(--color-neutral-800)}
 @media print{body *{visibility:hidden}#topBanner{display:none}.kpi-block,.kpi-block *{visibility:visible}.kpi-block{position:absolute;left:0;top:0;width:100%;margin:0}.kpi-print{display:none}.kpi-value{font-size:20px}}
 .past-hot{display:block;margin-top:4px;font-size:13px;color:#0f766e;font-weight:600}.draft-links{display:flex;flex-wrap:wrap;gap:8px;margin:0}.past-actions{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:4px}.leads-table td:nth-child(2){min-width:210px}.leads-table td:nth-child(2) a{word-break:normal;overflow-wrap:normal}.leads-table td:nth-child(3){white-space:nowrap}
 .past-shows summary{cursor:pointer;font-size:14px;padding:12px 0}.past-shows p{margin:0;padding:8px 0;border-bottom:1px solid var(--color-divider);font-size:14px}
@@ -1054,7 +1054,7 @@ a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
             <sc-if value="{{ mtg.transcriptOpen }}" hint-placeholder-val="{{ false }}">
               <div style="margin-top:12px;display:flex;flex-direction:column;gap:2px;font-size:14px;line-height:1.5;max-height:520px;overflow:auto;border:1px solid var(--color-divider);padding:12px 14px">
                 <sc-if value="{{ mtg.transcriptEmpty }}"><p class="transcript-empty" style="margin:0;color:var(--color-neutral-700)">No transcript for this call. Fathom returned no spoken lines for this recording.</p></sc-if>
-                <sc-for list="{{ mtg.lines }}" as="l" hint-placeholder-count="10"><div style="display:grid;grid-template-columns:52px 120px minmax(0,1fr);gap:10px;padding:3px 0"><span style="font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ l.t }}</span><span style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ l.s }}</span><span>{{ l.x }}</span></div></sc-for>
+                <sc-for list="{{ mtg.lines }}" as="l" hint-placeholder-count="10"><div class="transcript-line" style="display:grid;grid-template-columns:52px 120px minmax(0,1fr);gap:10px;padding:3px 0"><span style="font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ l.t }}</span><span style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ l.s }}</span><span>{{ l.x }}</span></div></sc-for>
               </div>
             </sc-if>
           </article>
@@ -1256,7 +1256,7 @@ class Component extends DCLogic {
     const followRaw = owedItems.map(f => [f.company || f.title || 'Follow-up', f.date || '', (f.actions || []).filter(Boolean).join('; ') || ((f.actionCount || 0) + ' action items from the recording'), 'Review the draft. Nothing is sent from here.', 'Action items come from the recording. Whether they were finished is not tracked.', null, f.queueId || null]);
     const leadsRaw = this._verifiedLeadRows();
     const ownerOptions=[...new Set([...dealsRaw.map(d=>d[1]),...leadsRaw.map(l=>l[2])].filter(o=>o&&o!=='—'))].sort().map(name=>({name}));
-    const meetingOwnerOptions=[...new Set([...(st.records?.companies||[]).flatMap(c=>[workspaceModel.displayOwner(c.owner),...(c.recordings||[]).map(r=>workspaceModel.displayOwner(r.recordedBy))])].filter(n=>n&&n!=='Unassigned'))].sort().map(name=>({name,title:workspaceModel.ownerInfo(name).title}));
+    const meetingOwnerOptions=[...new Set([...(st.records?.companies||[]).flatMap(c=>[workspaceModel.displayOwner(c.owner),...(c.recordings||[]).map(r=>workspaceModel.displayOwner(workspaceModel.callOwner(r, st.records)))])].filter(n=>n&&n!=='Unassigned'))].sort().map(name=>({name,title:workspaceModel.ownerInfo(name).title}));
     const peopleNote=ownerOptions.length?('Owners in the collected record: '+ownerOptions.map(o=>o.name).join(' · ')+'. The owner filters use these values.'):'Owner information was not in the collected record.';
     const savedRaw = [];
     const suggestedRaw = [];
@@ -1328,7 +1328,7 @@ class Component extends DCLogic {
       if (items.length) { lines.push('Thanks for your time' + (when ? ' on ' + when : '') + '. Here is what we agreed to follow up on:', ''); for (const item of items) lines.push('- ' + item); }
       else return '';
       if (rec && rec.shareUrl && items.some(i => /record/i.test(i))) lines.push('', 'The recording of our call: ' + rec.shareUrl);
-      const signer = workspaceModel.personLabel(rec && rec.recordedBy);
+      const signer = rec ? workspaceModel.callOwner(rec, REC) : '';
       lines.push('', 'Happy to find a time to go through these together.', '', 'Best,', signer && !signer.includes('@') ? signer + '\nOpstream' : 'Opstream');
       return lines.join('\n');
     };
@@ -1375,17 +1375,17 @@ class Component extends DCLogic {
     const recIndex = this.memo('recIndex', allRecs, () => Object.fromEntries(allRecs.map(r => [r.id, r])));
     const mrec = recIndex[st.meetingId] || allRecs.find(r => /Sample meeting/.test(r.title)) || allRecs[0] || { title: 'Loading…', summary: [], actions: [], invitees: [], date: '' };
     const mco = (mrec.companyId && findCo(mrec.companyId)) || { name: mrec.companyName, deals: [] };
-    const mdeal = mco.deals && (mco.deals.find(d => !d.closed) || mco.deals[0]);
+    const mdeal = mco.deals && mco.deals.find(d => workspaceModel.dealIsOpen(d));
     const mreview = followRaw.find(f => f[0].toLowerCase().split(' ')[0] === (mco.name || '').toLowerCase().split(' ')[0]);
     const styleBlock = b => ({ x: String(b.x).replace(/\\([~*_#])/g, '$1'), margin: b.t === 'h2' ? '18px 0 4px' : b.t === 'h3' ? '12px 0 2px' : '0', pad: b.t === 'li2' ? '28px' : b.t === 'li' ? '8px' : '0', size: b.t === 'h2' ? '13px' : b.t === 'h3' ? '15px' : '16px', weight: b.t === 'h2' || b.t === 'h3' ? '800' : '400', font: b.t === 'h2' || b.t === 'h3' ? 'var(--font-heading)' : 'var(--font-body)', ls: b.t === 'h2' ? '.08em' : 'normal', tt: b.t === 'h2' ? 'uppercase' : 'none', color: b.t === 'h2' ? 'var(--color-neutral-700)' : 'inherit', bullet: b.t === 'li' || b.t === 'li2' ? 'inline' : 'none' });
     const mtg = {
-      kicker: (mrec.date ? fmtDT(mrec.date) : '') + (mrec.minutes ? ' · ' + mrec.minutes + ' min' : '') + ' · Fathom recording' + (mrec.recordedBy ? ' by ' + mrec.recordedBy : ''),
-      title: mrec.title, who: [...new Set((mrec.invitees || []).map(i => i.name || i.email).filter(Boolean))].slice(0, 8).join(', ') || 'Invitees not recorded',
+      kicker: (mrec.date ? fmtDT(mrec.date) : '') + (mrec.minutes ? ' · ' + mrec.minutes + ' min' : '') + ' · Fathom recording' + (mrec.recordedBy ? ' by ' + workspaceModel.callOwner(mrec, REC) : ''),
+      title: mrec.title, who: [...new Set((mrec.invitees || []).map(i => workspaceModel.personLabel(i.name) || i.email).filter(Boolean))].slice(0, 8).join(', ') || 'Invitees not recorded',
       hasActions: !!(mrec.actions && mrec.actions.length), actions: mrec.actions || [],
       hasSummary: !!(mrec.summary && mrec.summary.length), noSummary: !!(st.records && !(mrec.summary && mrec.summary.length)), summary: (mrec.summary || []).map(styleBlock),
       transcript: mrec.transcriptLines ? mrec.transcriptLines.toLocaleString('en-US') + ' lines' : 'not available', recordGo: ev('recording:' + mrec.id),
       canLoadTranscript: !!mrec.hasTranscript, transcriptBtn: st.transcriptOpen === mrec.id ? 'Hide transcript' : 'Read transcript', loadTranscript: () => { if (st.transcriptOpen === mrec.id) this.setState({ transcriptOpen: null }); else { this.loadTranscript(mrec.id); this.setState({ transcriptOpen: mrec.id }); } }, transcriptOpen: st.transcriptOpen === mrec.id && !!(st.transcripts && st.transcripts[mrec.id]), lines: (st.transcripts && st.transcripts[mrec.id]) || [], transcriptEmpty: st.transcriptOpen === mrec.id && Array.isArray(st.transcripts && st.transcripts[mrec.id]) && !st.transcripts[mrec.id].length, transcriptNote: mrec.hasTranscript ? 'Speakers and timestamps as recorded by Fathom.' : 'Transcript text for this recording was not included.',
-      hasCompany: true, company: mrec.companyId ? mco.name : mrec.companyName, companyGo: mrec.companyId ? goCo(mrec.companyId) : ev('recording:' + mrec.id), dealLine: !mrec.companyId ? 'Matched by invitee domain only; this company is not in the HubSpot data for this collection' : mdeal ? mdeal.stageLabel + ' · ' + money(mdeal.amount) + ' · close ' + fmtD(mdeal.close) + (mdeal.owner ? ' · ' + mdeal.owner : '') + (mrec.matchedBy && /shared/.test(mrec.matchedBy) ? ' · recording shared with another account' : '') : 'No open opportunity',
+      hasCompany: true, company: mrec.companyId ? mco.name : mrec.companyName, companyGo: mrec.companyId ? goCo(mrec.companyId) : ev('recording:' + mrec.id), dealLine: !mrec.companyId ? 'Matched by invitee domain only; this company is not in the HubSpot data for this collection' : mdeal ? (mdeal.stageLabel || workspaceModel.stageDisplay(mdeal.stage) || 'No stage') + ' · ' + money(mdeal.amount) + ' · close ' + (mdeal.close ? fmtD(mdeal.close) : 'not entered') + (mdeal.owner ? ' · ' + workspaceModel.displayOwner(mdeal.owner) : '') + (mrec.matchedBy && /shared/.test(mrec.matchedBy) ? ' · recording shared with another account' : '') : 'No open opportunity',
       draftLabel: mreview ? 'Review follow-up draft' : 'Start a follow-up draft', draftGo: mreview ? () => { this.setState({ screen: 'drafts', draft: mreview[5] }); window.scrollTo(0, 0); } : () => { const recipients = [...new Set((mrec.invitees || []).filter(i => i.email && !/opstream/.test(i.email)).map(i => i.email.toLowerCase()))].slice(0, 3).join(', '); const list = [...(st.newDrafts || []), { kind: 'Follow-up', title: 'Follow up: ' + mrec.title, subject: workspaceModel.companyName(mco.name || mrec.companyName || 'Opstream') + ' – next steps from our ' + workspaceModel.naturalDay(mrec.date) + ' call', company: mco.name, text: followUpText(mco.name, mrec.actions, (mrec.summary || []).map(b => b.x).filter(Boolean).filter(mostlyEnglish).slice(0, 1).join(' '), mrec), rationale: (mrec.actions || []).join('\n'), refs: 0, version: 0, type: 'Follow-up', status: 'Draft', recipients, saved: false }]; this.setState({ newDrafts: list, draft: baseDrafts.length, screen: 'drafts' }); window.scrollTo(0, 0); },
       invitees: [...new Map((mrec.invitees || []).map(i => [String(i.email || i.name || '').toLowerCase(), { name: workspaceModel.personLabel(i.name) || i.email || 'Unnamed', email: i.name && i.email && i.name !== i.email ? i.email : '' }])).values()],
       hasRelated: allRecs.filter(r => r.companyId === mrec.companyId && r.id !== mrec.id).length > 0, related: allRecs.filter(r => r.companyId === mrec.companyId && r.id !== mrec.id).slice(0, 5).map(r => ({ title: r.title, date: fmtD(r.date.slice(0, 10)), go: goMtg(r.id) }))
@@ -1477,7 +1477,7 @@ class Component extends DCLogic {
     const kindLabel = { followup_draft: 'Follow-up draft', stale_deal: 'Stale deal', unworked_lead: 'Unworked lead', crm_update: 'CRM update', meeting_prep: 'Meeting prep', sheet_review: 'Sheet check' };
     const mdText = s => String(s == null ? '' : s).replace(/\[([^\]]+)\]\([^)\s]+\)/g, '$1');
     const isTestItem = text => /system verification test/i.test(String(text || ''));
-    const cleanCopy = text => workspaceModel.phoenixProse(String(text == null ? '' : text).replace(/\bnewSinceLastBrief\b/gi, 'new'));
+    const cleanCopy = text => workspaceModel.phoenixProse(String(text == null ? '' : text).replace(/\bnewSinceLastBrief\b/gi, 'new').replace(/\b(the )?open book\b/gi, (m, the) => (the || '') + 'open pipeline'));
     const viewerToday = workspaceModel.phoenixToday();
     const hollieQueueAll = hop ? (hop.queue || []).filter(q => !hollieDoneMap[q.id] && !isTestItem(q.title) && !isTestItem(q.why) && (q.audience || 'sales') !== 'marketing').map((q, i) => {
       const confirmKey = st.confirmQueue;
@@ -1731,12 +1731,12 @@ class Component extends DCLogic {
           const [from, to] = this._verifiedRange(), inPeriod = d => workspaceModel.inRange(d, from, to), act = workspaceModel.activityFromRecords(REC);
           items = st.meetingKind === 'completed'
             ? act.meetings.filter(m => inPeriod(m.start) && /complete|held|completed/i.test(m.outcome || '')).map(m => { const ownerLabel = workspaceModel.displayOwner(m.owner); return { when: fmtDT(m.start), sort: m.start, title: m.title || 'Meeting', who: workspaceModel.companyName(m.companyName) + (ownerLabel === 'Unassigned' ? '' : ' · ' + ownerLabel), kind: 'Completed', go: ev('crm-meeting:' + m.companyId + ':' + m.id), owner: ownerLabel }; })
-            : act.recordings.filter(r => inPeriod(r.date)).map(r => { const shownBy = workspaceModel.displayOwner(r.recordedBy); return { when: fmtDT(r.date), sort: r.date, title: r.title || 'Recording', who: (r.companyName || 'No account matched') + (shownBy && shownBy !== 'Unassigned' ? ' · ' + shownBy : ''), kind: 'Recorded', go: goMtg(r.id), owner: shownBy }; });
+            : act.recordings.filter(r => inPeriod(r.date)).map(r => { const shownBy = workspaceModel.displayOwner(workspaceModel.callOwner(r, st.records)); return { when: fmtDT(r.date), sort: r.date, title: r.title || 'Recording', who: (r.companyName || 'No account matched') + (shownBy && shownBy !== 'Unassigned' ? ' · ' + shownBy : ''), kind: 'Recorded', go: goMtg(r.id), owner: shownBy }; });
           items.sort((a, b) => b.sort.localeCompare(a.sort));
           const g = {}; for (const it of items) { const k = monthKey(it.sort); (g[k] = g[k] || []).push(it); }
           return Object.keys(g).sort().reverse().map(k => ({ label: monthLabel(k), items: g[k] }));
         }
-        const seen = new Set(); items = allRecs.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; }).filter(r => r.date && (workspaceModel.dateOnly(r.date) || '') <= todayStr).map(r => { const shownBy = workspaceModel.displayOwner(r.recordedBy); return { when: fmtDT(r.date), sort: r.date, title: r.title, who: r.companyName + (shownBy && shownBy !== 'Unassigned' ? ' · ' + shownBy : ''), kind: 'Recorded', go: goMtg(r.id), owner: shownBy || ownerOf(r) }; }).sort((a, b) => b.sort.localeCompare(a.sort));
+        const seen = new Set(); items = allRecs.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; }).filter(r => r.date && (workspaceModel.dateOnly(r.date) || '') <= todayStr).map(r => { const shownBy = workspaceModel.displayOwner(workspaceModel.callOwner(r, st.records)); return { when: fmtDT(r.date), sort: r.date, title: r.title, who: r.companyName + (shownBy && shownBy !== 'Unassigned' ? ' · ' + shownBy : ''), kind: 'Recorded', go: goMtg(r.id), owner: shownBy || ownerOf(r) }; }).sort((a, b) => b.sort.localeCompare(a.sort));
         const g = {}; for (const it of items) { const k = monthKey(it.sort); (g[k] = g[k] || []).push(it); }
         return Object.keys(g).sort().reverse().map(k => ({ label: monthLabel(k), items: g[k] }));
       }).map(g => ({ ...g, items: g.items.filter(m => (mOwner === 'Everyone' || m.owner === mOwner || m.who.includes(mOwner)) && (!mq || (m.title + ' ' + m.who + ' ' + m.kind).toLowerCase().includes(mq))) })).filter(g => g.items.length),

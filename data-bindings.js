@@ -225,7 +225,7 @@ Component.prototype.renderVals = function () {
   const entered=budgetMonths.filter(m=>m.actual!=null);
   v.spendChannelRange=entered.length?'Recorded '+new Date(entered[0].month+'-15T12:00:00Z').toLocaleDateString('en-US',{month:'short',timeZone:'UTC'})+' – '+new Date(entered[entered.length-1].month+'-15T12:00:00Z').toLocaleDateString('en-US',{month:'short',timeZone:'UTC'})+' · by channel':'By channel';
   v.spendTotals=budget.connected?workspaceModel.spendVersusPlan(budget)+' Budget workbook, Actuals tab.':'';
-  v.eventPayments=((mkt.shows||{}).unattributed||[]).map(u=>({vendor:u.vendor,amount:mk(u.amount)}));
+  v.eventPayments=(((mkt.shows||{}).eventRoi||{}).unmatched||(mkt.shows||{}).unattributed||[]).map(u=>({vendor:u.vendor,amount:mk(u.amount)}));
   v.hasEventPayments=v.eventPayments.length>0;
   const outbound=mkt.outbound||{};
   // LemList does not track meetings, and a campaign with no sends is a draft, not a result.

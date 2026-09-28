@@ -55,6 +55,28 @@ def write(name, value):
     (DATA / name).write_text(json.dumps(value, indent=1), encoding="utf-8")
 
 
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+MONTHS_LONG = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+
+
+def long_day(iso):
+    """'2026-09-28' -> 'Sep 28, 2026'."""
+    try:
+        y, m, d = (int(x) for x in str(iso)[:10].split("-"))
+        return "%s %d, %d" % (MONTHS[m - 1], d, y)
+    except ValueError:
+        return str(iso or "")
+
+
+def month_name(key):
+    """'2026-09' -> 'September 2026'."""
+    try:
+        y, m = (int(x) for x in str(key)[:7].split("-"))
+        return "%s %d" % (MONTHS_LONG[m - 1], y)
+    except ValueError:
+        return str(key or "")
+
+
 def main():
     records_path = DATA / "records.json"
     verified_path = DATA / "verified.json"
@@ -114,21 +136,20 @@ def main():
     versus = commit_versus_target(commit["amount"], target_n)
     names = ", ".join(
         "%s %s (close %s)" % (d.get("companyName") or d.get("name") or "Deal",
-                              money(d.get("amount")), d.get("close") or "not available")
+                              money(d.get("amount")), long_day(d.get("close")) if d.get("close") else "not available")
         for d in commit["deals"]) or "none"
     largest = book.get("largest") or {}
     age = snapshot_age_hours(records.get("generatedAt"))
     age_h = None if age is None else round(age, 1)
     collected = records.get("generatedAt")
-    open_line = "%s open deals, %s open, %s weighted, as of %s America/Phoenix." % (
-        book["openCount"], money(book["openAmount"]), money(book["weighted"]), day)
-    funnel_line = "%s leads / %s MQL / %s SQL for %s through %s." % (
-        book["leads"], book["mql"], book["sql"], book["quarterStart"], book["quarterEnd"])
-    largest_line = "Largest open deal: %s, %s, %s." % (
+    open_line = "%s open deals: %s in the open pipeline, %s weighted, as of %s." % (
+        book["openCount"], money(book["openAmount"]), money(book["weighted"]), long_day(day))
+    funnel_line = "%s leads, %s MQLs and %s SQLs this quarter (%s – %s)." % (
+        book["leads"], book["mql"], book["sql"], long_day(book["quarterStart"]), long_day(book["quarterEnd"]))
+    largest_line = "Largest open deal: %s, %s." % (
         largest.get("company") or "not available",
-        largest.get("dealName") or "",
-        money(largest.get("amount")) if largest.get("amount") is not None else "not available")
-    commit_line = (versus.get("text") or "Commit is not available") + ". Deals closing in %s: %s." % (month, names)
+        money(largest.get("amount")) if largest.get("amount") is not None else "amount not available")
+    commit_line = (versus.get("text") or "Commit is not available") + ". Deals closing in %s: %s." % (month_name(month), names)
     meetings = ((hollie.get("brief") or {}).get("meetings") or {}).get("items") or []
     meeting_bits = []
     for m in meetings[:6]:
@@ -141,11 +162,11 @@ def main():
         "generatedAt": now_iso,
         "runId": run_id,
         "model": "facts",
-        "greeting": "Figures below are the collection as of %s America/Phoenix." % day,
+        "greeting": "Figures below are the collection of %s (America/Phoenix)." % long_day(day),
         "paragraphs": [open_line, largest_line, funnel_line, commit_line, meeting_line],
         "whatsNew": [],
         "watchOuts": [
-            "Sheet amount and close date are the figures in the open book. A HubSpot difference is flagged on the account, not restated here.",
+            "Sheet amount and close date are the figures in the open pipeline. A HubSpot difference is flagged on the account, not restated here.",
             "Sales qualified counts a recording or a CRM meeting marked held. Meetings completed counts CRM outcome completed only.",
         ],
         "topActions": [],

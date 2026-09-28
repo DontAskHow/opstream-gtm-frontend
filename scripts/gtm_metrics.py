@@ -567,7 +567,9 @@ def round_half_up(value):
 
 
 def company_name(value):
-    return re.sub(r"[,;]+$", "", str(value or "").strip()).strip()
+    """'Applied Materials,' and 'Mozilla Firefox 3.6' (a browser string's version number) read as names."""
+    name = re.sub(r"[,;]+$", "", str(value or "").strip()).strip()
+    return re.sub(r"\s+\d+(?:\.\d+)+$", "", name).strip()
 
 
 def owner_info(value, catalog=None):

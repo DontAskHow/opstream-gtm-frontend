@@ -32,7 +32,7 @@ c.execute("""create table meetings (recording_id text, title text, meeting_type 
  action_items_json text, fetched_at text)""")
 c.execute("create table transcripts (recording_id text, turns_json text)")
 c.execute("create table lemlist_campaigns (campaign_id text, name text, status text, raw_json text)")
-c.execute("create table ga4_reports (result_json text, fetched_at text)")
+c.execute("create table ga4_reports (report_key text primary key, property_id text, params_json text, result_json text, fetched_at text)")
 c.execute("create table findings (id text, kind text, claim text, confidence text, evidence_refs text, status text, created_at text)")
 con.commit()
 `, dbPath], { cwd: root });

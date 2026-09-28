@@ -752,7 +752,7 @@ function serveStatic(req, res) {
 }
 
 // A friendly page that reloads itself, for the rare request that fails.
-function retryPage() {
+export function retryPage() {
   return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GTM Workspace</title><meta http-equiv="refresh" content="5"><style>body{font-family:system-ui,sans-serif;background:#fff;color:#143e32;display:grid;place-items:center;min-height:100vh;margin:0}main{max-width:32rem;padding:24px;text-align:center}a{color:#0f766e;font-weight:600}</style></head><body><main><h1>One moment</h1><p>The workspace did not answer this time. It will try again in 5 seconds.</p><p><a href="">Try again now</a></p></main></body></html>';
 }
 

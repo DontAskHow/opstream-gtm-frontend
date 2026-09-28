@@ -125,8 +125,9 @@ const workspaceModel = {
   },
   // A trailing comma or semicolon on a CRM company name is not part of the name.
   // Keep endings such as "Inc." and names that end in an exclamation point.
+  // 'Applied Materials,' and 'Mozilla Firefox 3.6' (a version number from a browser string) read as names.
   companyName(value) {
-    return String(value??'').trim().replace(/[,;]+$/g,'').trim();
+    return String(value??'').trim().replace(/[,;]+$/g,'').trim().replace(/\s+\d+(?:\.\d+)+$/,'').trim();
   },
   // HubSpot is the system the lead was stored in, not a marketing channel.
   sourceLabel(source) {
@@ -564,6 +565,17 @@ const workspaceModel = {
     const d=this.dateOnly(iso);if(!d)return '';
     const [,m,day]=d.split('-').map(Number);
     return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]+' '+day;
+  },
+  // Whoever ran the call. Fathom sometimes stores only the host's email.
+  callOwner(recording, records) {
+    const who=this.personLabel(recording&&recording.recordedBy);
+    if(!who.includes('@'))return who;
+    const email=who.toLowerCase();
+    const all=[recording,...((records&&records.companies)||[]).flatMap(c=>c.recordings||[])];
+    for(const r of all)for(const i of (r&&r.invitees)||[])if(String(i.email||'').toLowerCase()===email&&i.name&&!i.name.includes('@'))return this.personLabel(i.name);
+    const local=email.split('@')[0].split('.')[0];
+    const owners=Object.values((records&&records.owners)||{}).map(String).filter(n=>n.split(/\s+/)[0].toLowerCase()===local);
+    return this.personLabel(owners.length===1?owners[0]:local);
   },
   teamFirstNames(records) {
     const out=new Set();

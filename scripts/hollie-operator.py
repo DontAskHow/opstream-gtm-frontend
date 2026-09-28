@@ -108,6 +108,15 @@ def readable_company(company, deal_name=None):
     return name
 
 
+def readable_value(value):
+    """ISO dates in a sentence read as 'Sep 29, 2026'."""
+    text = str(value if value is not None else "")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}(T.*)?", text):
+        d = date.fromisoformat(text[:10])
+        return "%s %d, %d" % (MONTH_ABBR[d.month - 1], d.day, d.year)
+    return text
+
+
 def natural_day(iso):
     """'2026-09-28' -> 'Sep 28'."""
     try:
@@ -125,10 +134,19 @@ def person_label(value):
     return raw
 
 
+PEOPLE_BY_EMAIL = {}
+
+
 def call_owner(recording):
-    """Whoever ran the call signs its follow-up."""
+    """Whoever ran the call signs its follow-up. Fathom sometimes stores only the host's email."""
     who = person_label((recording or {}).get("recordedBy"))
-    return "" if "@" in who else who
+    if "@" not in who:
+        return who
+    email = who.lower()
+    for inv in (recording or {}).get("invitees") or []:
+        if str(inv.get("email") or "").lower() == email and inv.get("name") and "@" not in inv["name"]:
+            return person_label(inv["name"])
+    return PEOPLE_BY_EMAIL.get(email, "")
 
 
 def internal_todo(action, team_first):
@@ -334,6 +352,21 @@ def main():
                 if str(inv.get("email") or "").lower().endswith("@opstream.ai") and inv.get("name"):
                     team_first_names.add(str(inv["name"]).split()[0].lower())
     team_first_names = {n for n in team_first_names if len(n) >= 3}
+    # Host emails to names: any invitee row that names the address, else a HubSpot owner with that first name.
+    owner_names = [str(n) for n in (records.get("owners") or {}).values() if str(n).strip()]
+    for c_ in companies:
+        for r_ in c_.get("recordings") or []:
+            for inv in r_.get("invitees") or []:
+                e = str(inv.get("email") or "").lower()
+                if e.endswith("@opstream.ai") and inv.get("name") and "@" not in inv["name"]:
+                    PEOPLE_BY_EMAIL.setdefault(e, person_label(inv["name"]))
+    for c_ in companies:
+        for r_ in c_.get("recordings") or []:
+            e = str(r_.get("recordedBy") or "").lower()
+            if "@" in e and e not in PEOPLE_BY_EMAIL:
+                local = e.split("@")[0].split(".")[0]
+                match = [n for n in owner_names if n.split()[0].lower() == local]
+                PEOPLE_BY_EMAIL[e] = person_label(match[0] if len(match) == 1 else local)
 
     def signer_for(company):
         for deal in (company or {}).get("deals") or []:
@@ -551,8 +584,8 @@ def main():
                     lines.append("stage: sheet has it %s, HubSpot has %s" % (
                         str(m.get("sheet") or "").split(" (")[0], _hs_value(m)))
                 else:
-                    lines.append("%s: sheet says %s, HubSpot says %s" % (
-                        m.get("field"), m.get("sheet"), _hs_value(m)))
+                    lines.append("%s: the Sheet says %s, HubSpot says %s" % (
+                        m.get("field"), readable_value(m.get("sheet")), readable_value(_hs_value(m))))
             refs = ok_refs(["hubspot:deals:" + did] + (c.get("refs") if c else []))
             candidates.append({
                 "id": "q:sheet_review:" + did, "kind": "sheet_review",
