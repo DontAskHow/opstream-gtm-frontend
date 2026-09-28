@@ -78,7 +78,8 @@ await page.getByRole('heading', { name: 'Where to focus' }).waitFor();
 let header = await page.locator('header').innerText();
 check('public view is labeled the shared view', /Shared view · not signed in/.test(header) && /Sign in with Google/.test(header));
 check('public view never claims a signed-in person', !/Signed in as|Zack Kaufman/.test(await visibleText(page)));
-check('header shows the run time', /· run \d{1,2}:\d{2} [AP]M Phoenix/.test(header), header);
+check('header shows when the data was collected, and the run time when it differs', /Collected \w{3} \d+, \d{4} · \d{1,2}:\d{2} [AP]M Phoenix/.test(header) && (!/· run /.test(header) || /· run \d{1,2}:\d{2} [AP]M/.test(header)), header);
+check('header carries the runId', (await page.locator('header .header-run').getAttribute('title')) === 'Run ' + records.runId);
 if (shots) await page.locator('header').screenshot({ path: path.join(shots, 'header-shared-view.png') });
 
 const start = await request('GET', '/api/google/sign-in');

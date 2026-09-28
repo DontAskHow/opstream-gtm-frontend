@@ -94,7 +94,9 @@ Component.prototype.renderVals = function () {
     v.collectedLong=v.collectedShort;
     const runId=String((s.records&&s.records.runId)||''),rm=runId.match(/^run-(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(\d{2})$/);
     v.runIdLabel=runId?'Run '+runId:'';
-    v.runTimeLabel=rm?workspaceModel.formatDateTime(rm[1]+'T'+rm[2]+':'+rm[3]+':'+rm[4]+'Z').replace(/^[A-Z][a-z]{2} \d+, \d{4} · /,''):'';
+    const runAt=rm?workspaceModel.formatDateTime(rm[1]+'T'+rm[2]+':'+rm[3]+':'+rm[4]+'Z'):'';
+    // The run time only adds something when it differs from the collection time.
+    v.runTimeLabel=runAt&&runAt!==v.collectedShort?runAt.replace(/^[A-Z][a-z]{2} \d+, \d{4} · /,'').replace(/ Phoenix$/,''):'';
     const todayPhx=workspaceModel.asOf(s.records&&s.records.generatedAt);
     const weekStart=workspaceModel.addDays(todayPhx,-((new Date(todayPhx+'T12:00:00Z').getUTCDay()+6)%7));
     const ageH=workspaceModel.snapshotAge(gen);
