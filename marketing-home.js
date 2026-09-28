@@ -6,18 +6,33 @@ Component.prototype.componentDidMount=function(){
   fetch('data/marketing.json',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(marketing=>this.setState({marketing})).catch(()=>this.setState({marketing:null}));
   fetch('/api/me/show-calendar',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>this.setState({showCalendar:(j&&j.matches)||{}})).catch(()=>{});
 };
+const showAnchor=id=>'show-'+String(id||'').replace(/^show:/,'');
+Component.prototype._scrollHome=function(id,patch){
+  this.setState({screen:'briefing',briefAudience:'marketing',evidence:false,...(patch||{})});
+  setTimeout(()=>{const el=document.getElementById(id);if(el)el.scrollIntoView({block:'start'});},0);
+};
 Component.prototype._verifiedTarget=function(target){
-  if(target&&target.kind==='section')return()=>{this.setState({screen:'briefing',briefAudience:'marketing',evidence:false});setTimeout(()=>{const el=document.getElementById(target.id);if(el)el.scrollIntoView({block:'start'});},0);};
+  if(target&&target.kind==='section')return()=>this._scrollHome(target.id);
+  if(target&&target.kind==='show')return()=>this._scrollHome(showAnchor(target.id),{highlightShows:[target.id]});
+  if(target&&target.kind==='past-shows')return()=>this._scrollHome(showAnchor((target.ids||[])[0]),{pastShowsOpen:true,highlightShows:target.ids||[]});
   if(target&&target.kind==='linkedin')return()=>this._draftLinkedIn(target.id);
   if(target&&target.kind==='event-followup')return()=>this._openShowDrafts(target.id);
+  if(target&&target.kind==='show-csv')return()=>this._downloadShowLeads(target.id);
+  if(target&&target.kind==='seed')return()=>{const d=(this.state.draftSeeds||[]).find(x=>x.id===target.id);if(d){this.setState({screen:'drafts',draftId:d.id,draftPurpose:d.purpose,draftShow:null,evidence:false,draftFeedback:null});window.scrollTo(0,0);}};
   return marketingHomeOriginal.target.call(this,target);
 };
 Component.prototype._showSeeds=function(showId){
-  return (this.state.draftSeeds||[]).filter(d=>d.showId===showId&&d.purpose==='event');
+  return (this.state.draftSeeds||[]).filter(d=>d.showId===showId&&(d.purpose==='event'||d.purpose==='campaign'));
 };
 Component.prototype._openShowDrafts=function(showId){
   const first=this._showSeeds(showId)[0];
-  if(first){this.setState({screen:'drafts',draftId:first.id,draftPurpose:'event',evidence:false,draftFeedback:null});window.scrollTo(0,0);}
+  if(first){this.setState({screen:'drafts',draftId:first.id,draftPurpose:first.purpose,draftShow:showId,evidence:false,draftFeedback:null});window.scrollTo(0,0);}
+};
+Component.prototype._downloadShowLeads=function(showId){
+  const s=(((this.state.marketing||{}).shows||{}).items||[]).find(x=>x.id===showId);
+  if(!s)return;
+  const rows=(s.leadRows||[]).map(r=>[String(r.contact||'').split(/\s+/)[0]||'',String(r.contact||'').split(/\s+/).slice(1).join(' '),r.email||'',r.company,r.title||'',r.owner||'',r.lead||'',r.mql||'',r.sql||'',r.note||'',r.sheetUrl||'']);
+  this.csv('lemlist-'+showAnchor(showId)+'-leads.csv',['firstName','lastName','email','companyName','jobTitle','leadOwner','leadDate','mqlDate','sqlDate','trackerNote','trackerRow'],rows);
 };
 Component.prototype._draftLinkedIn=async function(showId){
   if(this.state.linkedinBusy)return;
@@ -50,15 +65,20 @@ const showView=(component,s,today)=>{
   const onCal=((st.showCalendar||{})[s.id]||[]);
   const seeds=component._showSeeds(s.id);
   const hasData=showHasData(s);
+  const stale=past&&workspaceModel.relativeDays(s.end,today)>14;
+  const withEmail=(s.leadRows||[]).filter(r=>r.email).length;
   return {
-    id:s.id,name:s.name,when:showWhen(s,today),meta:[s.location,s.status,s.package].filter(Boolean).join(' · '),
+    id:s.id,name:s.name,anchor:showAnchor(s.id),highlight:(st.highlightShows||[]).includes(s.id),
+    sheetUrl:(s.sheetRow||{}).url||'',sheetLabel:(s.sheetRow||{}).label||'',sheetCta:(s.attendees||[]).length?'Show calendar row':'Add booth staff on the show calendar',
+    showLinkedin:!stale,linkedinClass:seeds.length?'btn-secondary':'btn-primary',
+    hasLeadCsv:(s.leadRows||[]).length>0,leadCsvLabel:'Download '+(s.leadRows||[]).length+' leads for LemList (CSV'+(withEmail<(s.leadRows||[]).length?', '+withEmail+' with email':'')+')',leadCsvGo:()=>component._downloadShowLeads(s.id),when:showWhen(s,today),meta:[s.location,s.status,s.package].filter(Boolean).join(' · '),
     attendees:(s.attendees||[]).length?'Opstream: '+s.attendees.join(', '):'Opstream attendees are not listed on the show calendar.',
     campaign:(s.campaigns||[]).length?'LemList campaign “'+s.campaigns[0].name+'” · '+s.campaigns[0].status+campaignStatsText(st.marketing,s.campaigns[0].name):'',hasCampaign:(s.campaigns||[]).length>0,
     onCalendar:onCal.map(e=>'On your calendar: '+e.title+' ('+workspaceModel.formatShort(e.start)+')').join(' · '),hasOnCalendar:onCal.length>0,
     figures,hasData,noDataLine:'No spend or attendees recorded yet.'+(s.planned!=null?' Planned: '+mk(s.planned)+'.':''),
     prep:check('prep'),followUp:check('follow-up'),hasFollowUp:check('follow-up').length>0,
     linkedinLabel:busy?'Drafting…':'Draft LinkedIn post',linkedinGo:()=>component._draftLinkedIn(s.id),linkedinDisabled:!!busy,
-    hasFollowDrafts:seeds.length>0,followDraftsLabel:past?'Open event follow-up':'Open meeting request drafts ('+seeds.length+')',followDraftsGo:()=>component._openShowDrafts(s.id),
+    hasFollowDrafts:seeds.length>0,followDraftsLabel:past?'Open the follow-up for '+verifiedFormat.number(leads.count||0)+' leads':'Open meeting request drafts ('+seeds.length+')',followDraftsGo:()=>component._openShowDrafts(s.id),
     linkedinError:err,hasLinkedinError:!!err,
     line:[showWhen(s,today),s.location,s.status].filter(Boolean).join(' · '),
     pastLine:[s.dateLabel,'planned '+mk(s.planned),'recorded '+mk((s.recorded||{}).amount),verifiedFormat.number(leads.count||0)+' leads','MQL '+(leads.mql||0)].join(' · '),
@@ -104,7 +124,8 @@ Component.prototype.renderVals=function(){
     'Leads, MQLs and SQLs come from the Lead Tracker. A lead counts on its first stage date, an MQL on its MQL date and an SQL on its SQL date.',
     'Show dates, packages and attendees are what the show calendar says. Meeting requests are Lead Tracker notes.',
   ];
-  v.homeComingUp=featured.slice(0,4).map(s=>({when:showWhen(s,today),title:s.name,note:[s.location,s.planned!=null?workspaceModel.moneyK(s.planned)+' planned':''].filter(Boolean).join(' · '),go:()=>this._verifiedTarget({kind:'section',id:'events-shows'})()}));
+  v.homeComingUp=featured.slice(0,4).map(s=>({when:showWhen(s,today),title:s.name,note:[s.location,s.planned!=null?workspaceModel.moneyK(s.planned)+' planned':''].filter(Boolean).join(' · '),go:this._verifiedTarget({kind:'show',id:s.id})}));
+  v.pastShowsOpen=!!st.pastShowsOpen;v.togglePastShows=e=>{if(e&&e.preventDefault)e.preventDefault();this.setState({pastShowsOpen:!this.state.pastShowsOpen,highlightShows:[]});};
   v.hasHomeComingUp=v.homeComingUp.length>0;
   v.goEventsShows=this._verifiedTarget({kind:'section',id:'events-shows'});
   const outbound=(m&&m.outbound)||{};

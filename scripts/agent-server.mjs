@@ -30,6 +30,7 @@ import {
   GOOGLE_TOOL_SCHEMAS, isGoogleTool, runGoogleTool, buildPersonalBrief, gtmIndex, createGmailDraft, sendGmailMessage,
 } from './google-workspace.mjs';
 import { linkedInDraft, showCalendarMatches } from './marketing-drafts.mjs';
+import { generateEmail } from './email-draft.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
@@ -748,6 +749,15 @@ function onRequest(req, res) {
       for await (const chunk of req) { raw += chunk; if (raw.length > 200000) break; }
       let body = {};
       try { body = JSON.parse(raw || '{}'); } catch { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Invalid JSON.' })); return; }
+      if (body.format === 'email') {
+        try {
+          const out = await generateEmail({ draft: body.draft || {}, userName: (currentUser(req) || {}).name, chat: hooks.callChatApi || callChatApi, model: MODEL });
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(out));
+        } catch (e) {
+          res.writeHead(e.status || 500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: e.message || 'The email was not generated.' }));
+        }
+        return;
+      }
       const message = String(body.message || '').trim();
       if (!message) { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Empty question.' })); return; }
       try {

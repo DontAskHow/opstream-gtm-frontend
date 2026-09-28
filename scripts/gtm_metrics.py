@@ -427,13 +427,30 @@ def tracker_rows(sheet_review=None, contacts=None):
         out.append({
             "name": name,
             "source": source_label(r.get("source")),
-            "owner": r.get("owner"),
+            "owner": lead_owner(r.get("owner")),
             "lead": date_only(r.get("lead") or r.get("leadDate")),
             "mql": date_only(r.get("mql")),
             "sql": date_only(r.get("sql")),
             "note": r.get("note"),
+            "contact": r.get("contact"),
+            "sheetRow": r.get("sheetRow"),
         })
     return out
+
+
+def lead_owner(value):
+    """An owner name, or '' when the tracker says nobody owns the lead."""
+    raw = str(value or "").strip()
+    if raw.lower() in ("", "not assigned", "unassigned", "customer", "none", "-"):
+        return ""
+    return raw[:1].upper() + raw[1:].lower() if raw.isalpha() else raw
+
+
+def lead_stage(row):
+    """no-mql, mql-no-sql or sql: the Lead Tracker stage a row has reached."""
+    if not row.get("mql"):
+        return "no-mql"
+    return "mql-no-sql" if not row.get("sql") else "sql"
 
 
 def first_touch(row):
@@ -1095,3 +1112,9 @@ def is_internal_meeting(company_name_value, title, invitees):
         return True
     emails = [str((i or {}).get("email") or "").lower() for i in (invitees or []) if (i or {}).get("email")]
     return bool(emails) and all(e.endswith("@opstream.ai") for e in emails)
+
+
+def run_id_now(now=None):
+    """run-YYYY-MM-DD-HHMMSS, date and time both UTC, so ids sort in run order."""
+    from datetime import datetime as _dt, timezone as _tz
+    return (now or _dt.now(_tz.utc)).astimezone(_tz.utc).strftime("run-%Y-%m-%d-%H%M%S")

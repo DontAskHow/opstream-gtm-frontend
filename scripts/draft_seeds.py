@@ -15,29 +15,82 @@ def _slug(text):
     return re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")[:60]
 
 
-def _contact_email(records, company_name):
+def _company_contacts(records, company_name):
     key = re.sub(r"[^a-z0-9]", "", str(company_name or "").lower())
     if not key:
-        return ""
+        return []
     for c in (records or {}).get("companies") or []:
-        if re.sub(r"[^a-z0-9]", "", str(c.get("name") or "").lower()) != key:
-            continue
-        for person in c.get("contacts") or []:
-            email = str(person.get("email") or "").strip()
-            if "@" in email:
-                return email
-    return ""
+        if re.sub(r"[^a-z0-9]", "", str(c.get("name") or "").lower()) == key:
+            return c.get("contacts") or []
+    return []
+
+
+def _contact_email(records, company_name):
+    return next((str(p.get("email")).strip() for p in _company_contacts(records, company_name)
+                 if "@" in str(p.get("email") or "")), "")
+
+
+def recipients_for(records, company_name, names=""):
+    """Email addresses for a To line: addresses kept, names resolved through the account's contacts, no repeats."""
+    people = _company_contacts(records, company_name)
+    by_name = {str(p.get("name") or "").strip().lower(): str(p.get("email") or "").strip() for p in people}
+    out = []
+    for part in re.split(r"[,;]", str(names or "")):
+        part = part.strip()
+        email = part if "@" in part else by_name.get(part.lower(), "")
+        if "@" in email and email.lower() not in [e.lower() for e in out]:
+            out.append(email)
+    if not out:
+        email = _contact_email(records, company_name)
+        if email:
+            out.append(email)
+    return ", ".join(out)
+
+
+def owner_signature(owner, notes):
+    """The owner's full name when a note spells it out ("Doug Daniels- please reply"), else the first name."""
+    first = str(owner or "").strip()
+    if not first:
+        return "The Opstream team"
+    for note in notes:
+        m = re.search(r"\b%s ([A-Z][a-z]+)\b" % re.escape(first), str(note or ""))
+        if m:
+            return "%s %s" % (first, m.group(1))
+    return first
+
+
+def _day(iso):
+    d = date.fromisoformat(iso)
+    return "%s %s %d" % (("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[d.weekday()], MONTHS[d.month - 1][:3], d.day)
+
+
+def meeting_request(show, row, notes):
+    first = (row.get("contact") or "").split(" ")[0] if row.get("contact") else ""
+    days = [show.get("start"), show.get("end")] if show.get("end") and show.get("end") != show.get("start") else [show.get("start")]
+    slots = " or ".join("%s at [time]" % _day(d) for d in days if d)
+    booth = show.get("booth") or "[booth number]"
+    signer = owner_signature(row.get("owner"), notes)
+    return "\n".join([
+        "Hi %s," % first if first else "Hi,",
+        "",
+        "Thanks for letting us know you would like to meet at %s (%s%s). We are at booth %s." % (
+            show["name"], show.get("dateLabel") or "", (", " + show["location"]) if show.get("location") else "", booth),
+        "",
+        "Would %s work for you? If neither suits, send me a time that does." % slots,
+        "",
+        "Looking forward to meeting you,",
+        signer,
+        "Opstream",
+    ])
 
 
 def linkedin_text(show):
     where = (" in " + show["location"]) if show.get("location") else ""
     tag = "#" + re.sub(r"[^A-Za-z0-9]", "", show["name"])
     if show.get("phase") == "past":
-        leads = (show.get("leads") or {}).get("count")
         return "\n".join([
             "Thank you to everyone we met at %s%s." % (show["name"], where),
-            ("%d people shared their details with the Opstream team, and we are following up with each of them." % leads)
-            if leads else "We are following up with the people we met.",
+            "We are following up with the people we met.",
             "If we did not get to talk and you want to compare notes on how procurement teams are using AI, send me a message.",
             "", tag + " #procurement",
         ])
@@ -71,42 +124,67 @@ def build(marketing, hollie, records, today):
             linkedin_text(s),
             "Drafted from the show calendar row. Use Draft LinkedIn post on the show to add your mail, calendar and documents.",
             extra={"showId": s["id"], "citations": ["Dashboard: %s on the show calendar (budget workbook)" % s["name"]]}))
-        req = s.get("meetingRequests") or {}
-        for company in (req.get("companies") or [])[:6]:
+        notes = [r.get("note") for r in (s.get("leadRows") or []) + (s.get("requestRows") or [])]
+        for row in [r for r in s.get("requestRows") or [] if not r.get("mql")]:
+            company = row["company"]
+            email = row.get("email") or _contact_email(records, company)
+            who = ("%s (%s)" % (row["contact"], row["title"]) if row.get("title") else row["contact"]) if row.get("contact") else None
+            why = ["%s asked to meet at %s (Lead Tracker note). No meeting is booked yet." % (company, s["name"])]
+            why.append(("To: %s, the HubSpot contact for %s." % (who, company)) if who and email else
+                       "No contact email for %s in the Lead Tracker or HubSpot%s." % (
+                           company, "; the note says to reply on LinkedIn" if "linkedin" in str(row.get("note")).lower() else ""))
+            why.append("Signed as the lead owner, %s. Fill in the booth number and times before sending." % owner_signature(row.get("owner"), notes))
             out.append(seed(
                 "meet:%s:%s" % (s["id"], _slug(company)), "event",
-                "%s · meeting at %s" % (company, s["name"]), "Meeting at %s" % s["name"],
-                "Hi,\n\nThanks for letting us know you would like to meet at %s (%s%s). "
-                "Which time works for you? I can hold a slot at %s.\n\nLooking forward to it."
-                % (s["name"], s.get("dateLabel") or "", (", " + s["location"]) if s.get("location") else "",
-                   "our booth" if "booth" in str(s.get("package") or "").lower() else "the show"),
-                "%s asked to meet at %s (Lead Tracker note). No meeting is booked yet." % (company, s["name"]),
-                company=company, recipients=_contact_email(records, company), extra={"showId": s["id"]}))
+                "%s · meeting at %s" % (company, s["name"]), "Meeting at %s: %s" % (s["name"], company),
+                meeting_request(s, row, notes), " ".join(why),
+                company=company, recipients=email, extra={"showId": s["id"], "leadOwner": row.get("owner") or ""}))
     cutoff = (date.fromisoformat(today) - timedelta(days=120)).isoformat()
+    fresh = (date.fromisoformat(today) - timedelta(days=14)).isoformat()
     for s in shows:
         led = s.get("leads") or {}
         if s.get("phase") != "past" or (s.get("end") or "") < cutoff or not led.get("count"):
             continue
+        where = (" in " + s["location"]) if s.get("location") else ""
+        month = MONTHS[int(s["start"][5:7]) - 1] if s.get("start") else ""
+        stale = (s.get("end") or "") < fresh
+        rows = s.get("leadRows") or []
+        emails = [r for r in rows if r.get("email")]
+        owners = sorted({r["owner"] for r in rows if r.get("owner")})
+        why = "%d Lead Tracker rows tie to %s; %d reached MQL, %d have a contact email. Lead owners: %s." % (
+            led["count"], s["name"], led.get("mql") or 0, len(emails), ", ".join(owners) or "none")
+        if stale:
+            body = ("Hi {{firstName}},\n\nWe met at %s%s back in %s. A lot has changed in procurement since then, "
+                    "and I wanted to check in: is {{companyName}} still looking at how AI fits into sourcing and "
+                    "supplier work this year?\n\nIf it is useful, I can show you what teams like yours have set up "
+                    "since the show. Would a 20-minute call in the next two weeks work?\n\nBest," % (s["name"], where, month))
+            subject = "Since %s: a quick check-in" % s["name"]
+        else:
+            body = ("Hi {{firstName}},\n\nThank you for stopping by at %s%s. What are you working on in procurement "
+                    "this quarter, and would a short call be useful?\n\nBest," % (s["name"], where))
+            subject = "Good to meet you at " + s["name"]
         out.append(seed(
-            "followup:" + s["id"], "event", "Event follow-up · " + s["name"], "Good to meet you at " + s["name"],
-            "Hi,\n\nThank you for stopping by at %s%s. I wanted to follow up while it is fresh: "
-            "what are you working on in procurement this quarter, and would a short call be useful?\n\nBest,"
-            % (s["name"], (" in " + s["location"]) if s.get("location") else ""),
-            "%d Lead Tracker rows tie to %s; %d reached MQL. Use this as the template for each lead." % (
-                led["count"], s["name"], led.get("mql") or 0),
-            extra={"showId": s["id"]}))
-        out.append(seed(
-            "linkedin:" + s["id"], "linkedin", "LinkedIn post · " + s["name"], "LinkedIn post · " + s["name"],
-            linkedin_text(s), "Drafted from the show calendar row and its Lead Tracker leads.",
-            extra={"showId": s["id"], "citations": ["Dashboard: %s on the show calendar (budget workbook)" % s["name"]]}))
+            "followup:" + s["id"], "campaign", "LemList follow-up · " + s["name"], subject, body,
+            why + " Built for a LemList campaign: download the show's leads as CSV and import them; "
+            "{{firstName}} and {{companyName}} are LemList merge tags. Nothing is sent from here.",
+            extra={"showId": s["id"], "leadCount": led["count"]}))
+        if not stale:
+            out.append(seed(
+                "linkedin:" + s["id"], "linkedin", "LinkedIn post · " + s["name"], "LinkedIn post · " + s["name"],
+                linkedin_text(s), "Drafted from the show calendar row.",
+                extra={"showId": s["id"], "citations": ["Dashboard: %s on the show calendar (budget workbook)" % s["name"]]}))
+    recording = (marketing or {}).get("webinarRecording")
     for p in (hollie or {}).get("marketingPriorities") or []:
         if p.get("kind") == "webinar":
             out.append(seed(
                 "campaign:webinar-registrants", "campaign", "Webinar registrant follow-up", "The recording from our webinar",
-                "Hi {{firstName}},\n\nThanks for registering for our webinar. Here is the recording in case you missed it.\n\n"
-                "If you are looking at how to bring AI into your procurement process, I would be glad to show you what "
-                "teams like yours are doing. Would a 20-minute call next week work?\n\nBest,",
-                p["why"] + " Copy it into a LemList sequence; nothing is sent from here."))
+                "Hi {{firstName}},\n\nThanks for registering for our webinar. Here is the recording in case you missed it: "
+                "%s\n\nIf you are looking at how to bring AI into your procurement process, I would be glad to show you what "
+                "teams like yours are doing. Would a 20-minute call next week work?\n\nBest," % (
+                    recording["url"] if recording else "[recording link]"),
+                p["why"] + " Copy it into a LemList sequence; nothing is sent from here. " + (
+                    "Recording: %s." % recording["name"] if recording else
+                    "The collection has no webinar recording, so paste its link where it says [recording link].")))
         if p.get("kind") == "spend":
             missing = [m for m in ((marketing or {}).get("spend") or {}).get("missingMonths") or []]
             names = [MONTHS[int(m[5:7]) - 1] for m in missing]
@@ -122,9 +200,9 @@ def build(marketing, hollie, records, today):
         out.append(seed(
             "queue:" + q["id"], "email", ds.get("subject") or q["title"], ds.get("subject") or q["title"],
             ds["body"], q.get("why") or "", company=q.get("company") or "No company linked",
-            recipients=_contact_email(records, q.get("company")) or "", mode="cs",
+            recipients=recipients_for(records, q.get("company"), ds.get("to") or ds.get("recipients") or ""), mode="cs",
             extra={"accountIds": ["company:" + str(q["companyId"])] if q.get("companyId") else []}))
-    order = {"event": 0, "linkedin": 1, "campaign": 2, "email": 3, "internal-note": 4}
+    order = {"event": 0, "campaign": 1, "linkedin": 2, "email": 3, "internal-note": 4}
     out.sort(key=lambda d: order.get(d["purpose"], 9))
     seen, unique = set(), []
     for d in out:

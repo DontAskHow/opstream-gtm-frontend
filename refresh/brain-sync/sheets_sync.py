@@ -116,8 +116,10 @@ def main_sync(log):
         for ss_id, ss_title in sheets:
             log.info("re-pulling %s (%s)", ss_title, ss_id)
             meta = gws("sheets", "spreadsheets", "get", "--params",
-                       json.dumps({"spreadsheetId": ss_id, "fields": "sheets.properties.title"}))
+                       json.dumps({"spreadsheetId": ss_id, "fields": "sheets.properties.title,sheets.properties.sheetId"}))
             tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+            gids = [(ss_id, s["properties"]["title"], s["properties"].get("sheetId"))
+                    for s in meta.get("sheets", []) if s["properties"].get("sheetId") is not None]
             batch = gws("sheets", "spreadsheets", "values", "batchGet", "--params",
                         json.dumps({"spreadsheetId": ss_id,
                                     "ranges": [quote_tab(t) for t in tabs]}))
@@ -130,6 +132,11 @@ def main_sync(log):
                                           json.dumps(row, ensure_ascii=False)))
                 total_tabs += 1
             cur = con.cursor()
+            # The tab gid makes a link open the right tab and row.
+            cur.execute("CREATE TABLE IF NOT EXISTS sheets_tabs(spreadsheet_id TEXT, tab TEXT, gid INTEGER, "
+                        "PRIMARY KEY(spreadsheet_id, tab))")
+            cur.execute("DELETE FROM sheets_tabs WHERE spreadsheet_id=?", (ss_id,))
+            cur.executemany("INSERT INTO sheets_tabs(spreadsheet_id, tab, gid) VALUES(?,?,?)", gids)
             cur.execute("DELETE FROM sheets_data WHERE spreadsheet_id=?", (ss_id,))
             cur.executemany(
                 "INSERT INTO sheets_data(spreadsheet_id, spreadsheet_title, tab, row_num, row_json)"

@@ -29,7 +29,7 @@ from gtm_metrics import (QUIET_DAYS as SHARED_QUIET_DAYS, account_name,
                          apply_sheet_deal, commit_for_close_month, commit_versus_target,
                          customer_facing_action, date_only, days_quiet, is_internal_meeting,
                          deals_with_sheet, is_junk_name, is_open_pipeline, last_engagement,
-                         person_name, sheet_overrides, unworked_count)
+                         person_name, run_id_now, sheet_overrides, unworked_count)
 from marketing_priorities import build as build_marketing_priorities
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -93,17 +93,6 @@ def first_name(raw):
     return first
 
 
-def join_names(names):
-    names = [n for n in names if n]
-    if not names:
-        return ""
-    if len(names) == 1:
-        return names[0]
-    if len(names) == 2:
-        return names[0] + " and " + names[1]
-    return ", ".join(names[:-1]) + ", and " + names[-1]
-
-
 def newest_key(iso):
     """String key that sorts newest dates first when compared ascending."""
     raw = iso or "0000-00-00"
@@ -157,7 +146,7 @@ def drawer_key(ref, company_id):
 
 def main():
     now_iso = datetime.now(timezone.utc).isoformat()
-    run_id = os.environ.get("GTM_RUN_ID") or ("run-" + now_iso.replace(":", "").replace("+", "Z")[:20])
+    run_id = os.environ.get("GTM_RUN_ID") or run_id_now()
 
     records = load_json(DATA / "records.json", {})
     verified = load_json(DATA / "verified.json", {})
@@ -302,11 +291,6 @@ def main():
                 item_id = "q:followup_draft:" + str(rid).replace("recording-", "")
                 refs = ok_refs(r_.get("refs")) + ok_refs(c.get("refs"))
                 ext = [i for i in invitees if i.get("email") and not str(i.get("email")).lower().endswith("@opstream.ai")]
-                names = []
-                for inv in ext[:3]:
-                    _first, full = person_name(inv.get("name") or inv.get("email"))
-                    if full:
-                        names.append(full)
                 first = first_name(ext[0].get("name") or ext[0].get("email")) if ext else ""
                 greeting = ("Hi %s," % first) if first else "Hi,"
                 summ_bits = []
@@ -333,7 +317,7 @@ def main():
                 draft_seed = {
                     "subject": "Following up — %s" % shown,
                     "body": "\n".join(body_lines),
-                    "recipients": join_names(names),
+                    "recipients": ", ".join(dict.fromkeys(str(i["email"]).strip().lower() for i in ext[:3])),
                 }
                 item_hash = short_hash("followup", rid, "|".join(actions), r_.get("title"))
                 follow_rows.append({

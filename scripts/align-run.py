@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import source_health
 from draft_seeds import build as build_draft_seeds
-from gtm_metrics import (commit_for_close_month, commit_versus_target, date_only,
+from gtm_metrics import (run_id_now, commit_for_close_month, commit_versus_target, date_only,
                          is_junk_name, snapshot_age_hours, snapshot_metrics)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -87,7 +87,7 @@ def main():
     write("bootstrap.json", boot)
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    run_id = os.environ.get("GTM_RUN_ID") or ("run-" + day + "-" + now_iso[11:19].replace(":", ""))
+    run_id = os.environ.get("GTM_RUN_ID") or run_id_now()
     env = os.environ.copy()
     env["OUT_DATA"] = str(DATA)
     env["GTM_RUN_ID"] = run_id

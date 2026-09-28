@@ -6,7 +6,7 @@ no card; the section that would show it says it is not connected yet.
 from collections import Counter
 from datetime import date, timedelta
 
-from gtm_metrics import first_touch, money_k, tracker_rows, unworked_rows
+from gtm_metrics import first_touch, lead_owner, money_k, tracker_rows, unworked_rows
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
           "September", "October", "November", "December"]
@@ -27,25 +27,18 @@ def join(names):
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def owner_of(value):
-    raw = str(value or "").strip()
-    if not raw or raw.lower() in ("not assigned", "unassigned", "customer"):
-        return ""
-    return raw[:1].upper() + raw[1:].lower() if raw.isalpha() else raw
-
-
 def lead_day(lead):
     return first_touch(lead)
 
 
 def card(pid, title, why, nxt, caveat, owner, last, last_label, primary, secondary=None, kind="marketing",
-         lead_owners=None, extra=None):
+         lead_owners=None, extra=None, more=None):
     out = {
         "id": pid, "kind": kind, "audience": "marketing",
         "title": title, "why": why, "next": nxt, "caveat": caveat,
         "owner": owner, "leadOwners": sorted(set(lead_owners or [])),
         "lastInteraction": last, "lastInteractionLabel": last_label,
-        "primary": primary, "secondary": secondary,
+        "primary": primary, "secondary": secondary, "more": [m for m in (more or []) if m],
         "accountIds": [], "refs": [],
     }
     out.update(extra or {})
@@ -92,20 +85,28 @@ def shows_this_week(marketing, collected):
     why = ". ".join(bits) + "."
     nxt = (steps[0][:1].upper() + steps[0][1:] + (", then " + ", then ".join(steps[1:]) if steps[1:] else "") + ".") if steps \
         else "Prepare the booth follow-up list so show leads get an owner the day after."
+    asked = max(shows, key=lambda s: (s.get("meetingRequests") or {}).get("count") or 0)
+    open_asks = ((asked.get("meetingRequests") or {}).get("count") or 0) - ((asked.get("meetingRequests") or {}).get("mql") or 0)
+    if open_asks > 0:
+        primary = {"label": "Book the %d %s meetings" % (open_asks, asked["name"]),
+                   "target": {"kind": "event-followup", "id": asked["id"]}}
+    else:
+        primary = {"label": "Open " + shows[0]["name"], "target": {"kind": "show", "id": shows[0]["id"]}}
+    posts = [{"label": "Draft LinkedIn post · " + s["name"], "target": {"kind": "linkedin", "id": s["id"]}} for s in shows]
+    staffing = [{"label": "Add booth staff · " + s["name"], "target": {"kind": "url", "href": s["sheetRow"]["url"]}}
+                for s in shows if not s.get("attendees") and s.get("sheetRow")]
     return card(
         "mkt:shows-soon:" + "+".join(s["id"] for s in shows), title, why, nxt,
         "Dates, packages and attendees are from the budget workbook's show calendar. Meeting requests are Lead Tracker notes, collected %s." % collected,
         RESPONSIBLE, newest or None, "newest meeting request" if newest else "No meeting requests recorded",
-        {"label": "Open Events & shows", "target": {"kind": "section", "id": "events-shows"}},
-        {"label": "Draft LinkedIn post", "target": {"kind": "linkedin", "id": shows[0]["id"]}},
-        kind="shows", lead_owners=owners,
+        primary, posts[0], kind="shows", lead_owners=owners, more=posts[1:] + staffing,
         extra={"shows": [{"id": s["id"], "name": s["name"], "start": s.get("start"), "end": s.get("end")} for s in shows]},
     )
 
 
 def webinar_unowned(leads, collected):
     rows = [l for l in leads if str(l.get("source") or "").lower() == "webinar"]
-    unowned = [l for l in rows if not owner_of(l.get("owner"))]
+    unowned = [l for l in rows if not lead_owner(l.get("owner"))]
     if not unowned:
         return None
     no_mql = sum(1 for l in unowned if not l.get("mql"))
@@ -122,9 +123,10 @@ def webinar_unowned(leads, collected):
         "Review the registrants by role and timing, and assign an owner to the few with an active project before the next webinar push.",
         "Registration is not attendance or intent. Lead Tracker, collected %s." % collected,
         RESPONSIBLE, newest, "newest registrant",
-        {"label": "Open the registrants", "target": {"kind": "view", "view": "accounts", "tab": "leads", "search": "webinar"}},
-        {"label": "See lead sources", "target": {"kind": "section", "id": "marketing-numbers"}},
-        kind="webinar",
+        {"label": "Open the %d unassigned registrants" % len(unowned),
+         "target": {"kind": "leads", "source": "Webinar", "owner": "Unassigned"}},
+        {"label": "See webinar conversion", "target": {"kind": "view", "view": "pipeline", "tab": "demand", "anchor": "leads-by-source"}},
+        kind="webinar", extra={"expectedRows": len(unowned)},
     )
 
 
@@ -157,8 +159,11 @@ def spend_not_entered(marketing):
         "Blank months are missing, not zero. Budget workbook, Actuals tab.",
         RESPONSIBLE, None,
         ("%s was the last month entered" % last_name) if last_name else "No month has actuals",
-        {"label": "See spend", "target": {"kind": "view", "view": "pipeline", "tab": "spend"}},
-        None, kind="spend",
+        {"label": "Open the Actuals tab", "target": {"kind": "url", "href": (spend.get("sheet") or {}).get("url")}}
+        if (spend.get("sheet") or {}).get("url") else {"label": "See spend", "target": {"kind": "view", "view": "pipeline", "tab": "spend"}},
+        {"label": "Open the actuals to-do note", "target": {"kind": "seed", "id": "seed:note:spend-actuals"}},
+        kind="spend", more=[{"label": "See spend", "target": {"kind": "view", "view": "pipeline", "tab": "spend"}}]
+        if (spend.get("sheet") or {}).get("url") else [],
     )
 
 
@@ -169,6 +174,7 @@ def show_followups(marketing, today):
              and not (s["leads"].get("mql"))]
     if not stuck:
         return None
+    stuck.sort(key=lambda s: -s["leads"]["count"])
     total = sum(s["leads"]["count"] for s in stuck)
     owners = sorted({o for s in stuck for o in s["leads"].get("owners") or []})
     parts = ["%s (%s): %d leads, none at MQL%s" % (
@@ -183,9 +189,13 @@ def show_followups(marketing, today):
             join(owners) or "the lead owners"),
         "Show leads are Lead Tracker rows with the Events source dated during the show, or whose note names the show.",
         RESPONSIBLE, newest, "newest show lead",
-        {"label": "Draft event follow-up", "target": {"kind": "event-followup", "id": stuck[0]["id"]}},
-        {"label": "Open Events & shows", "target": {"kind": "section", "id": "events-shows"}},
+        {"label": "Open the %s follow-ups (%d leads)" % (stuck[0]["name"], stuck[0]["leads"]["count"]),
+         "target": {"kind": "event-followup", "id": stuck[0]["id"]}},
+        {"label": "Show these past shows", "target": {"kind": "past-shows", "ids": [s["id"] for s in stuck]}},
         kind="show-followup", lead_owners=owners,
+        more=[{"label": "Download %s leads (CSV)" % s["name"], "target": {"kind": "show-csv", "id": s["id"]}} for s in stuck]
+        + [{"label": "Open the %s follow-ups (%d leads)" % (s["name"], s["leads"]["count"]),
+            "target": {"kind": "event-followup", "id": s["id"]}} for s in stuck[1:]],
     )
 
 
@@ -194,7 +204,7 @@ def mql_without_sql(leads, collected):
     if not rows:
         return None
     rows.sort(key=lambda l: l.get("mql") or "", reverse=True)
-    owners = sorted({owner_of(l.get("owner")) for l in rows if owner_of(l.get("owner"))})
+    owners = sorted({lead_owner(l.get("owner")) for l in rows if lead_owner(l.get("owner"))})
     recent = ", ".join("%s (%s, %s)" % (l.get("name"), l.get("source") or "no source", short_day(l["mql"]))
                        for l in rows[:3])
     return card(
@@ -203,8 +213,8 @@ def mql_without_sql(leads, collected):
         "Check with %s whether the meeting happened, and update the SQL date if it did." % (join(owners) or "the owners"),
         "MQL and SQL dates are owner-entered on the Lead Tracker, collected %s." % collected,
         RESPONSIBLE, rows[0].get("mql"), "newest MQL",
-        {"label": "Open the leads", "target": {"kind": "view", "view": "accounts", "tab": "leads", "search": ""}},
-        None, kind="handoff", lead_owners=owners,
+        {"label": "Open the %d leads" % len(rows), "target": {"kind": "leads", "stage": "mql-no-sql"}},
+        None, kind="handoff", lead_owners=owners, extra={"expectedRows": len(rows)},
     )
 
 
@@ -221,8 +231,8 @@ def unworked_by_source(leads, collected):
         "Start with the sources that usually convert, and ask owners to mark the ones that are not a fit.",
         "Lead Tracker, collected %s. A lead without an MQL date may still be in conversation." % collected,
         RESPONSIBLE, newest, "newest lead",
-        {"label": "Open the leads", "target": {"kind": "view", "view": "accounts", "tab": "leads", "search": ""}},
-        None, kind="unworked",
+        {"label": "Open the %d leads" % len(rows), "target": {"kind": "leads", "stage": "no-mql"}},
+        None, kind="unworked", extra={"expectedRows": len(rows)},
     )
 
 

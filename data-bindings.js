@@ -71,7 +71,13 @@ Component.prototype._verifiedOpenRefs = function (refs,title) {
 Component.prototype._verifiedTarget = function (target) {
   return ()=>{
     const d=this.state.verified;
-    if(target.kind==='view')return this.go(target.view,{...(target.tab?{[target.view==='pipeline'?'perf':target.view]:target.tab}:{}),search:target.search||'',owner:'Everyone',contributor:null})();
+    if(target.kind==='view'){
+      this.go(target.view,{...(target.tab?{[target.view==='pipeline'?'perf':target.view]:target.tab}:{}),search:target.search||'',owner:'Everyone',contributor:null,leadStage:null,leadSource:null,closeOn:null})();
+      if(target.anchor)setTimeout(()=>document.getElementById(target.anchor)?.scrollIntoView({block:'start'}),0);
+      return;
+    }
+    if(target.kind==='leads')return this.go('accounts',{accounts:'leads',search:'',owner:target.owner||'Everyone',leadStage:target.stage||null,leadSource:target.source||null,contributor:null})();
+    if(target.kind==='url')return window.open(target.href,'_blank','noopener');
     if(target.kind==='account'){const c=this._verifiedAccount(target.id);if(c)return this.go('account',{accountId:c.id})();const o=d.opportunities.find(o=>o.companyId===target.id);return this._verifiedOpenRefs(o?.refs||[],'Account supporting records');}
     if(target.kind==='meeting'){const r=[...this.state.records.companies.flatMap(c=>c.recordings),...this.state.records.unmatchedRecordings].find(r=>r.nativeId===target.id||r.id===target.id);return this.go('meeting',{meetingId:r?.id||target.id})();}
     if(target.kind==='evidence')return this._verifiedOpenRefs([target.ref],'Supporting record');
@@ -108,7 +114,7 @@ Component.prototype.renderVals = function () {
   const funnelCounts=workspaceModel.leadCounts(trackerRows,start,end);
   const trackerLabel=(s.sheetReview&&(s.sheetReview.leads||[]).length)?'Lead Tracker':'HubSpot contacts';
   const period=f.date(start)+' – '+f.date(end);
-  const goLeads=contributor=>this.go('accounts',{accounts:'leads',contributor,search:'',owner:'Everyone'});
+  const goLeads=contributor=>this.go('accounts',{accounts:'leads',contributor,search:'',owner:'Everyone',leadStage:null,leadSource:null});
   const headline=[
     ['New leads',funnelCounts.leads,trackerLabel+' · first stage date'],
     ['Marketing qualified',funnelCounts.mql,trackerLabel+' · MQL date'],
@@ -119,9 +125,16 @@ Component.prototype.renderVals = function () {
   const completedMeetings=activity.meetings.filter(m=>inRange(m.start)&&/complete|held|completed/i.test(m.outcome||'')).length;
   const recordedMeetings=activity.recordings.filter(r=>inRange(r.date)).length;
   v.demandMetrics[3].value=f.number(completedMeetings);v.demandMetrics[4].value=f.number(recordedMeetings);
-  const goPastMeetings=this.go('meetings',{meetings:'past'});
-  v.demandMetrics[3].delta=period;v.demandMetrics[3].note='CRM meetings marked completed. Not the same as sales qualified, which also counts a recording.';v.demandMetrics[3].label='Meetings completed';v.demandMetrics[3].go=goPastMeetings;
-  v.demandMetrics[4].delta=period;v.demandMetrics[4].note='Fathom recordings, counted on their own';v.demandMetrics[4].go=goPastMeetings;
+  v.demandMetrics[3].delta=period;v.demandMetrics[3].note='CRM meetings marked completed. Not the same as sales qualified, which also counts a recording.';v.demandMetrics[3].label='Meetings completed';v.demandMetrics[3].go=this.go('meetings',{meetings:'past',meetingKind:'completed',meetingSearch:'',meetingOwner:'Everyone'});
+  v.demandMetrics[4].delta=period;v.demandMetrics[4].note='Fathom recordings, counted on their own';v.demandMetrics[4].go=this.go('meetings',{meetings:'past',meetingKind:'recordings',meetingSearch:'',meetingOwner:'Everyone'});
+  const meetingKindName={completed:'completed CRM meetings',recordings:'recordings'}[s.meetingKind];
+  v.hasMeetingKind=!!meetingKindName&&s.meetings==='past';
+  v.meetingKindLine=v.hasMeetingKind?f.number(s.meetingKind==='completed'?completedMeetings:recordedMeetings)+' '+meetingKindName+' · '+period:'';
+  v.clearMeetingKind=()=>this.setState({meetingKind:null});
+  v.meetingTabs.forEach(t=>{const go=t.go;t.go=()=>{this.setState({meetingKind:null});go();};});
+  const prepCount=((s.hollie||{}).prep||[]).length;
+  v.hasPrepBriefs=prepCount>0;v.prepBriefsLabel='See '+prepCount+' meeting prep brief'+(prepCount===1?'':'s')+' (Today › Sales & CS) →';
+  v.goPrepBriefs=()=>{this.setState({screen:'briefing',briefAudience:'sales',evidence:false});setTimeout(()=>document.getElementById('meeting-prep')?.scrollIntoView({block:'start'}),0);};
   v.periodRange=period;
   const monthly=s.period==='year'||(Date.parse(end)-Date.parse(start))/86400000>120;
   let at=monthly?start.slice(0,7)+'-01':s.period==='custom'?start:f.add(start,-((new Date(start+'T12:00:00Z').getUTCDay()+6)%7));
@@ -241,14 +254,15 @@ Component.prototype.renderVals = function () {
   const tracker=workspaceModel.trackerRows(s.sheetReview,[]);
   const shows=(mkt.shows&&mkt.shows.items)||[];
   const ok='var(--color-text)',gap='var(--color-accent-700)';
+  const masterId=((s.sheetReview?.leads||[]).find(l=>l.sheetRow?.spreadsheetId)||{}).sheetRow?.spreadsheetId;
   v.sources=[
-    {name:'HubSpot CRM',used:'Accounts, deals, contacts, notes, calls, meetings',updated:v.collectedShort,color:ok,count:f.number(s.records.companies.length)+' companies',gaps:'Email bodies are not included. The master Sheet overrides HubSpot deal amount, stage, close date and owner.'},
-    {name:'Fathom',used:'Recordings, summaries, action items',updated:v.collectedShort,color:ok,count:s.records.coverage.fathomTotal+' recordings',gaps:s.records.coverage.transcripts+' recordings include full transcripts.'},
-    {name:'Master Sheet (pipeline_meeting1_v2)',used:'Open book, forecast, Lead Tracker',updated:v.collectedShort,color:tracker.length?ok:gap,count:f.number(tracker.length)+' Lead Tracker rows',gaps:'Owner-entered dates and probabilities.'},
-    {name:'Marketing budget workbook',used:'Plan, actuals and the show calendar',updated:budget.connected?f.date(mkt.asOf):'Not connected yet',color:budget.connected?ok:gap,count:budget.connected?(f.number((budget.vendors||[]).length)+' vendor rows · '+shows.length+' shows'):'—',gaps:budget.connected?workspaceModel.missingSpendText(budget):'Connect the Sheets refresh token to read this workbook.'},
-    {name:'GA4 · www.opstream.ai',used:'Website sessions, channels, landing pages',updated:v.collectedShort,color:(mkt.web&&mkt.web.connected)?ok:gap,count:f.number(web.sessions)+' sessions',gaps:(mkt.web&&mkt.web.connected)?'Channels and landing pages cover the last 90 days.':'Channels and landing pages are added on the next refresh.'},
-    {name:'Otterly · AI answers',used:'Share of AI answers mentioning or linking to Opstream',updated:ai.connected?f.date(ai.fetchedAt):'Not connected yet',color:ai.connected?ok:gap,count:ai.connected?f.number(ai.prompts)+' prompts':'—',gaps:ai.connected?'Brand coverage and domain coverage from the latest report.':'No Otterly report is in this collection.'},
-    {name:'LemList',used:'Outbound campaigns',updated:v.collectedShort,color:outbound.connected?ok:gap,count:f.number(outbound.campaigns||0)+' campaigns',gaps:outbound.connected?'Sent, reply and bounce counts per campaign.':'Sent and reply counts are not collected yet.'},
+    {url:'https://app.hubspot.com/contacts/'+workspaceModel.HUBSPOT_PORTAL,name:'HubSpot CRM',used:'Accounts, deals, contacts, notes, calls, meetings',updated:v.collectedShort,color:ok,count:f.number(s.records.companies.length)+' companies',gaps:'Email bodies are not included. The master Sheet overrides HubSpot deal amount, stage, close date and owner.'},
+    {url:'https://fathom.video/home',name:'Fathom',used:'Recordings, summaries, action items',updated:v.collectedShort,color:ok,count:s.records.coverage.fathomTotal+' recordings',gaps:s.records.coverage.transcripts+' recordings include full transcripts.'},
+    {url:masterId?'https://docs.google.com/spreadsheets/d/'+masterId+'/edit':'',name:'Master Sheet (pipeline_meeting1_v2)',used:'Open book, forecast, Lead Tracker',updated:v.collectedShort,color:tracker.length?ok:gap,count:f.number(tracker.length)+' Lead Tracker rows',gaps:'Owner-entered dates and probabilities.'},
+    {url:budget.sheet?.url||'',name:'Marketing budget workbook',used:'Plan, actuals and the show calendar',updated:budget.connected?f.date(mkt.asOf):'Not connected yet',color:budget.connected?ok:gap,count:budget.connected?(f.number((budget.vendors||[]).length)+' vendor rows · '+shows.length+' shows'):'—',gaps:budget.connected?workspaceModel.missingSpendText(budget):'Connect the Sheets refresh token to read this workbook.'},
+    {url:'https://analytics.google.com/analytics/web/#/p304508954/reports/intelligenthome',name:'GA4 · www.opstream.ai',used:'Website sessions, channels, landing pages',updated:v.collectedShort,color:(mkt.web&&mkt.web.connected)?ok:gap,count:f.number(web.sessions)+' sessions',gaps:(mkt.web&&mkt.web.connected)?'Channels and landing pages cover the last 90 days.':'Channels and landing pages are added on the next refresh.'},
+    {url:'https://app.otterly.ai',name:'Otterly · AI answers',used:'Share of AI answers mentioning or linking to Opstream',updated:ai.connected?f.date(ai.fetchedAt):'Not connected yet',color:ai.connected?ok:gap,count:ai.connected?f.number(ai.prompts)+' prompts':'—',gaps:ai.connected?'Brand coverage and domain coverage from the latest report.':'No Otterly report is in this collection.'},
+    {url:'https://app.lemlist.com',name:'LemList',used:'Outbound campaigns',updated:v.collectedShort,color:outbound.connected?ok:gap,count:f.number(outbound.campaigns||0)+' campaigns',gaps:outbound.connected?'Sent, reply and bounce counts per campaign.':'Sent and reply counts are not collected yet.'},
     {name:'Ad platforms (report sheets)',used:'Google, Reddit and OpenAI ads',updated:v.collectedShort,color:(mkt.ads||[]).length?ok:gap,count:(mkt.ads||[]).length+' platforms',gaps:'Platform conversions follow each platform’s definition, not the Lead Tracker.'}
   ];
   if(s.perf==='web')v.scopeNote='Website: '+webRange+' · www.opstream.ai only.'+(typeof web.aiCount==='number'?' AI: '+f.number(web.aiCount)+' completed monitored answers'+(web.aiEnd?' through '+f.date(web.aiEnd):'')+'.':'')+' No period filter applies.';
@@ -267,10 +281,11 @@ Component.prototype.renderVals = function () {
     const quietDays=company?workspaceModel.daysQuiet(company,todayPhx):null;
     const liveQuiet=company?workspaceModel.relativeDays(last,workspaceModel.phoenixToday()):null;
     return {...o,owner:info.label,ownerKey:info.key,ownerTitle:info.title,lastEngagement:last,quietDays:liveQuiet!=null?liveQuiet:quietDays,companyRecord:company};
-  }).filter(o=>(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage,o.owner].join(' ').toLowerCase().includes(query)));
+  }).filter(o=>(owner==='Everyone'||o.owner===owner)&&(!query||[o.name,o.note,o.stage,o.owner].join(' ').toLowerCase().includes(query))&&(!s.closeOn||(workspaceModel.dateOnly(o.close)===s.closeOn&&workspaceModel.isOpenPipeline(o,asOf))));
   const deduped=new Map();
   for(const o of accountRows){
-    const key=String(o.companyId||o.name).replace(/^company:/,'');
+    // One row per account, except when listing the deals that share a close date.
+    const key=s.closeOn?String(o.id||o.name):String(o.companyId||o.name).replace(/^company:/,'');
     const prev=deduped.get(key);
     if(!prev){deduped.set(key,o);continue;}
     const better=workspaceModel.listStatus(o,todayPhx)!=='past'&&workspaceModel.listStatus(prev,todayPhx)==='past'
@@ -281,6 +296,7 @@ Component.prototype.renderVals = function () {
   const optionRows=[...prelim.map(({rawOwner})=>infoFor(rawOwner)),...trackerRows.map(r=>infoFor(r.owner))].filter(info=>info.label&&info.label!=='Unassigned');
   v.ownerOptions=[...new Map(optionRows.map(info=>[info.label,info])).values()].sort((a,b)=>a.label.localeCompare(b.label)).map(info=>({name:info.label,title:info.title||''}));
   v.peopleNote=v.ownerOptions.length?('Owners in the collected record: '+v.ownerOptions.map(o=>o.name).join(' · ')+'. The owner filter uses these values.'):'Owner information was not in the collected record.';
+  if(s.accounts==='leads')v.ownerOptions.push({name:'Unassigned',title:'No owner on the Lead Tracker'});
   v.showLastNote=selected.some(o=>String(o.note||'').trim()||(o.hubspotDiffers&&o.hubspotDiffers.length));
   v.lastNoteDisplay=v.showLastNote?'table-cell':'none';
   const closeCounts=new Map();
@@ -299,15 +315,24 @@ Component.prototype.renderVals = function () {
     return {company:companyName,owner:o.owner,ownerTitle:o.ownerTitle||'',stage:workspaceModel.stageDisplay(o.stage),arr:o.amount==null?'—':'$'+f.number(o.amount),prob:workspaceModel.probabilityFraction(o.probability)==null?'—':f.percent(workspaceModel.probabilityFraction(o.probability)),weighted:workspaceModel.weighted(o)==null?'—':'$'+f.number(workspaceModel.weighted(o)),close:workspaceModel.closeLabel(o.close),days:o.days??'—',daysColor:o.days>120?'var(--color-accent-700)':'var(--color-text)',note,lastInteraction:o.lastEngagement?workspaceModel.formatDate(o.lastEngagement)+(o.quietDays!=null?' · '+workspaceModel.relativeLabel(o.lastEngagement,workspaceModel.phoenixToday()):''):'—',go:()=>{const c=o.companyRecord;if(c)this.go('account',{accountId:c.id,timelineAll:false,peopleAll:false})();else this._verifiedOpenRefs(o.refs,'Owner worksheet · '+o.name);}};
   }).filter(Boolean);
   v.dealsCount=selected.length+' accounts · '+pipe.count+' open deals';
+  v.hasCloseOn=!!s.closeOn&&s.accounts==='deals';
+  v.closeOnLine=v.hasCloseOn?f.number(selected.length)+' open deals closing '+workspaceModel.formatDate(s.closeOn):'';
   const leadBase=trackerRows;
   v.leadTrackerNote='';
-  const leadRows=leadBase.map(r=>{const info=infoFor(r.owner);return {...r,owner:info.label,ownerTitle:info.title};}).filter(r=>(owner==='Everyone'||r.owner===owner)&&(!query||[r.name,r.source,r.note,r.owner].join(' ').toLowerCase().includes(query))&&(s.contributor?inRange(s.contributor==='lead'?workspaceModel.firstTouch(r):r[s.contributor]):true)).sort((a,b)=>workspaceModel.compareLeads(a,b));
-  v.leads=leadRows.map(r=>({company:r.name,source:workspaceModel.sourceLabel(r.source),owner:r.owner||'—',ownerTitle:r.ownerTitle||'',date:f.date(r.lead||r.mql),note:r.note,mql:f.date(r.mql),sql:f.date(r.sql)}));
+  const stageNames={'mql-no-sql':'MQL, no SQL yet','no-mql':'No MQL date'};
+  const leadRows=leadBase.map(r=>{const info=infoFor(r.owner);return {...r,owner:info.label,ownerTitle:info.title};}).filter(r=>(owner==='Everyone'||r.owner===owner)&&(!s.leadStage||workspaceModel.leadStage(r)===s.leadStage)&&(!s.leadSource||workspaceModel.sourceLabel(r.source)===s.leadSource)&&(!query||[r.name,r.source,r.note,r.owner,r.contact?.name,r.contact?.title].join(' ').toLowerCase().includes(query))&&(s.contributor?inRange(s.contributor==='lead'?workspaceModel.firstTouch(r):r[s.contributor]):true)).sort((a,b)=>workspaceModel.compareLeads(a,b));
+  v.leads=leadRows.map(r=>({company:r.name,contact:r.contact?.name||'—',contactTitle:r.contact?.title||'',email:r.contact?.email||'',hasEmail:!!r.contact?.email,mailto:r.contact?.email?'mailto:'+r.contact.email:'',source:workspaceModel.sourceLabel(r.source),owner:r.owner||'—',ownerTitle:r.ownerTitle||'',date:f.date(r.lead||r.mql),note:r.note,mql:f.date(r.mql),sql:f.date(r.sql),sheetUrl:r.sheetRow?.url||'',sheetLabel:r.sheetRow?.row?'Row '+r.sheetRow.row:'',sheetTitle:r.sheetRow?.label||''}));
   v.leadsEmpty=leadRows.length===0;v.dealsEmpty=selected.length===0;
   v.leadsCount=leadRows.length+' '+trackerLabel+' rows'+(s.contributor?' · '+s.contributor.toUpperCase()+' date '+period:'');
-  v.accountTabs.forEach(t=>{const go=t.go;t.go=()=>{this.setState({contributor:null});go();};});
+  v.leadSourceOptions=[...new Set(trackerRows.map(r=>workspaceModel.sourceLabel(r.source)).filter(Boolean))].sort().map(name=>({name}));
+  v.leadStageValue=s.leadStage||'';v.leadSourceValue=s.leadSource||'';
+  v.setLeadStage=e=>this.setState({leadStage:e.target.value||null});v.setLeadSource=e=>this.setState({leadSource:e.target.value||null});
+  v.leadFilterLine=[s.leadSource?'Source: '+s.leadSource:'',owner!=='Everyone'?'Owner: '+owner:'',s.leadStage?stageNames[s.leadStage]:'',query?'Search: “'+(s.search||'').trim()+'”':''].filter(Boolean).join(' · ');
+  v.hasLeadFilters=!!v.leadFilterLine;v.leadsShown=f.number(leadRows.length)+' lead'+(leadRows.length===1?'':'s');
+  v.clearSearch=()=>this.setState({search:'',owner:'Everyone',contributor:null,leadStage:null,leadSource:null,closeOn:null});
+  v.accountTabs.forEach(t=>{const go=t.go;t.go=()=>{this.setState({contributor:null,leadStage:null,leadSource:null,closeOn:null});go();};});
   v.exportLabel=s.accounts==='leads'?'Export '+leadRows.length+' leads':s.accounts==='follow'?'Export follow-ups':'Export '+selected.length+' opportunities';
-  if(s.accounts==='leads')v.exportAccounts=()=>this.csv('leads.csv',['Company','Source','Owner','Lead date','Notes','MQL date','SQL date'],leadRows.map(r=>[r.name,r.source,r.owner,r.lead,r.note,r.mql,r.sql]));
+  if(s.accounts==='leads')v.exportAccounts=()=>this.csv('leads.csv',['Company','Contact','Title','Email','Source','Owner','Lead date','Notes','MQL date','SQL date','Lead Tracker row'],leadRows.map(r=>[r.name,r.contact?.name||'',r.contact?.title||'',r.contact?.email||'',r.source,r.owner,r.lead,r.note,r.mql,r.sql,r.sheetRow?.url||'']));
   else if(s.accounts==='deals')v.exportAccounts=()=>this.csv('opportunities.csv',['Company','Owner','Stage','ARR','Probability','Weighted ARR','Close','Days in stage'].concat(v.showLastNote?['Last note']:[]),selected.map(o=>[workspaceModel.companyName(o.name),o.owner,o.stage,o.amount,o.probability,workspaceModel.weighted(o),workspaceModel.closeLabel(o.close),o.days].concat(v.showLastNote?[o.note]:[])));
   v.exportSources=()=>this.csv('leads-by-source.csv',['Source','This week','6-week average','Quarter to date','Quarter cost per lead'],(v.marketingSources||[]).map(r=>[r.channel,r.week,r.six,r.quarter,r.cpl]));
   v.exportSpend=()=>this.csv('spend-2026.csv',['Month','Planned','Recorded','Note'],budgetMonths.map(m=>[m.month,m.planned,m.actual,m.actual==null?'Not entered':'']));

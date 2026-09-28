@@ -147,6 +147,34 @@ Component.prototype._workspaceHistory = async function() {
     this.setState({workspaceHistory:distinct,evidence:'workspace-history'});
   }catch(error){this.setState({draftFeedback:error.message,draftFeedbackClass:'form-error'});}
 };
+// "Name <a@b.c>", bare addresses and contact names all become addresses; repeats go.
+const recipientEmails=(value,company)=>{
+  const byName=new Map((company?.contacts||[]).filter(c=>c.email).map(c=>[String(c.name||'').trim().toLowerCase(),c.email]));
+  const out=[];
+  for(const part of String(value||'').split(/[,;]/).map(x=>x.trim()).filter(Boolean)){
+    const email=(part.match(/[^\s<>"]+@[^\s<>"]+/)||[])[0]||byName.get(part.replace(/<.*>/,'').trim().toLowerCase())||'';
+    if(email&&!out.some(e=>e.toLowerCase()===email.toLowerCase()))out.push(email);
+  }
+  return out.join(', ');
+};
+const emailList=value=>String(value||'').split(/[,;]/).map(x=>(x.match(/[^\s<>"]+@[^\s<>"]+/)||[])[0]).filter(Boolean).filter((e,i,a)=>a.findIndex(x=>x.toLowerCase()===e.toLowerCase())===i).join(', ');
+const plainNote=html=>String(html||'').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim();
+// A follow-up opened from the newest recording or completed meeting on the account.
+// CRM notes are internal, so the newest one goes to the draft's internal notes, not the email.
+const followUpFromNotes=(company,recipients)=>{
+  if(!company)return {text:'',internalNotes:''};
+  const contact=(company.contacts||[]).find(c=>c.email&&String(recipients).toLowerCase().includes(c.email.toLowerCase()));
+  const first=String(contact?.name||'').trim().split(/\s+/)[0];
+  const items=[
+    ...(company.recordings||[]).map(r=>({at:String(r.date||r.start||''),line:'Thanks again for the '+(r.title||'call')+' on '+workspaceModel.formatDate(String(r.date||r.start||'').slice(0,10))+'.',detail:(r.actions||[]).slice(0,4).map(a=>'- '+a).join('\n')})),
+    ...(company.meetings||[]).filter(m=>/complete/i.test(m.outcome||'')).map(m=>({at:String(m.start||''),line:'Thanks again for the '+(m.title||'meeting')+' on '+workspaceModel.formatDate(String(m.start||'').slice(0,10))+'.',detail:''})),
+    ...(company.notes||[]).map(n=>({at:String(n.date||''),line:'',detail:plainNote(n.text).slice(0,400)})),
+  ].filter(x=>x.at).sort((a,b)=>b.at.localeCompare(a.at));
+  const meeting=items.find(x=>x.line),note=items.find(x=>!x.line&&x.detail);
+  const internalNotes=note?'Latest CRM note ('+workspaceModel.formatDate(note.at.slice(0,10))+'): '+note.detail:'';
+  const text=[first?'Hi '+first+',':'Hi,','',meeting?meeting.line:'I wanted to follow up on where things stand.',meeting?.detail?'\nThe next steps we noted:\n'+meeting.detail:'','','Would a short call next week help to move this forward?','','Best,'].join('\n').replace(/\n{3,}/g,'\n\n');
+  return {text,internalNotes};
+};
 Component.prototype.renderVals = function() {
   const v=collaborationOriginal.render.call(this),s=this.state,ready=!!s.workspaceReady;
   v.workspaceLoading=!!s.workspaceLoading;v.workspaceError=s.workspaceError||s.preferencesError||'';v.reloadWorkspace=()=>this._loadWorkspace();
@@ -193,8 +221,11 @@ Component.prototype.renderVals = function() {
   }
   v.priorityNotice=s.preferencesError?s.preferencesError:s.preferencesSaving?'Saving your preferences…':ready?'Priority preferences are saved in this browser.':'';
   const drafts=this._workspaceDrafts(),selectedDraft=this._currentWorkspaceDraft(),purpose=s.draftPurpose||selectedDraft?.purpose||'email';
-  v.draftTabs=Object.entries(purposeNames).map(([id,label])=>({label,count:drafts.filter(d=>d.purpose===id).length,selected:purpose===id,go:()=>this._selectWorkspaceDraft(drafts.find(d=>d.purpose===id)?.id,id)}));
-  const visible=drafts.filter(d=>d.purpose===purpose);v.draftListTitle=purposeNames[purpose]||'Drafts';v.draftsEmpty=!visible.length;
+  const show=s.draftShow?((s.marketing?.shows?.items)||[]).find(x=>x.id===s.draftShow):null,inShow=d=>!s.draftShow||d.showId===s.draftShow;
+  v.draftTabs=Object.entries(purposeNames).map(([id,label])=>({label,count:drafts.filter(d=>d.purpose===id&&inShow(d)).length,selected:purpose===id,go:()=>this._selectWorkspaceDraft(drafts.find(d=>d.purpose===id&&inShow(d))?.id,id)}));
+  const visible=drafts.filter(d=>d.purpose===purpose&&inShow(d));
+  v.hasDraftShow=!!s.draftShow;v.draftShowLine=s.draftShow?'Drafts for '+(show?.name||'this show')+' · '+drafts.filter(inShow).length:'';
+  v.clearDraftShow=()=>this.setState({draftShow:null});v.draftListTitle=purposeNames[purpose]||'Drafts';v.draftsEmpty=!visible.length;
   v.draftList=visible.map(d=>({title:d.title||d.subject||'Untitled draft',current:d.id===selectedDraft?.id,status:(s.sendAudit||[]).some(r=>r.draftId===d.id)?'Sent':d.status,
     meta:d.company+' · '+(d.version?'v'+d.version:'Not saved')+(d.dirty?' · unsaved changes':''),go:()=>this._selectWorkspaceDraft(d.id,d.purpose)}));
   v.hasDraft=!!selectedDraft&&selectedDraft.purpose===purpose;v.newDraft=()=>this._newWorkspaceDraft(purpose);
@@ -217,34 +248,30 @@ Component.prototype.renderVals = function() {
     v.evDraftRefs=()=>this._verifiedOpenRefs(draft.supportRefs,'Records behind this draft');
     v.exportDraft=()=>{if(draft.purpose==='campaign')this.csv('lemlist-campaign-draft.csv',['sender','subject','body'],[[draft.campaignSender,draft.subject,draft.text]]);else this.csv('opstream-draft.csv',['Field','Value'],[['Subject',draft.subject],['Purpose',draft.purpose],['To',draft.recipients],['Cc',draft.cc],['Bcc',draft.bcc],['Message',draft.text],['Internal notes',draft.internalNotes],['Review context',draft.rationale],['Version',draft.version]]);};
     v.copyCampaign=async()=>{try{await navigator.clipboard.writeText('Subject: '+draft.subject+'\n\n'+draft.text);this.setState({draftFeedback:'Campaign copy copied. Paste it into your LemList sequence.',draftFeedbackClass:'form-success'});}catch{this.setState({draftFeedback:'Clipboard access is unavailable. Use Export to download the campaign copy.',draftFeedbackClass:'form-error'});}};
-    v.copyEmail=async()=>{try{await navigator.clipboard.writeText('To: '+draft.recipients+'\nSubject: '+draft.subject+'\n\n'+draft.text);this.setState({draftFeedback:'Email copied. Paste it into Gmail to send.',draftFeedbackClass:'form-success'});}catch{this.setState({draftFeedback:'Clipboard access is unavailable. Use Export to download the email.',draftFeedbackClass:'form-error'});}};
+    const gmailParams=new URLSearchParams({view:'cm',fs:'1',to:emailList(draft.recipients),su:draft.subject||'',body:draft.text||''});
+    if(emailList(draft.cc))gmailParams.set('cc',emailList(draft.cc));if(emailList(draft.bcc))gmailParams.set('bcc',emailList(draft.bcc));
+    v.gmailComposeUrl='https://mail.google.com/mail/?'+gmailParams.toString();
+    v.copyEmail=async()=>{try{await navigator.clipboard.writeText('To: '+emailList(draft.recipients)+(emailList(draft.cc)?'\nCc: '+emailList(draft.cc):'')+'\nSubject: '+draft.subject+'\n\n'+draft.text);this.setState({draftFeedback:'Email copied. Paste it into Gmail to send.',draftFeedbackClass:'form-success'});}catch{this.setState({draftFeedback:'Clipboard access is unavailable. Use Export to download the email.',draftFeedbackClass:'form-error'});}};
     v.generateLabel=s.generating?'Generating…':'Generate with AI';
     v.generateDisabled=!!s.generating;
     v.generateEmail=async()=>{
       if(this.state.generating)return;
-      const d=this._currentWorkspaceDraft()||{};
-      const ctx=['Write a follow-up email for Hollie at Opstream.',
-        'Company: '+(d.accountIds?d.accountIds.join(', '):'unknown'),
-        'Recipient(s): '+(d.recipients||'unknown'),
-        d.rationale?'Context: '+d.rationale:'',
-        d.text?'Current draft text (improve or rewrite): '+String(d.text).slice(0,2000):'No draft text yet — write from scratch.',
-        'Return the email with a clear subject line first (as "Subject: ..."), then the body. Keep it concise and professional. Sign as Hollie.'].filter(Boolean).join('\n');
+      const d=this._currentWorkspaceDraft();
+      if(!d)return;
       this.setState({generating:true,draftFeedback:null});
       try{
-        const r=await fetch('/api/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:ctx,history:[]})});
+        const r=await fetch('/api/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({format:'email',draft:{purpose:d.purpose,company:d.company,recipients:d.recipients,subject:d.subject,text:d.text,rationale:d.rationale}})});
         const j=await r.json();if(!r.ok)throw new Error(j.error||'Generation failed');
-        const answer=j.answerText||'';
-        const m=answer.match(/^Subject:\s*(.+)$/im);
-        const subject=m?m[1].trim():(d.subject||d.title||'');
-        const body=m?answer.slice(m.index+m[0].length).trim():answer;
-        this._editWorkspaceDraft(d.id,{subject,text:body});
+        const subject=String(j.subject||'').trim(),body=String(j.body||'').trim();
+        if(!body)throw new Error('the reply had no message text. Your draft is unchanged.');
+        this._editWorkspaceDraft(d.id,{...(subject?{subject,title:subject}:{}),text:body});
         this.setState({generating:false,draftFeedback:'AI draft generated. Review and edit before sending.',draftFeedbackClass:'form-success'});
       }catch(e){this.setState({generating:false,draftFeedback:'Could not generate: '+(e.message||'error'),draftFeedbackClass:'form-error'});}
     };
     v.showWorkspaceHistory=()=>this._workspaceHistory();v.reloadWorkspaceDraft=async()=>{try{const result=await this._workspaceApi('/drafts/'+encodeURIComponent(id));const edits={...this.state.draftEdits};delete edits[id];this.setState({remoteDrafts:[...(this.state.remoteDrafts||[]).filter(d=>d.id!==id),result.draft],draftEdits:edits,draftSaveConflict:false,draftFeedback:null});}catch(error){this.setState({draftFeedback:error.message,draftFeedbackClass:'form-error'});}};
     v.saveDraftCopy=()=>{this._newWorkspaceDraft(draft.purpose,{...draft,id:crypto.randomUUID(),title:draft.title+' (copy)',subject:draft.subject,version:0,history:[]});return this._saveWorkspaceDraft().catch(()=>{});};
   }
-  const wrapEntry=action=>()=>{this.setState({draftId:null,draftPurpose:null});const count=(this.state.newDrafts||[]).length;action();const additions=this.state.newDrafts||[];if(additions.length>count){const raw=additions[count],company=(s.records.companies||[]).find(c=>c.name===raw.company);const d=workspaceDomain.document({...raw,id:raw.id||crypto.randomUUID(),subject:raw.subject||('Following up'+(raw.company?' · '+raw.company:'')),text:String(raw.text||''),recipients:raw.recipients||'',accountIds:company?['company:'+company.id]:(raw.accountIds||[])});this.setState({newDrafts:additions.map((x,i)=>i===count?d:x),draftId:d.id,draftPurpose:'email'});}};
+  const wrapEntry=action=>()=>{this.setState({draftId:null,draftPurpose:null,draftShow:null});const count=(this.state.newDrafts||[]).length;action();const additions=this.state.newDrafts||[];if(additions.length>count){const raw=additions[count],company=(s.records.companies||[]).find(c=>c.name===raw.company);const recipients=recipientEmails(raw.recipients,company),seeded=String(raw.text||'').trim()?null:followUpFromNotes(company,recipients);const d=workspaceDomain.document({...raw,id:raw.id||crypto.randomUUID(),subject:raw.subject||('Following up'+(raw.company?' · '+raw.company:'')),text:seeded?seeded.text:String(raw.text),internalNotes:raw.internalNotes||seeded?.internalNotes||'',recipients,accountIds:company?['company:'+company.id]:(raw.accountIds||[])});this.setState({newDrafts:additions.map((x,i)=>i===count?d:x),draftId:d.id,draftPurpose:'email'});}};
   if(v.acct?.draftGo)v.acct.draftGo=wrapEntry(v.acct.draftGo);if(v.mtg?.draftGo)v.mtg.draftGo=wrapEntry(v.mtg.draftGo);
   for(const follow of v.followUps||[])follow.draftGo=wrapEntry(follow.draftGo);
   if(s.evidence){
@@ -256,6 +283,7 @@ Component.prototype.renderVals = function() {
       v.exportEvidence=()=>this._workspaceDownload('draft-history.json',JSON.stringify(s.workspaceHistory,null,2),'application/json');
     }
     v.proposeCorrection=()=>{const title='Correction: '+v.ev.title;const existing=this._workspaceDrafts().find(d=>d.title===title&&d.purpose==='internal-note');if(existing){this.setState({screen:'drafts',draftId:existing.id,draftPurpose:existing.purpose,evidence:false,draftFeedback:'A correction draft for this record already exists — opened it instead of creating a duplicate.',draftFeedbackClass:'form-success'});window.scrollTo(0,0);return;}this._newWorkspaceDraft('internal-note',{title,subject:title,text:'Describe the correction to '+v.ev.title+'.',internalNotes:'Keep the original record and supporting evidence until the correction is verified.',supportRefs:refs,rationale:v.ev.ids});};
+    v.ev.sourceLinks=workspaceModel.hubspotLinks(String(v.ev.ids||'').match(/hubspot:(?:deals|companies|contacts):\d+/g)||[]);v.ev.hasSourceLinks=v.ev.sourceLinks.length>0;
     this._readableEvidence=v.ev;
   }else this._readableEvidence=null;
   return v;

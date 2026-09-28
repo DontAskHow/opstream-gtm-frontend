@@ -490,7 +490,35 @@ const workspaceModel = {
     const sheet=(sheetReview&&sheetReview.leads)||[];
     const base=sheet.length?sheet:(contacts||[]);
     return base.filter(r=>{const note=String(r.note||'').trim().toLowerCase();const name=String(r.company||r.name||'').trim();return note!=='subscriber'&&!note.includes('newsletter')&&name&&!name.includes('@');})
-      .map(r=>({id:r.id,name:String(r.company||r.name).trim(),source:this.sourceLabel(r.source),owner:r.owner,lead:this.dateOnly(r.lead||r.leadDate),mql:this.dateOnly(r.mql),sql:this.dateOnly(r.sql),note:r.note}));
+      .map(r=>({id:r.id,name:String(r.company||r.name).trim(),source:this.sourceLabel(r.source),owner:this.leadOwner(r.owner),lead:this.dateOnly(r.lead||r.leadDate),mql:this.dateOnly(r.mql),sql:this.dateOnly(r.sql),note:r.note,contact:r.contact||null,sheetRow:r.sheetRow||null}));
+  },
+  // An owner name, or '' when the tracker says nobody owns the lead.
+  HUBSPOT_PORTAL:'21303277',
+  leadOwner(value) {
+    const raw=String(value??'').trim();
+    if(/^(|not assigned|unassigned|customer|none|-)$/i.test(raw))return '';
+    return /^[a-z]+$/i.test(raw)?raw.charAt(0).toUpperCase()+raw.slice(1).toLowerCase():raw;
+  },
+  // HubSpot record pages for deal, company and contact refs ('hubspot:deals:123').
+  hubspotLinks(refs) {
+    const types={deals:['0-3','deal'],companies:['0-2','company'],contacts:['0-1','contact']};
+    const out=[];
+    for(const ref of [].concat(refs||[])){
+      const m=String(ref||'').match(/^hubspot:(deals|companies|contacts):(\d+)$/);
+      if(!m)continue;
+      const url='https://app.hubspot.com/contacts/'+this.HUBSPOT_PORTAL+'/record/'+types[m[1]][0]+'/'+m[2];
+      if(!out.some(l=>l.url===url))out.push({url,label:'HubSpot '+types[m[1]][1]+' '+m[2],kind:types[m[1]][1]});
+    }
+    return out;
+  },
+  hubspotUrl(refs, kind) {
+    const hit=this.hubspotLinks(refs).find(l=>!kind||l.kind===kind);
+    return hit?hit.url:'';
+  },
+  // no-mql, mql-no-sql or sql: the Lead Tracker stage a row has reached.
+  leadStage(row) {
+    if(!row.mql)return 'no-mql';
+    return row.sql?'sql':'mql-no-sql';
   },
   firstTouch(row) {
     const days=[row.lead,row.mql,row.sql].filter(Boolean).sort();
@@ -515,21 +543,21 @@ const workspaceModel = {
   activityFromRecords(records) {
     const meetings=[],recordings=[];
     const seenMeetings=new Set(),seenRecordings=new Set();
-    const addMeeting=(m,companyId)=>{
-      const id=m.id||(companyId+'|'+String(m.start||'')+'|'+(m.title||''));
+    const addMeeting=(m,c)=>{
+      const id=m.id||(c.id+'|'+String(m.start||'')+'|'+(m.title||''));
       if(seenMeetings.has(id))return;
       seenMeetings.add(id);
-      meetings.push({start:m.start,booked:m.booked||m.created||m.start,outcome:m.outcome||'',companyId});
+      meetings.push({id:m.id||null,start:m.start,booked:m.booked||m.created||m.start,outcome:m.outcome||'',companyId:c.id,companyName:c.name,title:m.title||'',owner:m.owner||c.owner||''});
     };
-    const addRecording=(r,companyId)=>{
-      const id=r.id||(companyId+'|'+String(r.date||''));
+    const addRecording=(r,c)=>{
+      const id=r.id||((c?c.id:'')+'|'+String(r.date||''));
       if(seenRecordings.has(id))return;
       seenRecordings.add(id);
-      recordings.push({date:r.date,companyId});
+      recordings.push({id:r.id||null,date:r.date,companyId:c?c.id:null,companyName:c?c.name:(r.companyName||''),title:r.title||'',recordedBy:r.recordedBy||''});
     };
     for(const c of records?.companies||[]){
-      for(const m of c.meetings||[])addMeeting(m,c.id);
-      for(const r of c.recordings||[])addRecording(r,c.id);
+      for(const m of c.meetings||[])addMeeting(m,c);
+      for(const r of c.recordings||[])addRecording(r,c);
     }
     for(const r of records?.unmatchedRecordings||[])addRecording(r,null);
     return {meetings,recordings};

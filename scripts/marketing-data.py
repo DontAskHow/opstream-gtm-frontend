@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gtm_metrics import date_only, first_touch, phoenix_today, tracker_rows
 import source_health
+from sheet_links import link as _sheet_link
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("OUT_DATA") or (ROOT / "out" / "data"))
@@ -31,6 +32,10 @@ def load(name, default):
         return json.loads((DATA / name).read_text(encoding="utf-8"))
     except Exception:
         return default
+
+
+def sheet_link(db, title, tab, row=None, last_col=None):
+    return _sheet_link(db, title, tab, row, last_col) if db is not None else None
 
 
 def cell(row, i):
@@ -140,6 +145,7 @@ def budget(db, year):
     return {
         "connected": True,
         "source": "Channels_Marketing Budget · Actuals tab",
+        "sheet": sheet_link(db, BUDGET, "Actuals"),
         "currency": None,
         "months": months,
         "plannedTotal": money(cell(planned_row, 15)) or round(sum(m["planned"] or 0 for m in months), 2),
@@ -186,7 +192,7 @@ def shows(db, spend, leads, today, year):
         except sqlite3.Error:
             campaigns = []
     items = []
-    for r in rows[1:]:
+    for row_number, r in enumerate(rows[1:], start=2):
         name = cell(r, 0)
         if not name:
             continue
@@ -208,6 +214,7 @@ def shows(db, spend, leads, today, year):
             "planned": price,
             "notes": col(r, "notes") or None,
             "checklistNote": col(r, "preparedness") or None,
+            "sheetRow": sheet_link(db, BUDGET, "Final Annual Show calendar", row_number, "M"),
         }
         show["campaigns"] = [{"name": n, "status": st} for n, st in campaigns if norm(n) == norm(show["name"])]
         items.append(show)
@@ -243,6 +250,8 @@ def shows(db, spend, leads, today, year):
                 from_show.append(l)
         show["leads"] = summarize_leads(from_show)
         show["meetingRequests"] = summarize_leads(requests)
+        show["leadRows"] = [lead_row(l) for l in from_show]
+        show["requestRows"] = [lead_row(l) for l in requests]
         if start and end:
             if end < today:
                 show["phase"] = "past"
@@ -261,6 +270,24 @@ def shows(db, spend, leads, today, year):
                     for v in event_rows if not any(match_vendor(v["vendor"], s) for s in items)]
     return {"connected": True, "source": "Channels_Marketing Budget · Final Annual Show calendar",
             "items": ahead + past, "unattributed": unattributed}
+
+
+def lead_row(l):
+    c = l.get("contact") or {}
+    return {"company": l.get("name"), "contact": c.get("name"), "title": c.get("title"), "email": c.get("email"),
+            "owner": l.get("owner") or "", "lead": first_touch(l), "mql": l.get("mql"), "sql": l.get("sql"),
+            "note": l.get("note") or "", "sheetUrl": (l.get("sheetRow") or {}).get("url")}
+
+
+def webinar_recording(db):
+    """A Drive video or recording whose name says webinar, if the collection has one."""
+    try:
+        row = db.execute("SELECT file_id, name FROM drive_files WHERE lower(name) LIKE '%webinar%' AND "
+                         "(mime_type LIKE 'video/%' OR lower(name) LIKE '%recording%') "
+                         "ORDER BY modified_time DESC LIMIT 1").fetchone()
+    except sqlite3.Error:
+        return None
+    return {"url": "https://drive.google.com/file/d/%s/view" % row[0], "name": row[1]} if row else None
 
 
 def summarize_leads(rows):
@@ -546,6 +573,7 @@ def main():
         "shows": shows(db, spend, leads, today, year),
         "outbound": outbound(db),
         "ai": ai_mentions(db),
+        "webinarRecording": webinar_recording(db) if db is not None else None,
         "ads": ads(db),
         "web": web(db),
         "team": team(db),

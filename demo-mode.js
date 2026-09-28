@@ -58,6 +58,7 @@ Component.prototype.renderVals=function(){
  v.hasSendReceipt=!!receipt;
  v.sendReceiptLabel=receipt?'Sent from '+receipt.from+' · '+workspaceModel.formatDateTime(receipt.at)+'.':'';
  const canSend=!!(s.signedIn&&!s.expired&&s.canSend);
+ v.canSendGmail=canSend;
  if(canSend){
   v.gmailEmail=s.email||'';
   v.senderLabel=s.email||'';

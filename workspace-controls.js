@@ -36,7 +36,7 @@ Component.prototype.renderVals=function(){
     return {...p,n:String(i+1),owner:context.owner,ownerLabel:context.account?'Account owner':'Owner',
       interactionDate:context.account?(context.interaction?verifiedFormat.date(context.interaction.date):'Not recorded'):(ownDate?ownDate+(p.lastInteractionLabel?' · '+p.lastInteractionLabel:''):(p.lastInteractionLabel||'Not recorded')),
       contextLabel:context.interaction?.source||'Owner source',hasContextRefs:contextRefs.length>0,contextGo:()=>this._verifiedOpenRefs(contextRefs,'Owner and last interaction'),
-      primary:p.primary.label,primaryGo:this._verifiedTarget(p.primary.target),hasSecondary:!!p.secondary,secondary:p.secondary?.label||'',secondaryGo:p.secondary?this._verifiedTarget(p.secondary.target):()=>{},
+      primary:p.primary.label,primaryGo:this._verifiedTarget(p.primary.target),primaryHref:p.primary.target?.kind==='url'?p.primary.target.href:'',more:(p.more||[]).map(x=>({label:x.label,href:x.target?.kind==='url'?x.target.href:'',go:this._verifiedTarget(x.target)})),hasSecondary:!!p.secondary,secondary:p.secondary?.label||'',secondaryGo:p.secondary?this._verifiedTarget(p.secondary.target):()=>{},
       rankLabel:'Recommended #'+(i+1)+' · Why this rank?',sourcesGo:()=>this._verifiedOpenRefs(p.refs,'Why this priority · '+p.title),
       important:rating==='important',notImportant:rating==='not-important',rated:!!rating,
       importantGo:()=>this._ratePriority(p.id,rating==='important'?null:'important'),lessGo:()=>this._ratePriority(p.id,rating==='not-important'?null:'not-important'),clearRating:()=>this._ratePriority(p.id,null),

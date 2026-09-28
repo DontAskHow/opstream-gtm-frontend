@@ -15,6 +15,7 @@ const workspaceDomain = (() => {
       version: Number.isSafeInteger(d.version) ? d.version : 0, updatedAt: d.updatedAt || null,
       history: Array.isArray(d.history) ? d.history : [], contentMode: d.contentMode || 'default',
       citations: Array.isArray(d.citations) ? d.citations.map(String) : [],
+      showId: typeof d.showId === 'string' ? d.showId : null,
     };
   }
   function seeds(verified, records, revisions) {

@@ -19,6 +19,7 @@ Output:
   leadTracker- manual lead tracker rollup (unworked / MQL-no-SQL counts)
   generatedAt
 """
+import difflib
 import json
 import os
 import re
@@ -26,6 +27,9 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sheet_links import link as sheet_link  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = Path(os.environ.get("OUT_DATA") or (ROOT / "out" / "data")) / "sheet-review.json"
@@ -53,6 +57,100 @@ def sheet_rows(cur, tab):
         if isinstance(row, list):
             rows.append((rn, row))
     return rows
+
+
+def company_key(name):
+    base = re.sub(r"\b(inc|llc|ltd|gmbh|corp|corporation|co|plc|sa|ag|limited|group)\b", "", str(name or "").lower())
+    return re.sub(r"[^a-z0-9]", "", base)
+
+
+def lead_contacts(cur, companies):
+    """Company key -> HubSpot contacts (by company association or contact company), nearest the lead date first."""
+    want = {company_key(n): d for n, d in companies if company_key(n)}
+    if not want:
+        return {}
+    name_re = re.compile(r'"name":\s*"([^"]*)"')
+    by_company = {}
+    names = []
+    for hid, pj in q(cur, "select hs_id, properties_json from hubspot_objects where object_type='companies'"):
+        m = name_re.search(pj or "")
+        if not m:
+            continue
+        key = company_key(m.group(1))
+        if key in want:
+            by_company.setdefault(str(hid), key)
+        elif key:
+            names.append((str(hid), key))
+    # A typo on the tracker ("Vanatge Towers") still finds the HubSpot company.
+    matched = set(by_company.values())
+    for key in [k for k in want if k not in matched and len(k) >= 5]:
+        close = [(difflib.SequenceMatcher(None, key, other).ratio(), hid) for hid, other in names
+                 if other[:1] == key[:1] and abs(len(other) - len(key)) <= 2]
+        best = max(close, default=(0, None))
+        if best[0] >= 0.85:
+            by_company.setdefault(best[1], key)
+    linked = {}
+    ids = list(by_company)
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        for f, t in q(cur, "select from_id, to_id from hubspot_associations where from_type='companies' "
+                           "and to_type='contacts' and from_id in (%s)" % ",".join("?" * len(chunk)), chunk):
+            linked[str(t)] = by_company[str(f)]
+    company_re = re.compile(r'"company":\s*"([^"]*)"')
+    found = {}
+    for hid, pj in q(cur, "select hs_id, properties_json from hubspot_objects where object_type='contacts'"):
+        key = linked.get(str(hid))
+        if key is None:
+            m = company_re.search(pj or "")
+            key = company_key(m.group(1)) if m and company_key(m.group(1)) in want else None
+        if key is None:
+            continue
+        try:
+            p = json.loads(pj)
+        except Exception:
+            continue
+        email = str(p.get("email") or "").strip()
+        if "@" not in email:
+            continue
+        created = str(p.get("createdate") or "")[:10]
+        lead_day = want.get(key) or ""
+        gap = abs((_parse_day(created) - _parse_day(lead_day)).days) if created and lead_day else 10 ** 6
+        found.setdefault(key, []).append(
+            {"name": " ".join(x for x in (p.get("firstname"), p.get("lastname")) if x).strip() or None,
+             "title": (p.get("jobtitle") or None), "email": email, "hubspotId": str(hid), "_gap": gap})
+    for key, cands in found.items():
+        cands.sort(key=lambda c: c["_gap"])
+        for c in cands:
+            c.pop("_gap", None)
+    return found
+
+
+def pick_contact(cands, note):
+    """The person the note names, if HubSpot has them; else the note's person; else the nearest contact."""
+    named = note_contact(note)
+    if named:
+        low = named["name"].lower()
+        for c in cands or []:
+            if c.get("name") and c["name"].lower() == low:
+                return c
+        return named
+    return (cands or [None])[0]
+
+
+def note_contact(note):
+    """A name and title the owner wrote in the note, e.g. '(Bernice Vasqueze - Strategic Sourcing Specialist)'."""
+    m = re.search(r"\(([A-Z][\w'.-]+(?: [A-Z][\w'.-]+)+)\s*[-–]\s*([^)]+)\)", str(note or ""))
+    if not m:
+        return None
+    return {"name": m.group(1).strip(), "title": m.group(2).strip(), "email": None, "hubspotId": None, "fromNote": True}
+
+
+def _parse_day(text):
+    from datetime import date as _date
+    try:
+        return _date.fromisoformat(text[:10])
+    except Exception:
+        return _date(1970, 1, 1)
 
 
 def num(x):
@@ -293,7 +391,10 @@ def main():
         cutoff = (_date.today() - _td(days=60)).isoformat()
     except Exception:
         pass
-    for _rn, row in sheet_rows(cur, "Lead Tracker"):
+    tracker = sheet_rows(cur, "Lead Tracker")
+    contacts = lead_contacts(cur, [(str(r[0]).strip(), parse_mdy(r[3]) if len(r) > 3 else None)
+                                   for _rn, r in tracker if r])
+    for rn, row in tracker:
         if not row or len(row) < 6:
             continue
         if str(row[0]).strip().lower() in ("company", ""):
@@ -314,6 +415,8 @@ def main():
             "mql": mql,
             "sql": sql,
             "note": str(row[6]).strip() if len(row) > 6 and row[6] else "",
+            "contact": pick_contact(contacts.get(company_key(row[0])), row[6] if len(row) > 6 else ""),
+            "sheetRow": sheet_link(con, SHEET, "Lead Tracker", rn, "H"),
         })
         if not mql:
             lt_unworked += 1
