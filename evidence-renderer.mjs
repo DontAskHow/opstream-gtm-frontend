@@ -50,9 +50,21 @@ function appendBlocks(parent, tokens) {
     parent.append(node);
   }
 }
+function plainNote(value) {
+  let s = String(value || '');
+  if (!/<[a-z!/]/i.test(s)) return s;
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '');
+  s = s.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h[1-6]|tr|blockquote)>/gi, '\n');
+  s = s.replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi, '$1 ');
+  s = s.replace(/<[^>]+>/g, '');
+  s = s.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'");
+  return s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+}
 export function markdown(parent, text) {
-  // No HTML from a record is assigned to innerHTML. Raw HTML remains visible text.
-  appendBlocks(parent, marked.lexer(String(text || ''), { gfm: true, breaks: false }));
+  // CRM notes arrive as HTML. Tags are stripped before rendering. Nothing from a
+  // record is assigned to innerHTML.
+  const raw = String(text || '');
+  appendBlocks(parent, marked.lexer(/<[a-z!/]/i.test(raw) ? plainNote(raw) : raw, { gfm: true, breaks: false }));
 }
 const displayValue = value => typeof value === 'number' ? value.toLocaleString('en-US', { maximumFractionDigits: 6 }) : value == null || value === '' ? 'Not recorded' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
 function field(parent, label, value) {

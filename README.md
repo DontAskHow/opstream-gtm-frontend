@@ -1,6 +1,6 @@
 # Opstream GTM frontend
 
-Public frontend source for the GTM workspace, with entirely synthetic companies, contacts, pipeline, marketing metrics, meetings and drafts.
+Frontend and refresh job for the Opstream GTM workspace: pipeline, marketing, meetings and drafts from HubSpot, the master Sheet, Fathom, GA4, LemList and Otterly.
 
 ## Run locally
 
@@ -19,22 +19,25 @@ Open http://127.0.0.1:4173. The build writes static files to `out/`.
 - Responsive Today, Performance, Accounts, Meetings, Drafts and Data views.
 - Priority stars, comments and mentions, account details, evidence drawers, filters, charts, CSV exports, draft composition and version controls.
 - Component template in `source/workspace.html`, original UI modules at the root, styles and design-system runtime under `source/`.
-- Fictional fixture generator in `scripts/synthetic-data.cjs` and browser-local demo adapter in `demo-mode.js`.
+- Signed-in Google session, browser-local drafts and preferences, and the confirmed Gmail send in `account-session.js`.
 
-The demo stores changes only in the current browser. Email, Slack and authentication are disabled. The production backend, databases, credentials, company snapshots, transcripts, original draft text, deployment settings and private Git history are excluded. Production API integration code remains in `collaboration.js`; the demo adapter substitutes local behavior.
+The database, credentials, company snapshots, transcripts and deployment settings are not in this repository. The refresh job publishes the collection to S3 and each server instance swaps it in.
 
-`source/workspace.html` is the assembled, data-cleaned UI template. The standalone HTML fragments and CSS are also retained for reference; the build uses the assembled template. `draft-history.js` is a retained legacy helper, not loaded by the current build.
+`source/workspace.html` is the assembled, data-cleaned UI template. The standalone HTML fragments and CSS are also retained for reference; the build uses the assembled template.
 
 The existing runtime loads React 18, React DOM, Babel and Archivo from their public CDNs, so viewing requires internet access. Their upstream licenses apply. No new project license is granted by this publication.
 
 ## Verification
 
-With the preview running:
+End-to-end suites (Google, HubSpot, LemList, Otterly and OpenAI are mocked at the HTTP boundary; nothing leaves the machine):
 
 ```sh
-npx playwright install chromium
-node scripts/verify-preview.cjs
+npm run build
+node scripts/check-cta-buttons.mjs      # every Today, Events, Pipeline, Accounts, Meetings and Drafts button
+node scripts/check-v13.mjs              # identity header, owner names, stale-run guard, v13 review fixes, banned terms
+node scripts/check-marketing-home.mjs
+python3 scripts/check-source-syncs.py   # refresh/run.py against mocked source APIs
 npm run security:scan
 ```
 
-Alternatively set `BROWSER_PATH` to an installed Chrome/Edge executable. See `verification/README.md` for the recorded results and limitations.
+Set `CHROME_PATH` to a Chrome executable if it is not at `/usr/local/bin/google-chrome`.

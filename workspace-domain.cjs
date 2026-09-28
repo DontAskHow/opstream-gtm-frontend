@@ -1,6 +1,6 @@
 /* Shared browser/import representation. Original source records stay unchanged. */
 const workspaceDomain = (() => {
-  const purposes = ['email', 'campaign', 'internal-note'];
+  const purposes = ['email', 'event', 'linkedin', 'campaign', 'internal-note'];
   const cleanTitle = value => String(value || '').replace(/ — editable, unsent draft$/, '');
   const purpose = d => purposes.includes(d.purpose) ? d.purpose : d.kind === 'Proposed correction' || d.type === 'Proposed correction' ? 'internal-note' : 'email';
   function document(d, index = 0) {
@@ -9,10 +9,14 @@ const workspaceDomain = (() => {
       subject: d.subject ?? cleanTitle(d.title || ''), text: d.text || '', rationale: d.rationale || '',
       recipients: Array.isArray(d.recipients) ? d.recipients.map(r => r.email || r.name).filter(Boolean).join(', ') : d.recipients || '',
       cc: d.cc || '', bcc: d.bcc || '', internalNotes: d.internalNotes || '', campaignSender: d.campaignSender || '',
+      threadId: typeof d.threadId === 'string' ? d.threadId : '', inReplyTo: typeof d.inReplyTo === 'string' ? d.inReplyTo : '', references: typeof d.references === 'string' ? d.references : '',
       company: d.company || 'No company linked', accountIds: d.accountIds || [],
       supportRefs: d.supportRefs || (Array.isArray(d.refs) ? d.refs : []), status: ['Draft', 'Ready for review', 'Archived'].includes(d.status) ? d.status : 'Draft',
       version: Number.isSafeInteger(d.version) ? d.version : 0, updatedAt: d.updatedAt || null,
       history: Array.isArray(d.history) ? d.history : [], contentMode: d.contentMode || 'default',
+      citations: Array.isArray(d.citations) ? d.citations.map(String) : [],
+      showId: typeof d.showId === 'string' ? d.showId : null,
+      links: Array.isArray(d.links) ? d.links.filter(l => l && /^https:\/\//.test(l.url)).map(l => ({ label: String(l.label || l.url), url: String(l.url) })) : [],
     };
   }
   function seeds(verified, records, revisions) {
@@ -22,7 +26,7 @@ const workspaceDomain = (() => {
       const d = document({ ...original, company: company(original.accountIds) }, index);
       const retained = (verified.draftVersions[d.id] || []).map(x => ({ ...document({ ...x.draft, company: d.company }), savedAt: x.draft.updatedAt, origin: 'Retained source' }));
       const history = new Map(retained.map(h => [h.version, h]));
-      history.set(d.version, { ...d, history: undefined, savedAt: original.updatedAt || '2026-09-08', origin: 'Original supplied draft' });
+      history.set(d.version, { ...d, history: undefined, savedAt: original.updatedAt || String(records.generatedAt||'').slice(0,10) || null, origin: 'Original supplied draft' });
       const revision = revisions.drafts[d.id] || {};
       return { ...d, ...revision, history: [...history.values()], version: d.version + 1, updatedAt: revisions.updatedAt };
     });
@@ -42,7 +46,7 @@ const workspaceDomain = (() => {
     const p = legacy.workspacePreferences || {};
     return {
       drafts: migrated,
-      preferences: { mode: p.mode === 'marketing' ? 'marketing' : 'cs', ratings: p.ratings || {}, draftModes: p.draftModes || {}, priorityContext: p.priorityContext || {} },
+      preferences: { mode: p.mode === 'cs' ? 'cs' : 'marketing', ratings: p.ratings || {}, draftModes: p.draftModes || {}, priorityContext: p.priorityContext || {} },
       comments: Object.entries(p.comments || {}).flatMap(([priorityId, comments]) => Array.isArray(comments) ? comments.map(c => ({ ...c, priorityId })) : []),
     };
   }

@@ -1,0 +1,8 @@
+{
+  "_comment": "Hollie operator autonomy tiers. auto = generated silently into hollie.json (prep briefs). queue = surfaced as action items Hollie works through. propose = surfaced flagged needsDecision; Hollie decides. never = hard stop, the assistant will not do this.",
+  "crm_updates": "propose",
+  "draft_followups": "queue",
+  "external_messages": "never",
+  "meeting_prep": "auto",
+  "send_anything": "never"
+}
