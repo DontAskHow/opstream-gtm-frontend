@@ -56,7 +56,8 @@ async function callChatApi(payload) {
   if (payload.response_format?.type === 'json_object') return { choices: [{ message: { content: emailReply() } }] };
   return { choices: [{ message: { content: '<p>Ask me about your marketing.</p>' } }] };
 }
-setHooks({ fetchImpl: async url => { throw new Error('unexpected url ' + url); }, callChatApi, persistStateFile: async () => {}, putSecretString: async () => '{}' });
+const outbound = [];
+setHooks({ fetchImpl: async url => { outbound.push(String(url)); throw new Error('unexpected url ' + url); }, callChatApi, persistStateFile: async () => {}, putSecretString: async () => '{}' });
 resetAuth();
 const server = createServer();
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -404,7 +405,7 @@ check('About this data links the budget workbook', srcLinks['Marketing budget wo
 check('About this data links LemList, GA4, Fathom and Otterly', ['LemList', 'GA4 · www.opstream.ai', 'Fathom', 'Otterly · AI answers'].every(k => /^https:\/\//.test(srcLinks[k] || '')), JSON.stringify(srcLinks));
 
 check('no page errors', errors.length === 0, errors.join(' | '));
-check('nothing contacted Google, HubSpot or LemList from the server', true);
+check('the server made no outbound calls', outbound.length === 0, outbound.join(' '));
 await browser.close();
 server.close();
 console.log(JSON.stringify({ ok: failures.length === 0, failures, screenshots: shots || null }, null, 2));
