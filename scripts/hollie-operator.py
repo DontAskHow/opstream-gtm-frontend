@@ -137,16 +137,26 @@ def person_label(value):
 PEOPLE_BY_EMAIL = {}
 
 
+OWNER_NAMES = []
+
+
+def as_owner(name):
+    """One person, one label: the HubSpot owner name when exactly one owner has that first name."""
+    first = str(name or "").split(" ")[0].lower()
+    hit = [n for n in OWNER_NAMES if n.split()[0].lower() == first] if first else []
+    return person_label(hit[0]) if len(hit) == 1 else person_label(name)
+
+
 def call_owner(recording):
     """Whoever ran the call signs its follow-up. Fathom sometimes stores only the host's email."""
     who = person_label((recording or {}).get("recordedBy"))
     if "@" not in who:
-        return who
+        return as_owner(who) if who else ""
     email = who.lower()
     for inv in (recording or {}).get("invitees") or []:
         if str(inv.get("email") or "").lower() == email and inv.get("name") and "@" not in inv["name"]:
-            return person_label(inv["name"])
-    return PEOPLE_BY_EMAIL.get(email, "")
+            return as_owner(inv["name"])
+    return as_owner(PEOPLE_BY_EMAIL.get(email, ""))
 
 
 def internal_todo(action, team_first):
@@ -354,6 +364,7 @@ def main():
     team_first_names = {n for n in team_first_names if len(n) >= 3}
     # Host emails to names: any invitee row that names the address, else a HubSpot owner with that first name.
     owner_names = [str(n) for n in (records.get("owners") or {}).values() if str(n).strip()]
+    OWNER_NAMES[:] = owner_names
     for c_ in companies:
         for r_ in c_.get("recordings") or []:
             for inv in r_.get("invitees") or []:

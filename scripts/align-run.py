@@ -154,7 +154,8 @@ def main():
     meeting_bits = []
     for m in meetings[:6]:
         start = str(m.get("start") or "")
-        meeting_bits.append("%s (%s)" % (m.get("title") or "Meeting", phoenix_stamp(start) or start[:16]))
+        clock = phoenix_clock(start) if "T" in start else ""
+        meeting_bits.append("%s (%s)" % (m.get("title") or "Meeting", clock or long_day(phoenix_stamp(start) or start)))
     meeting_line = "Meetings on the collection calendar for the snapshot day and the next day: " + (
         "; ".join(meeting_bits) if meeting_bits else "none in the extract.")
 

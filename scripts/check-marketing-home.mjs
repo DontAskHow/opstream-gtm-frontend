@@ -276,7 +276,7 @@ async function checkTotals(page) {
   const salesText = await page.locator('main').innerText();
   const salesUnworked = (salesText.match(/(\d[\d,]*) with no MQL date yet/) || [])[1];
   check('unworked leads agree', unworkedCard && salesUnworked && num(unworkedCard[1]) === num(salesUnworked), (unworkedCard && unworkedCard[1]) + ' vs ' + salesUnworked);
-  check('sales brief repeats the quarter', salesText.includes(facts.leads + ' leads / ' + facts.mql + ' MQL / ' + facts.sql + ' SQL'));
+  check('sales brief repeats the quarter', salesText.includes(facts.leads + ' leads, ' + facts.mql + ' MQLs and ' + facts.sql + ' SQLs this quarter'));
   await goView(page, 'Pipeline');
   const cards = await page.locator('main button').evaluateAll(bs => bs.map(b => b.innerText));
   const card = label => num(((cards.find(t => t.startsWith(label)) || '').split('\n')[1]));

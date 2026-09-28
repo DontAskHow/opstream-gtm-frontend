@@ -567,15 +567,16 @@ const workspaceModel = {
     return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]+' '+day;
   },
   // Whoever ran the call. Fathom sometimes stores only the host's email.
+  // One person, one label: the HubSpot owner name when exactly one owner has that first name.
   callOwner(recording, records) {
+    const owners=Object.values((records&&records.owners)||{}).map(String);
+    const asOwner=name=>{const first=String(name||'').split(/\s+/)[0].toLowerCase();const hit=owners.filter(n=>n.split(/\s+/)[0].toLowerCase()===first);return hit.length===1?this.personLabel(hit[0]):this.personLabel(name);};
     const who=this.personLabel(recording&&recording.recordedBy);
-    if(!who.includes('@'))return who;
+    if(!who.includes('@'))return asOwner(who);
     const email=who.toLowerCase();
     const all=[recording,...((records&&records.companies)||[]).flatMap(c=>c.recordings||[])];
-    for(const r of all)for(const i of (r&&r.invitees)||[])if(String(i.email||'').toLowerCase()===email&&i.name&&!i.name.includes('@'))return this.personLabel(i.name);
-    const local=email.split('@')[0].split('.')[0];
-    const owners=Object.values((records&&records.owners)||{}).map(String).filter(n=>n.split(/\s+/)[0].toLowerCase()===local);
-    return this.personLabel(owners.length===1?owners[0]:local);
+    for(const r of all)for(const i of (r&&r.invitees)||[])if(String(i.email||'').toLowerCase()===email&&i.name&&!i.name.includes('@'))return asOwner(i.name);
+    return asOwner(email.split('@')[0].split('.')[0]);
   },
   teamFirstNames(records) {
     const out=new Set();
