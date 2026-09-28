@@ -1,5 +1,6 @@
 // Poll published/LATEST.json and swap out/data only after the new run validates.
 // A bad publish leaves the last good files in place.
+import { scrubBuffer } from './term-scrub.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -179,7 +180,7 @@ export async function pollPublished({ appRoot, dataDir, onSwap }) {
       const buf = await getObject(cfg, (latest.prefix || (prefix + '/' + latest.runId + '/')) + name);
       const dest = path.join(incoming, name);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, buf);
+      fs.writeFileSync(dest, /\.(json|txt|html|md)$/.test(name) ? scrubBuffer(buf) : buf);
     }
     validateIncoming(incoming);
     swapDir(dataDir, incoming);

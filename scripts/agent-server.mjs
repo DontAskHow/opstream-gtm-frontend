@@ -31,6 +31,7 @@ import {
 } from './google-workspace.mjs';
 import { linkedInDraft, showCalendarMatches } from './marketing-drafts.mjs';
 import { generateEmail } from './email-draft.mjs';
+import { scrubBuffer, scrubText } from './term-scrub.mjs';
 
 const CHAT_CLI = path.join(process.env.HOME || '/home/hatch', 'workspace/skills/openai/bin/chat.py');
 
@@ -336,10 +337,10 @@ AUTONOMY (hard rules — never break these):
 - Say "drafted" or "proposed" — never "sent".
 
 Answer using only the workspace data. Be concise and concrete: names, numbers, dates.
-The open book is already computed in the OPEN BOOK METRICS lines and in get_pipeline_metrics. It is the master sheet's active new-business rows. A past close date stays in that book and is marked close date passed; it is left out of the monthly commit. Renewals, current agreements, Disqualified, and On Hold are not in it. A HubSpot deal that is not on the sheet is not in the total. Repeat those figures. A larger renewal, current agreement, on-hold, or disqualified amount is not the largest open deal. If you mention one, name that reason and say it is not in the open book. Owner labels that start with "Owner #…" mean the name is not connected; do not invent a person's name. Quiet-day figures in the data are already computed; repeat them. The DATA COLLECTED line is the timestamp of the files on disk. Repeat it when you give current pipeline or lead figures.
+The open book is already computed in the OPEN BOOK METRICS lines and in get_pipeline_metrics. It is the master sheet's active new-business rows. A past close date stays in that book and is marked close date passed; it is left out of the monthly commit. Renewals, current agreements, Disqualified, and On Hold are not in it. A HubSpot deal that is not on the sheet is not in the total. Repeat those figures. A larger renewal, current agreement, on-hold, or disqualified amount is not the largest open deal. If you mention one, name that reason and say it is not in the open book. An owner shown as Unassigned has no name on file; do not invent a person's name. Quiet-day figures in the data are already computed; repeat them. The DATA COLLECTED line is the timestamp of the files on disk. Repeat it when you give current pipeline or lead figures.
 Timestamps that end in Z are UTC. Answer in America/Phoenix. Never show a UTC clock time.
 The MARKETING BRIEF lines (last 7 days, 6-week average, source table) and the UNWORKED LEADS line are already computed. Leads, MQL and SQL use the Lead Tracker definitions. Repeat them. Do not calculate another weekly lead count.
-When you draft an email, sign with the deal owner's name only when that name is a person in the data. If the owner is "Owner #…" or missing, leave the draft unsigned. Do not sign as Hollie unless she is the named deal owner.
+When you draft an email, sign with the deal owner's name only when that name is a person in the data. If the owner is Unassigned or missing, leave the draft unsigned. Do not sign as Hollie unless she is the named deal owner.
 Format your answer as a compact HTML fragment using only <p>, <ul>, <ol>, <li>, <strong>, <em>, <br>. Output raw HTML only, never markdown — markdown is displayed to the user as literal asterisks and dashes. No code fences, no <h1>.
 
 You can also take actions with tools:
@@ -566,12 +567,16 @@ function googlePrompt(user) {
   return '\n\nThis visitor is not signed in. If they ask you to read their email, calendar, or docs, tell them to use Sign in with Google in the header. Do not invent mailbox contents.';
 }
 
+function phoenixNow(now = new Date()) {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/Phoenix', weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(now);
+}
+
 async function askOpenAI(message, history, user) {
   ensureContext();
   const tools = user && user.email && !user.expired ? [...TOOLS, ...GOOGLE_TOOL_SCHEMAS] : TOOLS;
   const chat = hooks.callChatApi || callChatApi;
   const messages = [
-    { role: 'system', content: SYSTEM + googlePrompt(user) + '\n\n' + CTX },
+    { role: 'system', content: SYSTEM + googlePrompt(user) + '\n\nRight now it is ' + phoenixNow() + ' in America/Phoenix. Say today, tomorrow or a date relative to that.\n\n' + CTX },
     ...history.filter(m => m && m.role && m.content).slice(-8),
     { role: 'user', content: message }
   ];
@@ -714,9 +719,18 @@ function serveStatic(req, res) {
   fs.createReadStream(file).pipe(res);
 }
 
+function scrubResponse(res) {
+  const write = res.write.bind(res), end = res.end.bind(res);
+  const clean = chunk => (typeof chunk === 'string' ? scrubText(chunk) : Buffer.isBuffer(chunk) ? scrubBuffer(chunk) : chunk);
+  res.write = (chunk, ...rest) => write(clean(chunk), ...rest);
+  res.end = (chunk, ...rest) => end(chunk == null || typeof chunk === 'function' ? chunk : clean(chunk), ...rest);
+}
+
 function onRequest(req, res) {
   (async () => {
     const url = new URL(req.url, 'http://localhost');
+    // Model answers, drafts and error pages never name the terms in term-scrub.mjs.
+    if (/^\/(api|auth|admin)\//.test(url.pathname)) scrubResponse(res);
     if (url.pathname === '/api/data-stamp' && req.method === 'GET') {
       // generatedAt from the start of records.json. The page reloads when it changes.
       // Do not parse the whole extract for this poll.
@@ -740,8 +754,10 @@ function onRequest(req, res) {
           serveStatic.stamp = { key, generatedAt };
         } else generatedAt = serveStatic.stamp.generatedAt;
       } catch { generatedAt = null; }
+      let runId = null;
+      try { runId = fs.readFileSync(path.join(dataDir, '.published-run'), 'utf8').trim() || null; } catch { runId = null; }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-        .end(JSON.stringify({ generatedAt, label: collectedLabel(generatedAt) }));
+        .end(JSON.stringify({ generatedAt, runId, label: collectedLabel(generatedAt) }));
       return;
     }
     if (url.pathname === '/api/ask' && req.method === 'POST') {
@@ -1160,7 +1176,7 @@ export function createServer() {
   return http.createServer(onRequest);
 }
 
-const pollMinutes = 10;
+const pollMinutes = Math.max(1, Number((loadRefreshConfig(path.resolve('.')) || {}).pollMinutes) || 2);
 async function pollLoop() {
   try {
     const result = await pollPublished({
@@ -1177,7 +1193,10 @@ async function pollLoop() {
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const server = createServer();
-  server.listen(PORT, '127.0.0.1', () => console.log('GTM workspace + agent: http://127.0.0.1:' + server.address().port));
-  setTimeout(pollLoop, 15000);
-  setInterval(pollLoop, pollMinutes * 60 * 1000);
+  // Swap in the latest published run before taking traffic, so a new or
+  // restarted instance never serves the collection baked into the bundle.
+  Promise.race([pollLoop(), new Promise(resolve => setTimeout(resolve, 90000))]).then(() => {
+    server.listen(PORT, '127.0.0.1', () => console.log('GTM workspace + agent: http://127.0.0.1:' + server.address().port));
+    setInterval(pollLoop, pollMinutes * 60 * 1000);
+  });
 }

@@ -31,6 +31,7 @@ if(fs.existsSync('scripts/agent-brief.py')){try{execFileSync('python3',['scripts
 // The heartbeat tends the product: health-checks the build output and asks the
 // agent for proactive insights (fail-soft like agent-brief — never breaks build).
 if(fs.existsSync('scripts/heartbeat.py')){try{execFileSync('python3',['scripts/heartbeat.py'],{stdio:'inherit'});}catch(e){console.error('heartbeat failed (non-fatal):',e.message);}}
+ runStep('term scrub','python3',['scripts/term_scrub.py','out/data']);
  await esbuild.build({entryPoints:['evidence-renderer.mjs'],bundle:true,format:'iife',globalName:'OpstreamEvidence',platform:'browser',target:'es2022',outfile:'out/assets/evidence-renderer.js',minify:true});
  console.log('Built frontend with the production collection snapshot. Authenticated APIs (/api/ask) are served by the agent server, not the static build.');
 } main().catch(e=>{console.error(e);process.exitCode=1;});

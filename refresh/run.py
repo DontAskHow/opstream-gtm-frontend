@@ -423,6 +423,7 @@ def main():
         if env.get("OPENAI_API_KEY"):
             run_step([py, str(ROOT / "scripts" / "agent-brief.py")], env, ROOT)
             run_step([py, str(ROOT / "scripts" / "heartbeat.py")], env, ROOT)
+        run_step([py, str(ROOT / "scripts" / "term_scrub.py"), env["OUT_DATA"]], env, ROOT)
         renderer = ROOT / "evidence-renderer.mjs"
         if renderer.is_file():
             run_step([node, "-e",
