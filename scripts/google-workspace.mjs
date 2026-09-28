@@ -290,6 +290,14 @@ function domainOf(value) {
   return match ? match[1] : '';
 }
 
+// A HubSpot owner id is not a name: use the owners list, or Unassigned.
+function ownerName(value, catalog) {
+  const raw = String(value || '').replace(/^(owner\s+)+/i, '').trim();
+  if (!raw) return 'Unassigned';
+  if (/^\d+$/.test(raw)) return (catalog && catalog[raw]) || 'Unassigned';
+  return raw;
+}
+
 export function gtmIndex(records, sheetReview) {
   const companies = [];
   const byDomain = new Map();
@@ -299,7 +307,7 @@ export function gtmIndex(records, sheetReview) {
     const row = {
       name: String(company.name || ''),
       domain: String(company.domain || '').toLowerCase(),
-      owner: String(company.owner || ''),
+      owner: ownerName(company.owner, records && records.owners),
       deal: deal ? String(deal.name || deal.stage || '') : '',
       stage: deal ? String(deal.stageLabel || deal.stage || '') : '',
     };

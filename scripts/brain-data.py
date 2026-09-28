@@ -9,15 +9,15 @@ separate sheets sync; this script does not talk to HubSpot, Sheets, or Fathom.
 
 Honesty rules: never invent names, dates, or stage labels. Where the brain
 lacks something (stage catalog, days-in-stage, MQL/SQL dates, an owner
-name), use null or empty. When an owner id has no name, store "Owner {id}".
-The workspace shows "Owner #…1234" (last four digits) and does not show the
-full id. Never invent a person name, and never prefix a real name with "Owner".
+name), use null or empty. An owner id with no name in the owners list is
+stored as "Unassigned". Never invent a person name, and never prefix a real
+name with "Owner".
 """
 import sqlite3, json, os, re, sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gtm_metrics import (apply_sheet_owner_names, date_only, is_browser_label, is_open_pipeline,
+from gtm_metrics import (apply_sheet_owner_names, customer_facing_action, date_only, is_browser_label, is_open_pipeline,
                          phoenix_today, probability_fraction, stage_display)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -91,8 +91,52 @@ def owner_label(hubspot_owner_id):
     name = OWNER_NAMES.get(str(hubspot_owner_id))
     if name:
         return name
-    # Keep the id so the workspace can show a distinguishable "Owner #…1234".
-    return 'Owner ' + str(hubspot_owner_id)
+    # HubSpot deletes some users outright; their id is not a name.
+    return 'Unassigned'
+
+
+def company_key(name):
+    base = re.sub(r"\b(inc|llc|ltd|gmbh|corp|corporation|co|plc|sa|ag|limited|group)\b", "", str(name or "").lower())
+    return re.sub(r"[^a-z0-9]", "", base)
+
+
+def merge_duplicate_companies(companies):
+    """One record per company name. HubSpot can hold two records for one company
+    (BT Sourced); the page shows them as one, with the latest interaction."""
+    groups = {}
+    for c in companies:
+        groups.setdefault(company_key(c['name']) or c['id'], []).append(c)
+    out, merged = [], {}
+    for group in groups.values():
+        if len(group) == 1:
+            out.append(group[0])
+            continue
+        group.sort(key=lambda c: (c.get('lastContact') or '', len(c.get('deals') or [])), reverse=True)
+        keep = dict(group[0])
+        for other in group[1:]:
+            merged[other['id']] = keep['id']
+            for key in ('deals', 'contacts', 'notes', 'meetings', 'tasks', 'calls', 'refs', 'related', 'recordings'):
+                seen = {json.dumps(x, sort_keys=True) if not isinstance(x, dict) else (x.get('id') or x.get('email') or json.dumps(x, sort_keys=True)) for x in keep.get(key) or []}
+                extra = []
+                for x in other.get(key) or []:
+                    k = json.dumps(x, sort_keys=True) if not isinstance(x, dict) else (x.get('id') or x.get('email') or json.dumps(x, sort_keys=True))
+                    if k not in seen:
+                        seen.add(k)
+                        extra.append(x)
+                keep[key] = list(keep.get(key) or []) + extra
+            emails = keep.get('emails') or {'count': 0, 'items': []}
+            oe = other.get('emails') or {'count': 0, 'items': []}
+            keep['emails'] = {'count': (emails.get('count') or 0) + (oe.get('count') or 0),
+                              'items': (emails.get('items') or []) + (oe.get('items') or [])}
+            keep['completedInteractions'] = sorted((keep.get('completedInteractions') or []) + (other.get('completedInteractions') or []),
+                                                   key=lambda x: x.get('date') or '', reverse=True)[:5]
+            keep['lastContact'] = max(filter(None, [keep.get('lastContact'), other.get('lastContact')]), default=None)
+            for key in ('domain', '_domain', 'industry', 'description', 'employees', 'city', 'country', 'owner'):
+                if not keep.get(key) and other.get(key):
+                    keep[key] = other[key]
+        keep['mergedIds'] = [c['id'] for c in group[1:]]
+        out.append(keep)
+    return out, merged
 
 
 def clean_company_name(name):
@@ -623,14 +667,18 @@ def main():
             'completedInteractions': completed, 'lastContact': last_contact,
             '_domain': domain,
         })
+    companies, merged_ids = merge_duplicate_companies(companies)
+    for did, cid in list(deal_company.items()):
+        deal_company[did] = merged_ids.get(cid, cid)
     companies.sort(key=lambda c: c['name'].lower())
-    print(f'companies built: {len(companies)}', flush=True)
+    print(f'companies built: {len(companies)} ({len(merged_ids)} duplicate records merged)', flush=True)
 
     # ---------- Fathom recordings ----------
     fathom = q(cur, """select recording_id, title, meeting_type, created_at, scheduled_start_time,
                               scheduled_end_time, recording_start_time, recording_end_time,
                               recorded_by_name, recorded_by_email, invitees_json, summary_markdown,
-                              action_items_json, fetched_at from meetings order by recording_start_time""")
+                              action_items_json, fetched_at, %s from meetings order by recording_start_time""" % (
+        "share_url" if "share_url" in {r[1] for r in q(cur, "PRAGMA table_info(meetings)")} else "NULL"))
     transcripts = {str(r[0]): r[1] for r in q(cur, 'select recording_id, turns_json from transcripts')}
     domain_to_cid = {}
     for c in companies:
@@ -646,7 +694,7 @@ def main():
     unmatched = []
     n_transcripts = 0
     for (rid, title, mtype, created_at, sched_start, sched_end, rec_start, rec_end,
-         rec_by_name, rec_by_email, invitees_json, summary_md, actions_json, fetched) in fathom:
+         rec_by_name, rec_by_email, invitees_json, summary_md, actions_json, fetched, share_url) in fathom:
         rid_s = str(rid)
         try:
             invitees = json.loads(invitees_json) if invitees_json else []
@@ -678,6 +726,11 @@ def main():
             actions = [a.get('description') for a in json.loads(actions_json or '[]') if isinstance(a, dict) and a.get('description')]
         except Exception:
             actions = []
+        # One action list per call, the same count on every view: customer-facing
+        # items only. The rest stay on the record as internalActions.
+        cleaned = [' '.join(re.sub(r'[*_`#]+', '', str(a)).split()) for a in actions]
+        internal_actions = [a for a in cleaned if a and not customer_facing_action(a)]
+        actions = [a for a in cleaned if a and customer_facing_action(a)]
         summary_blocks = []
         for para in (summary_md or '').split('\n\n'):
             para = para.strip()
@@ -727,7 +780,8 @@ def main():
                'invitees': [{'name': (i.get('name') if isinstance(i, dict) else None),
                              'email': (i.get('email') if isinstance(i, dict) else None)}
                             for i in invitees if isinstance(i, dict)],
-               'summary': summary_blocks, 'actions': actions,
+               'summary': summary_blocks, 'actions': actions, 'internalActions': internal_actions,
+               'shareUrl': share_url if str(share_url or '').startswith('https://fathom.video/') else None,
                'hasTranscript': has_transcript, 'transcriptLines': n_turns,
                'refs': [fref]}
         if matched_cid and matched_cid in by_id:

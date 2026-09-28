@@ -78,6 +78,36 @@ def short_hash(*parts):
     return h.hexdigest()[:16]
 
 
+def call_actions(recording):
+    """The customer-facing action items of one call. brain-data already filters them."""
+    out = []
+    for raw in (recording or {}).get("actions") or []:
+        text = " ".join(clean_md(str(raw)).split())
+        if text and customer_facing_action(text) and text not in out:
+            out.append(text)
+    return out
+
+
+def mostly_english(text):
+    """False for a paragraph written mostly in another script (a Hebrew summary pasted into an English email)."""
+    letters = [ch for ch in str(text) if ch.isalpha()]
+    if not letters:
+        return True
+    latin = sum(1 for ch in letters if ch.isascii())
+    return latin / len(letters) >= 0.8
+
+
+def customer_copy(action, invitees):
+    """An internal to-do addressed to the customer: 'Email Christine Sparbeck demo recording' -> 'Demo recording'."""
+    text = str(action).strip()
+    for inv in invitees or []:
+        name = str(inv.get("name") or "").strip()
+        if name:
+            text = re.sub(r"^(?:email|send|follow up with|share with|reply to)\s+" + re.escape(name) + r"\b[:,]?\s*(?:the\s+|a\s+)?",
+                          "", text, flags=re.I)
+    return text[:1].upper() + text[1:] if text else str(action)
+
+
 def clean_md(s):
     """Strip markdown links, images, and emphasis to plain text."""
     import re
@@ -274,11 +304,7 @@ def main():
                 invitees = r_.get("invitees") or []
                 if is_internal_meeting(c.get("name"), r_.get("title"), invitees):
                     continue
-                actions = []
-                for raw in (r_.get("actions") or []):
-                    text = " ".join(clean_md(str(raw)).split())
-                    if customer_facing_action(text):
-                        actions.append(text)
+                actions = call_actions(r_)
                 if not actions:
                     continue
                 d = day(r_.get("date"))
@@ -299,7 +325,7 @@ def main():
                         continue
                     raw = p.get("x") if isinstance(p, dict) else p
                     bit = " ".join(clean_md(str(raw or "")).split())
-                    if bit:
+                    if bit and mostly_english(bit):
                         summ_bits.append(bit)
                     if len(summ_bits) >= 2:
                         break
@@ -307,9 +333,11 @@ def main():
                 body_lines = [greeting, "",
                               "Following our call on %s, here are the action items we captured:" % d,
                               ""]
-                body_lines += ["- " + a for a in actions[:8]]
+                body_lines += ["- " + customer_copy(a, ext) for a in actions]
                 if summ:
                     body_lines += ["", summ]
+                if r_.get("shareUrl") and any("record" in a.lower() for a in actions):
+                    body_lines += ["", "The recording of our call: %s" % r_["shareUrl"]]
                 body_lines += ["", "Happy to pick a time to go through these together."]
                 signed = signer_for(c)
                 if signed:
@@ -539,6 +567,9 @@ def main():
                 continue
             delta = days_ago(d, today)
             if delta is None or delta > 0 or delta < -PREP_WINDOW_DAYS:
+                continue
+            # A call earlier today has already happened; prep is for what is ahead.
+            if str(m.get("start") or "") and str(m.get("start"))[:19] < now_iso[:19] and "T" in str(m.get("start")):
                 continue
             if is_internal_meeting(c.get("name"), m.get("title"), m.get("invitees") or []):
                 continue
@@ -774,11 +805,7 @@ def main():
         for r_ in c.get("recordings") or []:
             if is_internal_meeting(c.get("name"), r_.get("title"), r_.get("invitees") or []):
                 continue
-            acts = []
-            for raw in (r_.get("actions") or []):
-                text = " ".join(clean_md(str(raw)).split())
-                if customer_facing_action(text):
-                    acts.append(text)
+            acts = call_actions(r_)
             if not acts:
                 continue
             d = day(r_.get("date"))
@@ -789,8 +816,12 @@ def main():
                 continue
             rec_by_date.append((d, c, r_, acts))
     rec_by_date.sort(key=lambda t: t[0], reverse=True)
+    # Follow-ups owed are the calls that have a follow-up draft in the queue.
+    queued = {q.get("id") for q in queue if q.get("kind") == "followup_draft"}
     owed = []
     for (d, c, r_, acts) in rec_by_date:
+        if "q:followup_draft:" + str(r_.get("id") or "").replace("recording-", "") not in queued:
+            continue
         refs = ok_refs(r_.get("refs"))
         owed.append({
             "recordingId": r_.get("id"), "title": r_.get("title"), "date": d,
@@ -823,7 +854,8 @@ def main():
                    "displayLine": dd.get("displayLine"),
                    "amount": dd.get("amount"), "close": day(dd.get("close")),
                    "probability": dd.get("probability")}
-                  for dd in c.get("deals") or [] if not dd.get("closed")][:5]
+                  for dd in c.get("deals") or [] if not dd.get("closed")
+                  and not re.search(r"closed|current agreement", str(dd.get("stageLabel") or dd.get("stage") or "") + " " + str(dd.get("name") or ""), re.I)][:5]
         recs = sorted((r_ for r_ in c.get("recordings") or [] if day(r_.get("date"))),
                       key=lambda r_: day(r_.get("date")), reverse=True)
         last_call = None
@@ -871,17 +903,14 @@ def main():
                 "purpose": purpose,
                 "takeaways": takeaways,
                 "invitees": invitees,
-                "actions": [" ".join(str(a).split()) for a in (r0.get("actions") or [])[:8]],
+                "actions": call_actions(r0),
             }
+        # The agenda carries the last call's action items: the same list and
+        # count as its follow-up draft and queue card.
         unresolved = []
-        for r_ in recs:
-            rd = day(r_.get("date"))
-            if rd and (days_ago(rd, today) or 9999) <= RECENT_CALL_DAYS:
-                for a in (r_.get("actions") or [])[:8]:
-                    unresolved.append({"action": " ".join(str(a).split()),
-                                       "from": r_.get("title"), "date": rd})
-            if len(unresolved) >= 8:
-                break
+        if recs and last_call and (days_ago(last_call.get("date"), today) or 9999) <= RECENT_CALL_DAYS:
+            unresolved = [{"action": a, "from": last_call.get("title"), "date": last_call.get("date")}
+                          for a in last_call.get("actions") or []]
         agenda = []
         if unresolved:
             lc = last_call or {}
@@ -1053,8 +1082,10 @@ def main():
          "%s sitting in %s" % (usd0(bucket_value["bestcase"]),
                                 (buckets.get("bestcase") or {}).get("label") or "best-case stages")),
         ("pipeline", "Keep the pipeline fed",
-         "%s early pipeline · %d unworked leads" % (
-             usd0(bucket_value["pipeline"]), unworked_total)),
+         "%s of the open book is in early stages (%s) · %d unworked leads" % (
+             usd0(bucket_value["pipeline"]),
+             ", ".join((buckets.get("pipeline") or {}).get("stages") or ["SQL, discovery, demo"]).replace("sql", "SQL"),
+             unworked_total)),
         ("forecast", "Keep the forecast honest",
          "%d sheet-vs-HubSpot mismatches · %d open deals missing amounts" % (
              n_mismatch, n_no_amount)),

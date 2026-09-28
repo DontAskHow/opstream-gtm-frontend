@@ -47,11 +47,22 @@ def recipients_for(records, company_name, names=""):
     return ", ".join(out)
 
 
-def owner_signature(owner, notes):
-    """The owner's full name when a note spells it out ("Doug Daniels- please reply"), else the first name."""
-    first = str(owner or "").strip()
+def full_name(first, records, notes=()):
+    """A full name for a first name: the HubSpot owners list, then call hosts, then a note that spells it out."""
+    first = str(first or "").strip()
     if not first:
-        return "The Opstream team"
+        return ""
+    if " " in first:
+        return first
+    low = first.lower()
+    names = [str(n) for n in ((records or {}).get("owners") or {}).values()]
+    names += [str(p.get("name") or "") for p in (records or {}).get("team") or []]
+    for c in (records or {}).get("companies") or []:
+        names += [str(r.get("recordedBy") or "") for r in c.get("recordings") or []]
+    names += [str(r.get("recordedBy") or "") for r in (records or {}).get("unmatchedRecordings") or []]
+    full = sorted({n.strip() for n in names if " " in n.strip() and n.strip().split()[0].lower() == low})
+    if len(full) == 1:
+        return full[0]
     for note in notes:
         m = re.search(r"\b%s ([A-Z][a-z]+)\b" % re.escape(first), str(note or ""))
         if m:
@@ -59,17 +70,22 @@ def owner_signature(owner, notes):
     return first
 
 
+def signature(first, records, notes=()):
+    name = full_name(first, records, notes)
+    return (name + "\nOpstream") if name else "The Opstream team"
+
+
 def _day(iso):
     d = date.fromisoformat(iso)
     return "%s %s %d" % (("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[d.weekday()], MONTHS[d.month - 1][:3], d.day)
 
 
-def meeting_request(show, row, notes):
+def meeting_request(show, row, notes, records):
     first = (row.get("contact") or "").split(" ")[0] if row.get("contact") else ""
     days = [show.get("start"), show.get("end")] if show.get("end") and show.get("end") != show.get("start") else [show.get("start")]
     slots = " or ".join("%s at [time]" % _day(d) for d in days if d)
     booth = show.get("booth") or "[booth number]"
-    signer = owner_signature(row.get("owner"), notes)
+    signer = signature(row.get("owner"), records, notes)
     return "\n".join([
         "Hi %s," % first if first else "Hi,",
         "",
@@ -80,8 +96,24 @@ def meeting_request(show, row, notes):
         "",
         "Looking forward to meeting you,",
         signer,
-        "Opstream",
     ])
+
+
+def linkedin_message(show, row, records, notes):
+    """A short LinkedIn message for a requester with no email on file."""
+    first = (row.get("contact") or "").split(" ")[0] if row.get("contact") else ""
+    return "\n".join([
+        "Hi %s," % first if first else "Hi,",
+        "",
+        "Thanks for reaching out about meeting at %s (%s). Would a short meeting at our booth work? "
+        "Send me a time that suits you and I will hold it." % (show["name"], show.get("dateLabel") or ""),
+        "",
+        full_name(row.get("owner"), records, notes) or "The Opstream team",
+    ])
+
+
+def linkedin_search(company):
+    return "https://www.linkedin.com/search/results/people/?keywords=" + re.sub(r"\s+", "%20", str(company).strip()) + "%20procurement"
 
 
 def linkedin_text(show):
@@ -114,6 +146,8 @@ def seed(sid, purpose, title, subject, text, rationale, company="No company link
 
 def build(marketing, hollie, records, today):
     out = []
+    # People who sign drafts: HubSpot owners, the marketing team list and call hosts.
+    records = dict(records or {}, team=(marketing or {}).get("team") or [])
     shows = ((marketing or {}).get("shows") or {}).get("items") or []
     horizon = (date.fromisoformat(today) + timedelta(days=42)).isoformat()
     for s in shows:
@@ -129,16 +163,26 @@ def build(marketing, hollie, records, today):
             company = row["company"]
             email = row.get("email") or _contact_email(records, company)
             who = ("%s (%s)" % (row["contact"], row["title"]) if row.get("title") else row["contact"]) if row.get("contact") else None
+            signer = full_name(row.get("owner"), records, notes) or "no owner"
             why = ["%s asked to meet at %s (Lead Tracker note). No meeting is booked yet." % (company, s["name"])]
-            why.append(("To: %s, the HubSpot contact for %s." % (who, company)) if who and email else
-                       "No contact email for %s in the Lead Tracker or HubSpot%s." % (
-                           company, "; the note says to reply on LinkedIn" if "linkedin" in str(row.get("note")).lower() else ""))
-            why.append("Signed as the lead owner, %s. Fill in the booth number and times before sending." % owner_signature(row.get("owner"), notes))
-            out.append(seed(
-                "meet:%s:%s" % (s["id"], _slug(company)), "event",
-                "%s · meeting at %s" % (company, s["name"]), "Meeting at %s: %s" % (s["name"], company),
-                meeting_request(s, row, notes), " ".join(why),
-                company=company, recipients=email, extra={"showId": s["id"], "leadOwner": row.get("owner") or ""}))
+            if email:
+                why.append(("To: %s, the HubSpot contact for %s." % (who, company)) if who else "To: the HubSpot contact for %s." % company)
+                why.append("Signed as the lead owner, %s. Fill in the booth number and times before sending." % signer)
+                out.append(seed(
+                    "meet:%s:%s" % (s["id"], _slug(company)), "event",
+                    "%s · meeting at %s" % (company, s["name"]), "Meeting at %s: %s" % (s["name"], company),
+                    meeting_request(s, row, notes, records), " ".join(why),
+                    company=company, recipients=email, extra={"showId": s["id"], "leadOwner": row.get("owner") or ""}))
+            else:
+                why.append("No contact email for %s in the Lead Tracker or HubSpot, so this is a LinkedIn message%s. "
+                           "Find the person with the LinkedIn search link and send it from %s's LinkedIn." % (
+                               company, " (the note says to reply on LinkedIn)" if "linkedin" in str(row.get("note")).lower() else "", signer))
+                out.append(seed(
+                    "meet:%s:%s" % (s["id"], _slug(company)), "event",
+                    "%s · LinkedIn message for %s" % (company, s["name"]), "LinkedIn message: %s" % company,
+                    linkedin_message(s, row, records, notes), " ".join(why),
+                    company=company, recipients="", extra={"showId": s["id"], "leadOwner": row.get("owner") or "", "channel": "linkedin",
+                                                           "links": [{"label": "Find %s on LinkedIn" % company, "url": linkedin_search(company)}]}))
     cutoff = (date.fromisoformat(today) - timedelta(days=120)).isoformat()
     fresh = (date.fromisoformat(today) - timedelta(days=14)).isoformat()
     for s in shows:
@@ -148,25 +192,40 @@ def build(marketing, hollie, records, today):
         where = (" in " + s["location"]) if s.get("location") else ""
         month = MONTHS[int(s["start"][5:7]) - 1] if s.get("start") else ""
         stale = (s.get("end") or "") < fresh
-        rows = s.get("leadRows") or []
+        long_ago = (s.get("end") or "") < (date.fromisoformat(today) - timedelta(days=60)).isoformat()
+        all_rows = s.get("leadRows") or []
+        hot = [r for r in all_rows if (r.get("flags") or {}).get("hot")]
+        rows = [r for r in all_rows if not (r.get("flags") or {}).get("hot") and not (r.get("flags") or {}).get("dead")]
         emails = [r for r in rows if r.get("email")]
         owners = sorted({r["owner"] for r in rows if r.get("owner")})
-        why = "%d Lead Tracker rows tie to %s; %d reached MQL, %d have a contact email. Lead owners: %s." % (
+        lead_owner = max(owners, key=lambda o: sum(1 for r in rows if r.get("owner") == o)) if owners else ""
+        signoff = "\n\nBest,\n" + signature(lead_owner or "Hollie", records)
+        why = "%d Lead Tracker rows tie to %s; %d reached MQL, %d in this campaign have a contact email. Lead owners: %s." % (
             led["count"], s["name"], led.get("mql") or 0, len(emails), ", ".join(owners) or "none")
-        if stale:
+        if hot:
+            why += " Left out and sent to their owners instead: %s (the note shows buying intent)." % ", ".join(
+                "%s (%s)" % (r["company"], r.get("owner") or "no owner") for r in hot)
+        if not rows:
+            continue
+        if long_ago:
             body = ("Hi {{firstName}},\n\nWe met at %s%s back in %s. A lot has changed in procurement since then, "
                     "and I wanted to check in: is {{companyName}} still looking at how AI fits into sourcing and "
                     "supplier work this year?\n\nIf it is useful, I can show you what teams like yours have set up "
-                    "since the show. Would a 20-minute call in the next two weeks work?\n\nBest," % (s["name"], where, month))
+                    "since the show. Would a 20-minute call in the next two weeks work?" % (s["name"], where, month)) + signoff
             subject = "Since %s: a quick check-in" % s["name"]
+        elif stale:
+            body = ("Hi {{firstName}},\n\nIt was good to meet you at %s%s in %s. I wanted to follow up: what is "
+                    "{{companyName}} working on in procurement this quarter, and would a short call be useful?" % (s["name"], where, month)) + signoff
+            subject = "Following up from %s" % s["name"]
         else:
             body = ("Hi {{firstName}},\n\nThank you for stopping by at %s%s. What are you working on in procurement "
-                    "this quarter, and would a short call be useful?\n\nBest," % (s["name"], where))
+                    "this quarter, and would a short call be useful?" % (s["name"], where)) + signoff
             subject = "Good to meet you at " + s["name"]
         out.append(seed(
             "followup:" + s["id"], "campaign", "LemList follow-up · " + s["name"], subject, body,
             why + " Built for a LemList campaign: download the show's leads as CSV and import them; "
-            "{{firstName}} and {{companyName}} are LemList merge tags. Nothing is sent from here.",
+            "{{firstName}} and {{companyName}} are LemList merge tags. Signed as %s, who owns most of these leads. Nothing is sent from here." % (
+                full_name(lead_owner, records) or "Hollie"),
             extra={"showId": s["id"], "leadCount": led["count"]}))
         if not stale:
             out.append(seed(
@@ -174,14 +233,18 @@ def build(marketing, hollie, records, today):
                 linkedin_text(s), "Drafted from the show calendar row.",
                 extra={"showId": s["id"], "citations": ["Dashboard: %s on the show calendar (budget workbook)" % s["name"]]}))
     recording = (marketing or {}).get("webinarRecording")
+    webinar = (marketing or {}).get("webinar") or {}
+    webinar_name = ("our %s" % webinar["title"] if webinar.get("title") else "our webinar") + (
+        " on %s" % webinar["date"] if webinar.get("date") else "")
     for p in (hollie or {}).get("marketingPriorities") or []:
         if p.get("kind") == "webinar":
             out.append(seed(
-                "campaign:webinar-registrants", "campaign", "Webinar registrant follow-up", "The recording from our webinar",
-                "Hi {{firstName}},\n\nThanks for registering for our webinar. Here is the recording in case you missed it: "
+                "campaign:webinar-registrants", "campaign", "Webinar registrant follow-up",
+                "The recording from %s" % (webinar.get("title") or "our webinar"),
+                "Hi {{firstName}},\n\nThanks for registering for %s. Here is the recording in case you missed it: "
                 "%s\n\nIf you are looking at how to bring AI into your procurement process, I would be glad to show you what "
-                "teams like yours are doing. Would a 20-minute call next week work?\n\nBest," % (
-                    recording["url"] if recording else "[recording link]"),
+                "teams like yours are doing. Would a 20-minute call next week work?\n\nBest,\n%s" % (
+                    webinar_name, recording["url"] if recording else "[recording link]", signature("Hollie", records)),
                 p["why"] + " Copy it into a LemList sequence; nothing is sent from here. " + (
                     "Recording: %s." % recording["name"] if recording else
                     "The collection has no webinar recording, so paste its link where it says [recording link].")))

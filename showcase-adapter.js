@@ -1,6 +1,6 @@
 const showcaseStorageKey = 'opstream-gtm-showcase-v1';
 const showcaseOriginal = { mount:Component.prototype.componentDidMount, update:Component.prototype.componentDidUpdate, render:Component.prototype.renderVals };
-const showcaseRouteKeys = ['perf','accounts','meetings','period','search','owner','sort','meetingSearch','meetingOwner','start','end','draft','contributor','leadStage','leadSource','closeOn','meetingKind','draftShow'];
+const showcaseRouteKeys = ['perf','accounts','meetings','period','search','owner','sort','meetingSearch','meetingOwner','start','end','draft','contributor','leadStage','leadSource','leadFlag','closeOn','meetingKind','draftShow'];
 Component.prototype.componentDidMount = function () {
   showcaseOriginal.mount?.call(this);
   try { const raw=localStorage.getItem(showcaseStorageKey),saved=JSON.parse(raw||'null');if(saved&&(!Object.prototype.hasOwnProperty.call(saved,'savedState')||typeof saved!=='object'||Array.isArray(saved)))throw new Error('Invalid browser data');this._legacyBrowserRaw=saved?raw:null; }
@@ -8,12 +8,13 @@ Component.prototype.componentDidMount = function () {
   this._showcaseRestore=()=>{
     const p=new URL(location.href).searchParams;
     const views=['briefing','pipeline','accounts','account','meetings','meeting','drafts','data'];
-    const patch={screen:views.includes(p.get('view'))?p.get('view'):'briefing',evidence:false,perf:'demand',accounts:'deals',meetings:'upcoming',period:'quarter',search:'',owner:'Everyone',sort:'amount',meetingSearch:'',meetingOwner:'Everyone',start:'',end:'',draft:0,contributor:null,leadStage:null,leadSource:null,closeOn:null,meetingKind:null,draftShow:null};
+    const patch={screen:views.includes(p.get('view'))?p.get('view'):'briefing',evidence:false,perf:'demand',accounts:'deals',meetings:'upcoming',period:'quarter',search:'',owner:'Everyone',sort:'amount',meetingSearch:'',meetingOwner:'Everyone',start:'',end:'',draft:0,contributor:null,leadStage:null,leadSource:null,leadFlag:null,closeOn:null,meetingKind:null,draftShow:null};
     for(const k of showcaseRouteKeys) if(p.has(k)) patch[k]=k==='draft'?Number(p.get(k)):p.get(k);
     for(const [key,values] of Object.entries({perf:['demand','spend','web'],accounts:['deals','follow','leads'],meetings:['upcoming','past'],period:['six','quarter','year','custom'],sort:['weighted','close','days','name']}))if(!values.includes(patch[key]))patch[key]=values[0];
     if(!Number.isInteger(patch.draft)||patch.draft<0)patch.draft=0;
     if(!['lead','mql','sql'].includes(patch.contributor))patch.contributor=null;
     if(!['mql-no-sql','no-mql'].includes(patch.leadStage))patch.leadStage=null;
+    if(!['hot','live'].includes(patch.leadFlag))patch.leadFlag=null;
     if(!['completed','recordings'].includes(patch.meetingKind))patch.meetingKind=null;
     if(patch.closeOn&&!/^\d{4}-\d{2}-\d{2}$/.test(patch.closeOn))patch.closeOn=null;
     for(const key of ['start','end'])if(patch[key]&&!/^\d{4}-\d{2}-\d{2}$/.test(patch[key]))patch[key]='';

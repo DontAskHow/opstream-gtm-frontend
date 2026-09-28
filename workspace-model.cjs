@@ -83,11 +83,9 @@ const workspaceModel = {
     const raw=String(text||'').trim();
     return raw?raw.replace(/\bgood\s+(morning|afternoon|evening)\b/ig,g):g;
   },
-  // One label everywhere. A raw HubSpot id is not a name. When no name was
-  // collected, show the last digits so owners stay distinguishable. The full id
-  // stays off the screen. "Owner Owner 1234" is the same id twice.
-  ownerInfo(value, tail) {
-    const digitsWanted=Math.max(4, Number(tail)||4);
+  // One label everywhere: a person's name, or Unassigned. A raw HubSpot id is
+  // never shown. "Owner Owner 1234" is the same id twice.
+  ownerInfo(value) {
     let s=String(value??'').trim();
     if(!s||/^unassigned$/i.test(s))return {label:'Unassigned', title:'', key:'Unassigned', named:true};
     const stripped=s.replace(/^(owner\s+)+/i,'').trim();
@@ -96,11 +94,7 @@ const workspaceModel = {
     const book=this.ownerCatalog||{};
     const hit=book[stripped]||book[s]||book[String(stripped).toLowerCase()];
     if(typeof hit==='string'&&hit.trim())return {label:this.canonicalPerson(hit.trim()), title:'', key:stripped, named:true};
-    if(/^\d+$/.test(stripped)||/^[a-f0-9-]{8,}$/i.test(stripped)){
-      const digits=stripped.replace(/\D/g,'')||stripped;
-      const n=Math.min(digitsWanted, digits.length);
-      return {label:'Owner #\u2026'+digits.slice(-n), title:"Owner name isn't connected", key:stripped, named:false};
-    }
+    if(/^\d+$/.test(stripped)||/^[a-f0-9-]{8,}$/i.test(stripped))return {label:'Unassigned', title:'This HubSpot owner has no name in the owners list', key:'Unassigned', named:false};
     return {label:this.canonicalPerson(stripped), title:'', key:stripped, named:true};
   },
   // "Doug", "doug.daniels@opstream.ai" and "Doug Daniels" are one person when
@@ -125,24 +119,8 @@ const workspaceModel = {
   displayOwner(value) {
     return this.ownerInfo(value).label;
   },
-  // Lengthen the visible tail until two different ids do not share a label.
   resolveOwners(values) {
-    const raws=[...new Set((values||[]).map(v=>String(v??'')))];
-    let tail=4,map=new Map(raws.map(v=>[v,this.ownerInfo(v,tail)]));
-    while(tail<32){
-      const seen=new Map();
-      let clash=false;
-      for(const info of map.values()){
-        if(info.named)continue;
-        const prev=seen.get(info.label);
-        if(prev&&prev!==info.key){clash=true;break;}
-        seen.set(info.label,info.key);
-      }
-      if(!clash)return map;
-      tail+=2;
-      map=new Map(raws.map(v=>[v,this.ownerInfo(v,tail)]));
-    }
-    return map;
+    return new Map((values||[]).map(v=>[String(v??''),this.ownerInfo(v)]));
   },
   // A trailing comma or semicolon on a CRM company name is not part of the name.
   // Keep endings such as "Inc." and names that end in an exclamation point.
@@ -490,7 +468,7 @@ const workspaceModel = {
     const sheet=(sheetReview&&sheetReview.leads)||[];
     const base=sheet.length?sheet:(contacts||[]);
     return base.filter(r=>{const note=String(r.note||'').trim().toLowerCase();const name=String(r.company||r.name||'').trim();return note!=='subscriber'&&!note.includes('newsletter')&&name&&!name.includes('@');})
-      .map(r=>({id:r.id,name:String(r.company||r.name).trim(),source:this.sourceLabel(r.source),owner:this.leadOwner(r.owner),lead:this.dateOnly(r.lead||r.leadDate),mql:this.dateOnly(r.mql),sql:this.dateOnly(r.sql),note:r.note,contact:r.contact||null,sheetRow:r.sheetRow||null}));
+      .map(r=>({id:r.id,name:String(r.displayName||r.company||r.name).trim(),trackerName:String(r.company||r.name).trim(),flags:r.flags||{hot:false,dead:false},source:this.sourceLabel(r.source),owner:this.leadOwner(r.owner),lead:this.dateOnly(r.lead||r.leadDate),mql:this.dateOnly(r.mql),sql:this.dateOnly(r.sql),note:r.note,contact:r.contact||null,sheetRow:r.sheetRow||null}));
   },
   // An owner name, or '' when the tracker says nobody owns the lead.
   HUBSPOT_PORTAL:'21303277',
@@ -498,6 +476,25 @@ const workspaceModel = {
     const raw=String(value??'').trim();
     if(/^(|not assigned|unassigned|customer|none|-)$/i.test(raw))return '';
     return /^[a-z]+$/i.test(raw)?raw.charAt(0).toUpperCase()+raw.slice(1).toLowerCase():raw;
+  },
+  // Recorded spend over a window divided by its leads. Monthly actuals are
+  // spread evenly over their days. A month with no actuals makes it unknown.
+  costPerLead(months,start,end,leads) {
+    const names=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const byMonth=new Map((months||[]).map(m=>[m.month,m]));
+    let spend=0;const missing=[];
+    for(let at=start.slice(0,7);at<=end.slice(0,7);){
+      const [y,mo]=at.split('-').map(Number),days=new Date(Date.UTC(y,mo,0)).getUTCDate();
+      const first=at+'-01',last=at+'-'+String(days).padStart(2,'0');
+      const from=start>first?start:first,to=end<last?end:last;
+      const overlap=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1;
+      const row=byMonth.get(at);
+      if(!row||row.actual==null)missing.push(names[mo-1]);else spend+=row.actual*overlap/days;
+      at=mo===12?(y+1)+'-01':y+'-'+String(mo+1).padStart(2,'0');
+    }
+    if(missing.length)return {cpl:'needs '+missing.join(' and ')+' actuals',cplNote:''};
+    if(!leads)return {cpl:'no leads in this window',cplNote:''};
+    return {cpl:'$'+Math.round(spend/leads).toLocaleString('en-US'),cplNote:'Recorded spend spread by day.'};
   },
   // HubSpot record pages for deal, company and contact refs ('hubspot:deals:123').
   hubspotLinks(refs) {
@@ -593,7 +590,7 @@ const workspaceModel = {
     })).sort((a,b)=>Number(b.quarter.replace(/,/g,''))-Number(a.quarter.replace(/,/g,''))||a.channel.localeCompare(b.channel));
     return {
       intervals:blocks.map(b=>({
-        key:b.key,label:b.label,range:this.formatDate(b.start)+' – '+this.formatDate(b.end),
+        key:b.key,label:b.label,start:b.start,end:b.end,leadTotal:b.counts.leads,range:this.formatDate(b.start)+' – '+this.formatDate(b.end),
         leads:this.formatMetric(b.counts.leads/(b.average?6:1),b.average),
         mql:this.formatMetric(b.counts.mql/(b.average?6:1),b.average),
         sql:this.formatMetric(b.counts.sql/(b.average?6:1),b.average),
@@ -604,7 +601,7 @@ const workspaceModel = {
     };
   },
   compareLeads(a,b) {
-    const left=this.date(a.lead),right=this.date(b.lead),tie=()=>a.name.localeCompare(b.name)||String(a.id).localeCompare(String(b.id));
+    const left=this.date(this.firstTouch(a)),right=this.date(this.firstTouch(b)),tie=()=>a.name.localeCompare(b.name)||String(a.id).localeCompare(String(b.id));
     if(left==null||right==null)return left==null&&right==null?tie():left==null?1:-1;
     return right.localeCompare(left)||tie();
   },
@@ -791,6 +788,21 @@ const workspaceModel = {
     const trim=t=>t.replace(/\.?0+$/,'');
     const text=n>=1e6?trim((n/1e6).toFixed(2))+'M':n>=1e5?Math.round(n/1000)+'K':n>=1000?trim((n/1000).toFixed(1))+'K':String(Math.round(n));
     return sign+'$'+text;
+  },
+  // A timed meeting whose start is already past. A date with no time has not started.
+  hasStarted(start, now=Date.now()) {
+    const raw=String(start||'');
+    if(!/T\d{2}:\d{2}/.test(raw))return false;
+    const t=Date.parse(raw);
+    return Number.isFinite(t)&&t<now;
+  },
+  // Recorded spend against the plan for the same months, then the full-year plan.
+  spendVersusPlan(spend) {
+    if(!spend||!spend.connected)return '';
+    const last=spend.lastEnteredMonth,months=(spend.months||[]).filter(m=>last&&m.month<=last);
+    const plan=months.reduce((a,m)=>a+(m.planned||0),0),actual=months.reduce((a,m)=>a+(m.actual||0),0),gap=actual-plan;
+    const name=last?new Date(last+'-15T12:00:00Z').toLocaleDateString('en-US',{month:'long',timeZone:'UTC'}):'the last entered month';
+    return 'Through '+name+': '+this.moneyK(actual)+' recorded against '+this.moneyK(plan)+' planned for those months ('+this.moneyK(Math.abs(gap))+' '+(gap>0?'over':'under')+' plan). Full-year plan '+this.moneyK(spend.plannedTotal||0)+'.';
   },
   missingSpendText(spend) {
     const months=(spend&&spend.missingMonths)||[];

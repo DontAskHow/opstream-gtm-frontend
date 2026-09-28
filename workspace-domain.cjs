@@ -16,6 +16,7 @@ const workspaceDomain = (() => {
       history: Array.isArray(d.history) ? d.history : [], contentMode: d.contentMode || 'default',
       citations: Array.isArray(d.citations) ? d.citations.map(String) : [],
       showId: typeof d.showId === 'string' ? d.showId : null,
+      links: Array.isArray(d.links) ? d.links.filter(l => l && /^https:\/\//.test(l.url)).map(l => ({ label: String(l.label || l.url), url: String(l.url) })) : [],
     };
   }
   function seeds(verified, records, revisions) {

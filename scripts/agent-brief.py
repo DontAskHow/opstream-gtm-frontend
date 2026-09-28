@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gtm_metrics import date_only, greeting, snapshot_metrics
+from gtm_metrics import date_only, greeting, phoenix_prose, phoenix_today, phoenix_when, snapshot_metrics
 from openai_direct import chat_completion, complete_json
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,11 +94,12 @@ def main():
             return section.get("items") or []
         return section or []
 
+    today_phx = phoenix_today()
     prep = (hop.get("prep") or [])[:6]
     preplines = [
         {
             "title": p.get("title"),
-            "start": p.get("start"),
+            "when": phoenix_when(p.get("start"), today_phx),
             "company": p.get("company"),
             "agenda": (p.get("suggestedAgenda") or [])[:4],
         }
@@ -129,7 +130,7 @@ def main():
         }
 
     data_dump = {
-        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "now": phoenix_when(datetime.now(timezone.utc).isoformat(), today_phx) + " America/Phoenix",
         "openBook": open_book,
         "briefCounts": stats.get("briefCounts"),
         "goals": hop.get("goals") or [],
@@ -137,8 +138,9 @@ def main():
         "newItems": [qline(q) for q in new_items],
         "upcomingPrep": preplines,
         "briefMeetings": [
-            {"title": m.get("title"), "start": m.get("start")}
+            {"title": m.get("title"), "when": phoenix_when(m.get("start"), today_phx)}
             for m in items_of(brief.get("meetings"))[:5]
+            if not m.get("start") or str(m.get("start")) >= datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
         ],
     }
 
@@ -151,8 +153,9 @@ def main():
         "- Numbers in briefCounts, openBook, and goal status lines are already computed. Repeat them exactly. Do not call a larger commit 'short' of a smaller forecast.\n"
         "- openBook is the page's open pipeline: the master sheet's active new-business rows. A past close date stays in that book and is marked close date passed; it is left out of the monthly commit. Renewals, current agreements, Disqualified, and On Hold are not in it. A HubSpot deal that is not on the sheet is not in the total. Repeat the largest open deal and the open totals. A larger renewal or current agreement is not the largest open deal; if you mention one, say it is not in the open book.\n"
         "- collectedAt is when these files were generated. Repeat it. Do not present the figures as newer than that collection.\n"
-        "- Owner labels in openBook are already resolved. A label like Owner #… means the name is not connected. Do not invent a person's name.\n"
+        "- Owner labels in openBook are already resolved. Unassigned means no owner name is on file. Do not invent a person's name.\n"
         "- The greeting must start with \"" + greeting() + "\" because that is the time of day in America/Phoenix. Do not say a different time of day.\n"
+        "- Every time is already written in America/Phoenix with (today) or (tomorrow) where it applies. Repeat those words; never write a UTC time or a raw timestamp. A meeting marked (tomorrow) is not today.\n"
         "- If something is unknown, say so or omit it — never fill gaps with guesses.\n"
         "- Be concrete: names, numbers, days. No corporate fluff, no hype.\n"
         "- Keep it skimmable: short paragraphs, tight bullets.\n"
@@ -191,13 +194,13 @@ def main():
 
     # Validate shape; drop anything malformed rather than shipping it.
     def strlist(v, n):
-        return [str(x)[:400] for x in (v or []) if isinstance(x, str)][:n]
+        return [phoenix_prose(str(x), today_phx)[:400] for x in (v or []) if isinstance(x, str)][:n]
 
     out = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "runId": hop.get("runId"),
         "model": MODEL,
-        "greeting": str(parsed.get("greeting") or "")[:300],
+        "greeting": phoenix_prose(str(parsed.get("greeting") or ""), today_phx)[:300],
         "paragraphs": strlist(parsed.get("paragraphs"), 5),
         "whatsNew": strlist(parsed.get("whatsNew"), 6),
         "watchOuts": strlist(parsed.get("watchOuts"), 5),

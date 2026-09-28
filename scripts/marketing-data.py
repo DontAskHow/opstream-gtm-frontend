@@ -218,7 +218,7 @@ def shows(db, spend, leads, today, year):
         }
         show["campaigns"] = [{"name": n, "status": st} for n, st in campaigns if norm(n) == norm(show["name"])]
         items.append(show)
-    names = [norm(s["name"]) for s in items]
+    owner_of_lead = attribute_leads(items, leads, today)
     for show in items:
         start, end = show["start"], show["end"]
         recorded = [v for v in event_rows if match_vendor(v["vendor"], show)]
@@ -232,22 +232,12 @@ def shows(db, spend, leads, today, year):
             for v in event_rows
             if not any(match_vendor(v["vendor"], other) for other in items)
             and org and org != "n a" and org.split()[0] in norm(v["vendor"])]
-        name_key = norm(show["name"])
         from_show, requests = [], []
         for l in leads:
-            note = norm(l.get("note"))
-            lead_day = first_touch(l)
-            named = [n for n in names if n and n in note]
-            mentions = name_key in named
-            in_window = False
-            if not named and start and lead_day and (l.get("source") or "").lower() == "events":
-                lo = (date.fromisoformat(start) - timedelta(days=1)).isoformat()
-                hi = (date.fromisoformat(end) + timedelta(days=3)).isoformat()
-                in_window = lo <= lead_day <= hi
-            if mentions and start and (lead_day or "") < start:
-                requests.append(l)
-            elif mentions or in_window:
-                from_show.append(l)
+            hit = owner_of_lead.get(id(l))
+            if not hit or hit[0] is not show:
+                continue
+            (requests if hit[1] == "request" else from_show).append(l)
         show["leads"] = summarize_leads(from_show)
         show["meetingRequests"] = summarize_leads(requests)
         show["leadRows"] = [lead_row(l) for l in from_show]
@@ -272,11 +262,100 @@ def shows(db, spend, leads, today, year):
             "items": ahead + past, "unattributed": unattributed}
 
 
+def show_aliases(show):
+    """Ways a note names the show: 'WIP Women in Procurement' is also 'WIP' and 'Women in Procurement'."""
+    raw = str(show.get("name") or "").strip()
+    full = norm(raw)
+    aliases = {full: "name"} if full else {}
+    words = raw.split()
+    if len(words) > 1 and re.fullmatch(r"[A-Z]{3,5}", words[0]):
+        acronym = words[0].lower()
+        aliases.setdefault(acronym, "acronym")
+        rest = norm(" ".join(words[1:]))
+        if len(rest.split()) >= 2:
+            aliases.setdefault(rest, "name")
+            initials = "".join(w[0] for w in rest.split())
+            for short in {initials, initials + "c" if initials == "ny" else initials}:
+                aliases.setdefault(acronym + " " + short, "name")
+    return aliases
+
+
+def attribute_leads(shows, leads, today):
+    """id(lead) -> (show, 'request' | 'lead'). The note decides before the date window does.
+
+    A note that names the show (or its acronym; 'DWP' is read as 'DPW') wins. An
+    acronym shared by several shows goes to the edition nearest the lead date.
+    A lead dated before the show that names it is a meeting request. Only Events
+    leads with no show in the note fall back to the show whose dates they fall in.
+    """
+    out = {}
+    alias = [(show, a, kind) for show in shows for a, kind in show_aliases(show).items()]
+    for l in leads:
+        note = " " + norm(str(l.get("note") or "").replace("DWP", "DPW").replace("dwp", "dpw")) + " "
+        lead_day = first_touch(l) or ""
+        named = [(show, kind) for show, a, kind in alias if (" " + a + " ") in note]
+        chosen = None
+        full = [show for show, kind in named if kind == "name"]
+        if full:
+            chosen = full[0]
+        elif named:
+            cands = [show for show, _ in named]
+
+            def distance(show):
+                start = show.get("start")
+                if not start or not lead_day:
+                    return 10 ** 6
+                gap = (date.fromisoformat(start) - date.fromisoformat(lead_day)).days
+                return gap if gap >= 0 else 1000 - gap
+            chosen = min(cands, key=distance)
+        if chosen is not None:
+            start = chosen.get("start")
+            upcoming = start and start >= today
+            out[id(l)] = (chosen, "request" if start and ((lead_day and lead_day < start) or (not lead_day and upcoming)) else "lead")
+            continue
+        if (l.get("source") or "").lower() != "events" or not lead_day:
+            continue
+        for show in shows:
+            start, end = show.get("start"), show.get("end")
+            if not start or not end:
+                continue
+            lo = (date.fromisoformat(start) - timedelta(days=1)).isoformat()
+            hi = (date.fromisoformat(end) + timedelta(days=3)).isoformat()
+            if lo <= lead_day <= hi:
+                out[id(l)] = (show, "lead")
+                break
+    return out
+
+
 def lead_row(l):
     c = l.get("contact") or {}
     return {"company": l.get("name"), "contact": c.get("name"), "title": c.get("title"), "email": c.get("email"),
             "owner": l.get("owner") or "", "lead": first_touch(l), "mql": l.get("mql"), "sql": l.get("sql"),
-            "note": l.get("note") or "", "sheetUrl": (l.get("sheetRow") or {}).get("url")}
+            "note": l.get("note") or "", "sheetUrl": (l.get("sheetRow") or {}).get("url"),
+            "flags": l.get("flags") or {"hot": False, "dead": False}}
+
+
+def webinar_info(db, leads):
+    """The webinar's name from its LemList campaign and its date from the Lead Tracker notes."""
+    title = None
+    if db is not None:
+        try:
+            for (name,) in db.execute("select name from lemlist_campaigns where lower(name) like '%webinar%'"):
+                title = re.sub(r"\s*\b(pre[- ]?outreach|follow[- ]?up|registrants?)\b.*$", "", str(name), flags=re.I).strip() or None
+                if title:
+                    break
+        except sqlite3.Error:
+            title = None
+    dates = {}
+    for l in leads:
+        m = re.search(r"\b([A-Z][a-z]{2,8} \d{1,2}) webinar", str(l.get("note") or ""))
+        if m:
+            dates[m.group(1)] = dates.get(m.group(1), 0) + 1
+    when = max(dates, key=dates.get) if dates else None
+    if not title and not when:
+        return None
+    return {"title": title, "date": when,
+            "source": "LemList campaign name and Lead Tracker notes"}
 
 
 def webinar_recording(db):
@@ -326,7 +405,7 @@ def checklist(show):
     if req["count"]:
         items.append({"stage": "prep", "label": "Meetings booked with prospects who asked",
                       "done": req["mql"] >= req["count"],
-                      "detail": "%d asked to meet at the show; %d booked" % (req["count"], req["mql"])})
+                      "detail": "%d asked to meet at the show; %d have an MQL date on the Lead Tracker" % (req["count"], req["mql"])})
     if show["checklistNote"]:
         items.append({"stage": "prep", "label": show["checklistNote"], "done": False,
                       "detail": "From the show calendar's checklist column"})
@@ -374,6 +453,7 @@ def outbound(db):
         if src is None:
             continue
         with_stats.append({"name": str(r.get("name") or ""), "status": r.get("status"),
+                           "campaignId": str(r.get("_id") or r.get("id") or "") or None,
                            "sent": stat(src, "messagesSent", "emailsSent", "sent"),
                            "delivered": stat(src, "delivered"),
                            "opened": stat(src, "opened", "nbLeadsOpened"),
@@ -521,7 +601,14 @@ def web(db):
     channels = table("channels_90d", "name")
     pages = table("landing_90d", "name")
     fetched = max((f for _p, f in rows.values() if f), default=None)
+    window = None
+    if fetched:
+        end = date.fromisoformat(date_only(fetched))
+        window = {"days": 90, "start": (end - timedelta(days=90)).isoformat(), "end": end.isoformat()}
+    noise = sum(c.get("sessions") or 0 for c in channels if str(c.get("name") or "").lower() in ("unassigned", "(not set)"))
+    noise += sum(p_.get("sessions") or 0 for p_ in pages if str(p_.get("name") or "").lower() == "(not set)")
     return {"connected": bool(channels or pages), "channels": channels, "pages": pages[:10], "fetchedAt": fetched,
+            "channelsWindow": window, "untaggedSessions": noise,
             "reason": None if (channels or pages) else
             "GA4 channel and landing-page reports have not been collected yet. They are added on the next refresh."}
 
@@ -574,6 +661,7 @@ def main():
         "outbound": outbound(db),
         "ai": ai_mentions(db),
         "webinarRecording": webinar_recording(db) if db is not None else None,
+        "webinar": webinar_info(db, leads),
         "ads": ads(db),
         "web": web(db),
         "team": team(db),

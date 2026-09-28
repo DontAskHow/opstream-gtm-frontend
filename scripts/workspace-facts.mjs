@@ -88,15 +88,6 @@ function statusTag(reason) {
   return reason ? 'NOT IN THE OPEN BOOK (' + reason + ')' : 'OPEN DEAL';
 }
 
-function ownerTail(resolved) {
-  let tail = 4;
-  const prefix = 'Owner #\u2026';
-  for (const info of resolved.values()) {
-    if (!info.named && String(info.label).startsWith(prefix)) tail = Math.max(tail, info.label.length - prefix.length);
-  }
-  return tail;
-}
-
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
@@ -167,8 +158,7 @@ export function computeFacts(verified, records, today, sheetReview) {
     ...(verified?.leads || []).map(r => r.owner),
   ];
   const resolved = model.resolveOwners(ownerValues);
-  const tail = ownerTail(resolved);
-  const infoFor = raw => resolved.get(String(raw ?? '')) || model.ownerInfo(raw, tail);
+  const infoFor = raw => resolved.get(String(raw ?? '')) || model.ownerInfo(raw);
 
   const deals = linked.map(({ o, company, rawOwner }) => {
     const reason = exclusionReason(o, today);

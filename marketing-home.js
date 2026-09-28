@@ -30,7 +30,9 @@ Component.prototype._openShowDrafts=function(showId){
 Component.prototype._downloadShowLeads=function(showId){
   const s=(((this.state.marketing||{}).shows||{}).items||[]).find(x=>x.id===showId);
   if(!s)return;
-  const rows=(s.leadRows||[]).map(r=>[String(r.contact||'').split(/\s+/)[0]||'',String(r.contact||'').split(/\s+/).slice(1).join(' '),r.email||'',r.company,r.title||'',r.owner||'',r.lead||'',r.mql||'',r.sql||'',r.note||'',r.sheetUrl||'']);
+  // LemList gets each person once and never a hot or dead lead; those go to their owner.
+  const seen=new Set();
+  const rows=(s.leadRows||[]).filter(r=>!(r.flags||{}).hot&&!(r.flags||{}).dead).filter(r=>{const k=String(r.email||'').toLowerCase()||(r.company+'|'+(r.contact||''));if(seen.has(k))return false;seen.add(k);return true;}).map(r=>[String(r.contact||'').split(/\s+/)[0]||'',String(r.contact||'').split(/\s+/).slice(1).join(' '),r.email||'',r.company,r.title||'',r.owner||'',r.lead||'',r.mql||'',r.sql||'',r.note||'',r.sheetUrl||'']);
   this.csv('lemlist-'+showAnchor(showId)+'-leads.csv',['firstName','lastName','email','companyName','jobTitle','leadOwner','leadDate','mqlDate','sqlDate','trackerNote','trackerRow'],rows);
 };
 Component.prototype._draftLinkedIn=async function(showId){
@@ -50,7 +52,7 @@ const SHOW_HORIZON_DAYS=42;
 const showWhen=(s,today)=>{const rel=workspaceModel.relativeStart(s.start,s.end,today);return rel.charAt(0).toUpperCase()+rel.slice(1)+(s.dateLabel&&s.start?' · '+s.dateLabel:'');};
 const showHasData=s=>(s.attendees||[]).length>0||(s.recorded||{}).amount!=null||((s.meetingRequests||{}).count>0)||((s.leads||{}).count>0);
 const showView=(component,s,today)=>{
-  const st=component.state,mk=workspaceModel.moneyK.bind(workspaceModel);
+  const st=component.state,session=st.googleSession||{},mk=workspaceModel.moneyK.bind(workspaceModel);
   const leads=s.leads||{},req=s.meetingRequests||{};
   const past=!!s.end&&s.end<today;
   const figures=[
@@ -58,22 +60,27 @@ const showView=(component,s,today)=>{
     {label:'Recorded',value:mk((s.recorded||{}).amount),note:((s.recorded||{}).rows||[]).length?s.recorded.rows.map(r=>r.vendor).join(', '):'No Actuals row names this show'},
   ];
   if(past||leads.count)figures.push({label:'Leads from the show',value:verifiedFormat.number(leads.count),note:leads.count?'MQL '+leads.mql+' · SQL '+leads.sql:'No Lead Tracker rows tie to this show'});
-  if(req.count)figures.push({label:'Asked to meet',value:verifiedFormat.number(req.count),note:req.mql+' booked · '+(req.companies||[]).slice(0,3).join(', ')});
+  if(req.count){const open=(s.requestRows||[]).filter(r=>!r.mql).map(r=>r.company),booked=(s.requestRows||[]).filter(r=>r.mql).map(r=>r.company);figures.push({label:'Asked to meet',value:verifiedFormat.number(req.count),note:(open.length?'To book: '+open.join(', '):'All booked')+(booked.length?' · Booked: '+booked.join(', '):'')});}
   const check=stage=>(s.checklist||[]).filter(c=>c.stage===stage).map(c=>({label:c.label,detail:c.detail,mark:c.done?'✓':'○',state:c.done?'Done':'Open'}));
   const busy=st.linkedinBusy===s.id,err=st.linkedinError&&st.linkedinError.showId===s.id?st.linkedinError.message:'';
   const onCal=((st.showCalendar||{})[s.id]||[]);
   const seeds=component._showSeeds(s.id);
   const hasData=showHasData(s);
   const stale=past&&workspaceModel.relativeDays(s.end,today)>14;
-  const withEmail=(s.leadRows||[]).filter(r=>r.email).length;
+  const campaignRows=(s.leadRows||[]).filter(r=>!(r.flags||{}).hot&&!(r.flags||{}).dead);
+  const withEmail=new Set(campaignRows.map(r=>String(r.email||'').toLowerCase()).filter(Boolean)).size;
+  const hotRows=(s.leadRows||[]).filter(r=>(r.flags||{}).hot);
   return {
     id:s.id,name:s.name,anchor:showAnchor(s.id),highlight:(st.highlightShows||[]).includes(s.id),
     sheetUrl:(s.sheetRow||{}).url||'',sheetLabel:(s.sheetRow||{}).label||'',sheetCta:(s.attendees||[]).length?'Show calendar row':'Add booth staff on the show calendar',
     showLinkedin:!stale,linkedinClass:seeds.length?'btn-secondary':'btn-primary',
-    hasLeadCsv:(s.leadRows||[]).length>0,leadCsvLabel:'Download '+(s.leadRows||[]).length+' leads for LemList (CSV'+(withEmail<(s.leadRows||[]).length?', '+withEmail+' with email':'')+')',leadCsvGo:()=>component._downloadShowLeads(s.id),when:showWhen(s,today),meta:[s.location,s.status,s.package].filter(Boolean).join(' · '),
+    hasLeadCsv:campaignRows.length>0,leadCsvLabel:'Download '+withEmail+' contacts for LemList (CSV)',leadCsvGo:()=>component._downloadShowLeads(s.id),
+    hotLine:hotRows.length?'Hot: '+hotRows.map(r=>r.company+' ('+(r.owner||'no owner')+')').join(', ')+'. Hand to the owner, not LemList.':'',when:showWhen(s,today),meta:[s.location,s.status,s.package].filter(Boolean).join(' · '),
     attendees:(s.attendees||[]).length?'Opstream: '+s.attendees.join(', '):'Opstream attendees are not listed on the show calendar.',
+    ...campaignReplies(st.marketing,(s.campaigns||[])[0]),
     campaign:(s.campaigns||[]).length?'LemList campaign “'+s.campaigns[0].name+'” · '+s.campaigns[0].status+campaignStatsText(st.marketing,s.campaigns[0].name):'',hasCampaign:(s.campaigns||[]).length>0,
     onCalendar:onCal.map(e=>'On your calendar: '+e.title+' ('+workspaceModel.formatShort(e.start)+')').join(' · '),hasOnCalendar:onCal.length>0,
+    calendarHint:!session.signedIn&&(req.count>0)?'Sign in with Google to match these meetings against your calendar.':'',
     figures,hasData,noDataLine:'No spend or attendees recorded yet.'+(s.planned!=null?' Planned: '+mk(s.planned)+'.':''),
     prep:check('prep'),followUp:check('follow-up'),hasFollowUp:check('follow-up').length>0,
     linkedinLabel:busy?'Drafting…':'Draft LinkedIn post',linkedinGo:()=>component._draftLinkedIn(s.id),linkedinDisabled:!!busy,
@@ -83,10 +90,16 @@ const showView=(component,s,today)=>{
     pastLine:[s.dateLabel,'planned '+mk(s.planned),'recorded '+mk((s.recorded||{}).amount),verifiedFormat.number(leads.count||0)+' leads','MQL '+(leads.mql||0)].join(' · '),
   };
 };
+const campaignReplies=(marketing,campaign)=>{
+  const row=campaign&&(((marketing&&marketing.outbound)||{}).campaignStats||[]).find(c=>c.name===campaign.name);
+  const n=row&&row.replied||0;
+  return {hasReplies:n>0,repliesLabel:n?'Review the '+verifiedFormat.number(n)+' replies to “'+campaign.name+'” in LemList':'',repliesUrl:'https://app.lemlist.com'};
+};
 const campaignStatsText=(marketing,name)=>{
   const out=(marketing&&marketing.outbound)||{};
   const row=(out.campaignStats||[]).find(c=>c.name===name);
-  if(row)return ' · '+[row.sent!=null?verifiedFormat.number(row.sent)+' sent':'',row.opened!=null?verifiedFormat.number(row.opened)+' opened':'',row.replied!=null?verifiedFormat.number(row.replied)+' replied':''].filter(Boolean).join(' · ');
+  // LemList reports 0 opens when open tracking is off; that is not zero opens.
+  if(row)return ' · '+[row.sent!=null?verifiedFormat.number(row.sent)+' sent':'',row.opened?verifiedFormat.number(row.opened)+' opened':row.sent?'opens not tracked':'',row.replied!=null?verifiedFormat.number(row.replied)+' replied':''].filter(Boolean).join(' · ');
   if(out.statsBlocked)return ' · LemList stats not available on this API key';
   return out.connected?' · no stats for this campaign':' · sent and reply counts not collected yet';
 };

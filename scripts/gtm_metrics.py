@@ -7,7 +7,7 @@ not compute a second one.
 """
 import math
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 
 QUIET_DAYS = 14
@@ -47,6 +47,44 @@ def date_only(value):
         return datetime.fromtimestamp(phx, timezone.utc).date().isoformat()
     except Exception:
         return raw[:10] if len(raw) >= 10 and raw[4:5] == "-" else None
+
+
+PHOENIX = timezone(timedelta(hours=-7))
+
+
+def phoenix_when(value, today=None):
+    """'Mon Sep 28, 9:00 AM (tomorrow)' in America/Phoenix for an ISO timestamp; the date alone for a date."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        if len(raw) == 10:
+            d = date.fromisoformat(raw)
+            stamp = None
+        else:
+            stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            stamp = stamp.astimezone(PHOENIX)
+            d = stamp.date()
+    except ValueError:
+        return raw
+    text = "%s %s %d" % (("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[d.weekday()],
+                         ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")[d.month - 1], d.day)
+    if stamp is not None:
+        text += ", " + stamp.strftime("%I:%M %p").lstrip("0")
+    if today:
+        gap = (d - date.fromisoformat(today)).days
+        text += {0: " (today)", 1: " (tomorrow)", -1: " (yesterday)"}.get(gap, "")
+    return text
+
+
+ISO_STAMP = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?")
+
+
+def phoenix_prose(text, today=None):
+    """Model prose with any raw ISO timestamp rewritten as a Phoenix time."""
+    return ISO_STAMP.sub(lambda m: phoenix_when(m.group(0), today), str(text or ""))
 
 
 def phoenix_today(now=None):
@@ -425,7 +463,8 @@ def tracker_rows(sheet_review=None, contacts=None):
         if note == "subscriber" or "newsletter" in note or not name or "@" in name:
             continue
         out.append({
-            "name": name,
+            "name": r.get("displayName") or name,
+            "trackerName": name,
             "source": source_label(r.get("source")),
             "owner": lead_owner(r.get("owner")),
             "lead": date_only(r.get("lead") or r.get("leadDate")),
@@ -434,6 +473,7 @@ def tracker_rows(sheet_review=None, contacts=None):
             "note": r.get("note"),
             "contact": r.get("contact"),
             "sheetRow": r.get("sheetRow"),
+            "flags": r.get("flags") or lead_flags(r.get("note")),
         })
     return out
 
@@ -535,8 +575,8 @@ def company_name(value):
     return re.sub(r"[,;]+$", "", str(value or "").strip()).strip()
 
 
-def owner_info(value, tail=4, catalog=None):
-    digits_wanted = max(4, int(tail or 4))
+def owner_info(value, catalog=None):
+    """A person's name, or Unassigned. A raw HubSpot id is never a name."""
     s = str(value or "").strip()
     if not s or re.fullmatch(r"unassigned", s, flags=re.I):
         return {"label": "Unassigned", "title": "", "key": "Unassigned", "named": True}
@@ -556,36 +596,12 @@ def owner_info(value, tail=4, catalog=None):
     if isinstance(hit, str) and hit.strip():
         return {"label": hit.strip(), "title": "", "key": stripped, "named": True}
     if re.fullmatch(r"\d+", stripped) or re.fullmatch(r"[a-f0-9-]{8,}", stripped, flags=re.I):
-        digits = re.sub(r"\D", "", stripped) or stripped
-        n = min(digits_wanted, len(digits))
-        return {"label": "Owner #\u2026" + digits[-n:], "title": "Owner name isn't connected", "key": stripped, "named": False}
+        return {"label": "Unassigned", "title": "This HubSpot owner has no name in the owners list", "key": "Unassigned", "named": False}
     return {"label": stripped, "title": "", "key": stripped, "named": True}
 
 
 def resolve_owners(values):
-    raws = list(dict.fromkeys("" if v is None else str(v) for v in (values or [])))
-    tail = 4
-
-    def build(n):
-        return {v: owner_info(v, n) for v in raws}
-
-    mapping = build(tail)
-    while tail < 32:
-        seen = {}
-        clash = False
-        for info in mapping.values():
-            if info["named"]:
-                continue
-            prev = seen.get(info["label"])
-            if prev and prev != info["key"]:
-                clash = True
-                break
-            seen[info["label"]] = info["key"]
-        if not clash:
-            return mapping
-        tail += 2
-        mapping = build(tail)
-    return mapping
+    return {("" if v is None else str(v)): owner_info(v) for v in (values or [])}
 
 
 def display_owner(value, resolved=None):
@@ -785,15 +801,10 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
     for lead in verified.get("leads") or []:
         prelim_owners.append(lead.get("owner"))
     resolved = resolve_owners(prelim_owners)
-    tail = 4
-    prefix = "Owner #\u2026"
-    for info in resolved.values():
-        if not info["named"] and str(info["label"]).startswith(prefix):
-            tail = max(tail, len(info["label"]) - len(prefix))
 
     def info_for(raw):
         key = "" if raw is None else str(raw)
-        return resolved[key] if key in resolved else owner_info(raw, tail)
+        return resolved[key] if key in resolved else owner_info(raw)
 
     deals = []
     for opp, company in zip(annotated, companies_for):
@@ -973,6 +984,13 @@ def apply_sheet_deal(deal, overrides):
     nxt["sheetClass"] = sheet_class_name(ov.get("stage") or nxt.get("stage"))
     if diffs:
         nxt["hubspotDiffers"] = diffs
+    # The line people read carries the master Sheet's values, and says so.
+    bits = [nxt.get("stageLabel") or nxt.get("stage") or "No stage"]
+    if nxt.get("amount") is not None:
+        bits.append("$%s" % f"{float(nxt['amount']):,.0f}")
+    if nxt.get("close"):
+        bits.append("close %s" % date_only(nxt["close"]))
+    nxt["displayLine"] = " · ".join(bits) + " (master Sheet)"
     return nxt
 
 
@@ -1118,3 +1136,17 @@ def run_id_now(now=None):
     """run-YYYY-MM-DD-HHMMSS, date and time both UTC, so ids sort in run order."""
     from datetime import datetime as _dt, timezone as _tz
     return (now or _dt.now(_tz.utc)).astimezone(_tz.utc).strftime("run-%Y-%m-%d-%H%M%S")
+
+
+DEAD_NOTE = re.compile(r"\bno[- ]show\b|\bcancel+ed\b|different direction|\bdq'?d\b|disqualif|not a fit|not interested|"
+                       r"went with (?:another|a competitor)|\bunsubscrib|do not contact", re.I)
+HOT_NOTE = re.compile(r"granted (?:the )?(?:funding|budget)|funding and budget|budget (?:approved|allocated)|seriously looking|"
+                      r"actively (?:looking|evaluating)|evaluating (?:vendors|solutions)|interested in a (?:convo|conversation|demo|call)|"
+                      r"asked (?:for|to) (?:a )?(?:demo|meeting|call)|wants? (?:a )?(?:demo|meeting)", re.I)
+
+
+def lead_flags(note):
+    """hot: the note shows buying intent; dead: the note says the lead is disqualified or gone."""
+    text = str(note or "")
+    dead = bool(DEAD_NOTE.search(text))
+    return {"hot": bool(HOT_NOTE.search(text)) and not dead, "dead": dead}

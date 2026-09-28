@@ -3,6 +3,7 @@
 Every card cites a collected source. A source that is not collected produces
 no card; the section that would show it says it is not connected yet.
 """
+import re
 from collections import Counter
 from datetime import date, timedelta
 
@@ -11,6 +12,28 @@ from gtm_metrics import first_touch, lead_owner, money_k, tracker_rows, unworked
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
           "September", "October", "November", "December"]
 RESPONSIBLE = "Hollie"
+
+
+def people_line(rows):
+    """'58 unique people · 3 repeats · 3 without a contact' for Lead Tracker rows."""
+    keys, missing = [], 0
+    for l in rows:
+        c = l.get("contact") or {}
+        if isinstance(c, str):
+            c = {"name": c, "email": l.get("email")}
+        company = l.get("name") or l.get("company")
+        key = (c.get("email") or "").lower() or (("%s|%s" % (company, c.get("name"))).lower() if c.get("name") else "")
+        if key:
+            keys.append(key)
+        else:
+            missing += 1
+    unique = len(set(keys))
+    bits = ["%d unique %s" % (unique, "person" if unique == 1 else "people")]
+    if len(keys) > unique:
+        bits.append("%d repeat%s" % (len(keys) - unique, "" if len(keys) - unique == 1 else "s"))
+    if missing:
+        bits.append("%d without a contact" % missing)
+    return " · ".join(bits)
 
 
 def short_day(iso):
@@ -73,10 +96,10 @@ def shows_this_week(marketing, collected):
         if req.get("count"):
             owners.update(req.get("owners") or [])
             newest = max(newest, req.get("newest") or "")
-            open_n = req["count"] - (req.get("mql") or 0)
-            if open_n:
+            open_rows = [r for r in s.get("requestRows") or [] if not r.get("mql")]
+            if open_rows:
                 steps.append("book the %d prospects who asked to meet at %s (%s)" % (
-                    open_n, s["name"], ", ".join(req.get("companies")[:4])))
+                    len(open_rows), s["name"], join([r["company"] for r in open_rows])))
         if not s.get("attendees"):
             steps.append("confirm who is at the %s booth" % s["name"])
     names = [s["name"] for s in shows]
@@ -117,6 +140,7 @@ def webinar_unowned(leads, collected):
         len(unowned), len(rows), "none" if no_mql == len(unowned) else "%d have no" % no_mql)
     if top_note and top_n > 1:
         why += " %d are marked “%s”." % (top_n, top_note)
+    why += " The %d rows are %s." % (len(unowned), people_line(unowned))
     return card(
         "mkt:webinar-unowned", "%d webinar registrants are sitting in the tracker with no owner" % len(unowned),
         why,
@@ -149,8 +173,15 @@ def spend_not_entered(marketing):
         why += ". "
     why += join(["%s (%s planned)" % (MONTHS[int(m["month"][5:7]) - 1], money_k(m["planned"])) for m in missing])
     why += " %s no actuals. " % ("has" if len(missing) == 1 else "have")
-    why += "Recorded spend this year is %s against a %s plan" % (money_k(spend.get("actualTotal") or 0), money_k(spend.get("plannedTotal") or 0))
-    why += ("; events are %s of it." % money_k(events)) if events else "."
+    through = [m for m in spend.get("months") or [] if last and m["month"] <= last]
+    plan_ytd = sum(m.get("planned") or 0 for m in through)
+    actual_ytd = sum(m.get("actual") or 0 for m in through)
+    gap = actual_ytd - plan_ytd
+    why += "Through %s, recorded spend is %s against %s planned for those months (%s %s plan)" % (
+        last_name or "the last entered month", money_k(actual_ytd), money_k(plan_ytd),
+        money_k(abs(gap)), "over" if gap > 0 else "under")
+    why += ("; events are %s of it" % money_k(events)) if events else ""
+    why += ". The full-year plan is %s." % money_k(spend.get("plannedTotal") or 0)
     return card(
         "mkt:spend-not-entered", "Marketing spend has not been entered since %s" % (last_name or "the start of the year"),
         why,
@@ -177,8 +208,8 @@ def show_followups(marketing, today):
     stuck.sort(key=lambda s: -s["leads"]["count"])
     total = sum(s["leads"]["count"] for s in stuck)
     owners = sorted({o for s in stuck for o in s["leads"].get("owners") or []})
-    parts = ["%s (%s): %d leads, none at MQL%s" % (
-        s["name"], s["dateLabel"], s["leads"]["count"],
+    parts = ["%s (%s): %d leads (%s), none at MQL%s" % (
+        s["name"], s["dateLabel"], s["leads"]["count"], people_line(s.get("leadRows") or []),
         ", %d without an owner" % s["leads"]["unowned"] if s["leads"].get("unowned") else "") for s in stuck]
     newest = max((s["leads"].get("newest") or "" for s in stuck), default="") or None
     return card(
@@ -199,8 +230,30 @@ def show_followups(marketing, today):
     )
 
 
+def hot_leads(leads, collected):
+    rows = [l for l in leads if (l.get("flags") or {}).get("hot") and not l.get("mql")]
+    if not rows:
+        return None
+    rows.sort(key=lambda l: lead_day(l) or "", reverse=True)
+    owners = sorted({lead_owner(l.get("owner")) for l in rows if lead_owner(l.get("owner"))})
+    detail = "; ".join("%s (%s): “%s”" % (l.get("name"), lead_owner(l.get("owner")) or "no owner",
+                                           re.sub(r"\s+", " ", str(l.get("note") or ""))[:140].rstrip() + ("…" if len(str(l.get("note") or "")) > 140 else ""))
+                       for l in rows[:3])
+    return card(
+        "mkt:hot-leads", "%d lead%s show buying intent and have no MQL date" % (len(rows), "" if len(rows) == 1 else "s"),
+        detail + ".",
+        "Ask %s to reach out personally this week. Keep these out of generic LemList follow-ups." % (join(owners) or "an owner"),
+        "Buying intent is read from the owner's Lead Tracker note (funding, budget, actively looking, asked for a call). Collected %s." % collected,
+        RESPONSIBLE, lead_day(rows[0]), "newest hot lead",
+        {"label": "Open the %d hot lead%s" % (len(rows), "" if len(rows) == 1 else "s"), "target": {"kind": "leads", "flag": "hot", "stage": "no-mql"}},
+        None, kind="hot-leads", lead_owners=owners, extra={"expectedRows": len(rows)},
+    )
+
+
 def mql_without_sql(leads, collected):
-    rows = [l for l in leads if l.get("mql") and not l.get("sql")]
+    everyone = [l for l in leads if l.get("mql") and not l.get("sql")]
+    rows = [l for l in everyone if not (l.get("flags") or {}).get("dead")]
+    dead = len(everyone) - len(rows)
     if not rows:
         return None
     rows.sort(key=lambda l: l.get("mql") or "", reverse=True)
@@ -209,11 +262,12 @@ def mql_without_sql(leads, collected):
                        for l in rows[:3])
     return card(
         "mkt:mql-no-sql", "%d marketing-qualified leads have not become sales-qualified" % len(rows),
-        "They have an MQL date and no SQL date on the Lead Tracker. The most recent are %s." % recent,
+        "They have an MQL date and no SQL date on the Lead Tracker. The most recent are %s.%s" % (
+            recent, (" %d more are left out because the note says the lead is dead or disqualified." % dead) if dead else ""),
         "Check with %s whether the meeting happened, and update the SQL date if it did." % (join(owners) or "the owners"),
         "MQL and SQL dates are owner-entered on the Lead Tracker, collected %s." % collected,
         RESPONSIBLE, rows[0].get("mql"), "newest MQL",
-        {"label": "Open the %d leads" % len(rows), "target": {"kind": "leads", "stage": "mql-no-sql"}},
+        {"label": "Open the %d leads" % len(rows), "target": {"kind": "leads", "stage": "mql-no-sql", "flag": "live"}},
         None, kind="handoff", lead_owners=owners, extra={"expectedRows": len(rows)},
     )
 
@@ -265,6 +319,7 @@ def build(marketing, review, today, collected_label):
         silent_sequences(marketing, collected_label),
         spend_not_entered(marketing),
         show_followups(marketing, today),
+        hot_leads(leads, collected_label),
         mql_without_sql(leads, collected_label),
         unworked_by_source(leads, collected_label),
     ]

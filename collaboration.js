@@ -234,7 +234,7 @@ Component.prototype.renderVals = function() {
   v.draftFeedback=s.draftFeedback||'';v.draftFeedbackClass=s.draftFeedbackClass||'form-success';v.draftSaveConflict=!!s.draftSaveConflict;
   if(selectedDraft) {
     const draft=selectedDraft,id=draft.id,edit=patch=>this._editWorkspaceDraft(id,patch);
-    v.draft={...draft,refs:draft.supportRefs.length,versionLabel:(draft.version?'Version '+draft.version:'Not saved')+(draft.dirty?' · unsaved changes':''),hasCitations:(draft.citations||[]).length>0,citationsLine:(draft.citations||[]).join(' · ')};
+    v.draft={...draft,refs:draft.supportRefs.length,versionLabel:(draft.version?'Version '+draft.version:'Not saved')+(draft.dirty?' · unsaved changes':''),hasCitations:(draft.citations||[]).length>0,hasLinks:(draft.links||[]).length>0,citationsLine:(draft.citations||[]).join(' · ')};
     v.isEmailDraft=draft.purpose==='email'||draft.purpose==='event';v.isCampaignDraft=draft.purpose==='campaign';v.isLinkedInDraft=draft.purpose==='linkedin';v.subjectLabel=['email','event','campaign'].includes(draft.purpose)?'Subject':'Title';v.messageLabel=draft.purpose==='internal-note'?'Note':draft.purpose==='linkedin'?'Post':'Message';
     v.senderLabel=s.gmailEmail||'Sign in with Google to send from your own Gmail';v.senderActionLabel=s.gmailEmail?'Sign out':'Sign in with Google';
     v.campaignSenders=s.campaignSenders||[];v.editCampaignSender=e=>edit({campaignSender:e.target.value});

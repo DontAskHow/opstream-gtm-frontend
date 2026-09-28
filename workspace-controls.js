@@ -77,17 +77,21 @@ Component.prototype.renderVals=function(){
     const saved=localNotes[item.id]||{};
     const last=company?workspaceModel.lastEngagement(company):null;
     const companyOwner=workspaceModel.displayOwner(company&&company.owner);
-    const unnamed=!companyOwner||companyOwner==='Unassigned'||/^Owner #/.test(companyOwner);
+    const unnamed=!companyOwner||companyOwner==='Unassigned';
     let dealOwner='';
     if(unnamed&&company&&Array.isArray(company.deals)){
       const closed=d=>/closed/i.test(String(d.stageLabel||d.stage||''))?1:0;
       const ranked=company.deals.slice().sort((a,b)=>closed(a)-closed(b));
       for(const d of ranked){
         const who=workspaceModel.displayOwner(d.owner);
-        if(who&&who!=='Unassigned'&&!/^Owner #/.test(who)){dealOwner=who;break;}
+        if(who&&who!=='Unassigned'){dealOwner=who;break;}
       }
     }
-    const sheetDeal=item.dealId?((s.sheetReview&&s.sheetReview.deals)||[]).find(d=>String(d.id)===String(item.dealId).replace(/^deal-/,'')):null;
+    // The master Sheet's deal owner wins over HubSpot's company or deal owner.
+    const sheetDeals=(s.sheetReview&&s.sheetReview.deals)||[];
+    const dealKey=String(item.dealId||(String(item.id).match(/^q:(?:sheet_review|stale_deal):(?:only-)?(\d+)$/)||[])[1]||'').replace(/^deal-/,'');
+    const sameCompany=d=>company&&workspaceModel.companyName(d.company||'').toLowerCase()===workspaceModel.companyName(company.name).toLowerCase();
+    const sheetDeal=(dealKey&&sheetDeals.find(d=>String(d.id)===dealKey))||sheetDeals.find(sameCompany)||null;
     item.owner=sheetDeal&&sheetDeal.owner?workspaceModel.displayOwner(sheetDeal.owner):unnamed?(dealOwner||companyOwner||'—'):companyOwner;
     item.lastInteraction=last?workspaceModel.formatDate(last)+' · '+workspaceModel.relativeLabel(last, workspaceModel.phoenixToday()):'—';
     item.important=!!saved.important;

@@ -13,17 +13,32 @@ function number(n) {
   return n == null ? null : Math.round(Number(n)).toLocaleString('en-US');
 }
 
-export function showFacts(show) {
+const dayMs = 86400000;
+function phoenixDay(now = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Phoenix', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+}
+
+// Tense for the post, relative to today in America/Phoenix.
+export function showTiming(show, today = phoenixDay()) {
+  const start = show.start, end = show.end || show.start;
+  if (!start) return 'the date is not set; do not say when it is';
+  const until = Math.round((Date.parse(start) - Date.parse(today)) / dayMs);
+  const since = Math.round((Date.parse(today) - Date.parse(end)) / dayMs);
+  if (until > 1) return 'the show starts in ' + until + ' days; write in the future tense';
+  if (until === 1) return 'the show starts tomorrow; write in the future tense and do not say it is underway';
+  if (since < 0 || (until <= 0 && since <= 0)) return 'the show is on now';
+  return 'the show ended ' + (since === 1 ? 'yesterday' : since + ' days ago') + '; write in the past tense';
+}
+
+export function showFacts(show, today) {
   const lines = ['Show: ' + show.name];
   if (show.dateLabel) lines.push('Dates: ' + show.dateLabel + (show.start ? ' (' + show.start + ' to ' + (show.end || show.start) + ')' : ''));
   if (show.location) lines.push('Location: ' + show.location);
   if (show.package) lines.push('Opstream package: ' + show.package);
   if (show.organizer) lines.push('Organizer: ' + show.organizer);
   lines.push('Opstream attendees on the show calendar: ' + ((show.attendees || []).join(', ') || 'none listed'));
-  const leads = show.leads || {};
-  if (leads.count) lines.push('Lead Tracker rows from the show (contact details given or badge scanned): ' + leads.count);
   const phase = show.phase === 'past' ? 'past' : 'upcoming';
-  lines.push('Timing: ' + (phase === 'past' ? 'the show is over' : 'the show has not ended yet'));
+  lines.push('Timing: ' + showTiming(show, today) + '. Internal lead and meeting counts are private; never put them in the post.');
   return { lines, phase };
 }
 

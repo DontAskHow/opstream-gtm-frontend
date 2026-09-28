@@ -31,6 +31,7 @@ The raw API key never appears here; auth goes through the skill CLI's
 vault-backed surrogate credential.
 """
 import json
+import re
 import os
 import subprocess
 import sys
@@ -338,7 +339,7 @@ def main():
 
     today = phoenix_today()
     rec = load_json(os.path.join(DATA, "records.json")) or {}
-    book = snapshot_metrics(ver, rec, today)
+    book = snapshot_metrics(ver, rec, today, sheet_review=sr)
     open_deals = book.get("openDeals") or []
 
     def opline(o):
@@ -399,7 +400,7 @@ def main():
         "- Quiet-day figures are already computed (daysQuiet). Repeat those numbers; do not calculate another.\n"
         "- openBook is the page's open pipeline: the master sheet's active new-business rows. A past close date stays in that book and is marked close date passed; it is left out of the monthly commit. Renewals, current agreements, Disqualified, and On Hold are not in it. A HubSpot deal that is not on the sheet is not in the total. Repeat openBook counts, amounts, and largestOpenDeal. A renewal is not an open deal and is not the largest open deal.\n"
         "- collectedAt is when these files were generated. Repeat it. Do not present the figures as newer than that collection.\n"
-        "- Owner labels are already resolved. A label like Owner #… means the name is not connected. Do not invent a person's name.\n"
+        "- Owner labels are already resolved. Unassigned means no owner name is on file. Do not invent a person's name.\n"
         "- It is " + greeting() + " in America/Phoenix. Match that time of day if you greet anyone.\n"
         "- Be specific and actionable: name the deal/company, the number, the implication.\n"
         "- Prefer new/changed things (newQueueItems, newMismatches, resolved items) over restating the standing queue.\n"
@@ -445,6 +446,10 @@ def main():
             kind = str(ins.get("kind", "info")).lower()
             if kind not in ("risk", "opportunity", "health", "resolved", "info"):
                 kind = "info"
+            text = str(ins.get("title")) + " " + str(ins.get("detail") or "")
+            if (book.get("openCount") or 0) > 0 and re.search(r"\b(?:0|zero|no) open(?:-book)? deals\b|no open-book deals|\$0\b", text, flags=re.I):
+                log("dropped an insight that contradicts the open book: " + text[:120])
+                continue
             out.append({
                 "title": str(ins["title"])[:160],
                 "detail": str(ins.get("detail") or "")[:500],

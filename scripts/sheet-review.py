@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sheet_links import link as sheet_link  # noqa: E402
+from gtm_metrics import lead_flags  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = Path(os.environ.get("OUT_DATA") or (ROOT / "out" / "data")) / "sheet-review.json"
@@ -67,8 +68,9 @@ def company_key(name):
 def lead_contacts(cur, companies):
     """Company key -> HubSpot contacts (by company association or contact company), nearest the lead date first."""
     want = {company_key(n): d for n, d in companies if company_key(n)}
+    spelled = {}
     if not want:
-        return {}
+        return {}, spelled
     name_re = re.compile(r'"name":\s*"([^"]*)"')
     by_company = {}
     names = []
@@ -80,15 +82,17 @@ def lead_contacts(cur, companies):
         if key in want:
             by_company.setdefault(str(hid), key)
         elif key:
-            names.append((str(hid), key))
+            names.append((str(hid), key, m.group(1)))
     # A typo on the tracker ("Vanatge Towers") still finds the HubSpot company.
     matched = set(by_company.values())
     for key in [k for k in want if k not in matched and len(k) >= 5]:
-        close = [(difflib.SequenceMatcher(None, key, other).ratio(), hid) for hid, other in names
+        close = [(difflib.SequenceMatcher(None, key, other).ratio(), hid, shown) for hid, other, shown in names
                  if other[:1] == key[:1] and abs(len(other) - len(key)) <= 2]
-        best = max(close, default=(0, None))
+        best = max(close, default=(0, None, None))
         if best[0] >= 0.85:
             by_company.setdefault(best[1], key)
+            if sorted(company_key(best[2])) == sorted(key):
+                spelled[key] = best[2].strip()
     linked = {}
     ids = list(by_company)
     for i in range(0, len(ids), 500):
@@ -122,7 +126,7 @@ def lead_contacts(cur, companies):
         cands.sort(key=lambda c: c["_gap"])
         for c in cands:
             c.pop("_gap", None)
-    return found
+    return found, spelled
 
 
 def pick_contact(cands, note):
@@ -392,7 +396,7 @@ def main():
     except Exception:
         pass
     tracker = sheet_rows(cur, "Lead Tracker")
-    contacts = lead_contacts(cur, [(str(r[0]).strip(), parse_mdy(r[3]) if len(r) > 3 else None)
+    contacts, spelled = lead_contacts(cur, [(str(r[0]).strip(), parse_mdy(r[3]) if len(r) > 3 else None)
                                    for _rn, r in tracker if r])
     for rn, row in tracker:
         if not row or len(row) < 6:
@@ -408,6 +412,8 @@ def main():
         leads_out.append({
             "company": str(row[0]).strip(),
             "name": str(row[0]).strip(),
+            # A tracker typo ("Vanatge Towers") is shown with HubSpot's spelling.
+            "displayName": spelled.get(company_key(row[0])) or str(row[0]).strip(),
             "source": str(row[1]).strip() if len(row) > 1 else "",
             "owner": str(row[2]).strip() if len(row) > 2 else "",
             "lead": lead_d,
@@ -417,6 +423,7 @@ def main():
             "note": str(row[6]).strip() if len(row) > 6 and row[6] else "",
             "contact": pick_contact(contacts.get(company_key(row[0])), row[6] if len(row) > 6 else ""),
             "sheetRow": sheet_link(con, SHEET, "Lead Tracker", rn, "H"),
+            "flags": lead_flags(row[6] if len(row) > 6 else ""),
         })
         if not mql:
             lt_unworked += 1
