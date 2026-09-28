@@ -756,6 +756,7 @@ function onRequest(req, res) {
       } catch { generatedAt = null; }
       let runId = null;
       try { runId = fs.readFileSync(path.join(dataDir, '.published-run'), 'utf8').trim() || null; } catch { runId = null; }
+      if (!runId) { try { runId = JSON.parse(fs.readFileSync(path.join(dataDir, 'run-facts.json'), 'utf8')).runId || null; } catch { runId = null; } }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
         .end(JSON.stringify({ generatedAt, runId, label: collectedLabel(generatedAt) }));
       return;
