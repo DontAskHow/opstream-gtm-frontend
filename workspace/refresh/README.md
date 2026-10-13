@@ -9,6 +9,7 @@ EventBridge Scheduler gtm-preview-refresh-15m (rate 15 min, no flex window, 0 re
        build workspace/lib/project.mjs buildData(), the same code as workspace/build.mjs
        put   s3://opstream-gtm-preview-db5553a4/data.js       only when sha256(content) changed
        put   s3://opstream-gtm-preview-db5553a4/refresh.json  every successful check
+       put   s3://opstream-gtm-preview-db5553a4/workspace.json  the run's workspace.json, checked, only when its content changed
        on problems / errors -> SNS opstream-gtm-refresh-failures; Errors alarm gtm-preview-refresh-errors -> same topic
 ```
 
@@ -17,6 +18,16 @@ EventBridge Scheduler gtm-preview-refresh-15m (rate 15 min, no flex window, 0 re
 - **HubSpot per-deal fields** (amount, stage, closed status, pipeline, and the deal list itself) come from the snapshot's HubSpot deal export. The function finds it by shape, not by name: a top-level JSON with `pipes`, `stages` and `deals[].properties`, the `live_deals.json` shape `workspace/README.md` describes. `fetchedAt` (or `generatedAt`) is its HubSpot time. If the snapshot has no such file, the page falls back to `records.json` and labels it **unreconciled**. In that case pipelines can't be split and HubSpot-only deals are missing, and the function alarms (`snapshot-has-no-hubspot-export`) once.
 - **Sheet and GA4 fields** (the master Sheet's deal rows, budget, show calendar, ad exports) are shown "as of <snapshot time>". The data-quality panel compares HubSpot against the Sheet as of the snapshot.
 - **Header**: "Last refreshed <time PT>" from `/refresh.json` (fetched with `no-store`; falls back to `data.js` `refreshedAt`), then "data changed …" and "snapshot …". It turns amber when the last check is more than 45 minutes old.
+
+## workspace.json (the one-page workspace)
+
+The sync job writes `workspace.json` (scripts/workspace-data.py) into each published run. Every run, `workspace-json.mjs`:
+
+- **checks** it: valid JSON, `schemaVersion` 1, `headline.open` present, `meta.generatedAt` present, ≤ 3 MB, and no scrub pattern (from the function's `WORKSPACE_SCRUB_PATTERNS`, set by `deploy.sh`; patterns are never logged or sent in alarms).
+- **copies** it to the preview bucket (`no-store`, `x-amz-meta-sha256`) only when the sha256 of its content without timestamps (the sync job's volatile keys) differs from the last copied one. Unchanged content uploads nothing; `refresh.json.workspace.stamps` carries the newer timestamps, which the page applies.
+- **keeps the last good copy** when the run has no `workspace.json` (`snapshot-has-no-workspace-json`), the file fails a check (`workspace-json-invalid`), or the function has no scrub patterns (`workspace-scrub-patterns-missing`). Each alarms once when it starts and once when it clears (no daily reminder), and the page shows "Showing the last good data: …".
+
+`refresh.json.workspace` holds `status` (`uploaded` / `unchanged` / `kept-last-good`), `problem`, `errors`, `sha256`, `publishedSha256`, `publishedGeneratedAt`, `publishedRunId`, `checkedAt` and `stamps`. The step runs before the `data.js` build, so a problem there never holds it back.
 
 ## Change detection (why `data.js` isn't uploaded every run)
 
@@ -40,7 +51,7 @@ Distribution `EZQ1E2Y6O6NDG` has one behavior (the default, no additional behavi
 |---|---|
 | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/gtm-preview-refresh` only (the log group is created by `deploy.sh`, 14-day retention) |
 | `s3:ListBucket` (prefix `published/*`), `s3:GetObject` | `opstream-gtm-data-080403790510/published/*`, read-only |
-| `s3:GetObject`, `s3:PutObject` | `opstream-gtm-preview-db5553a4/data.js` and `/refresh.json` only |
+| `s3:GetObject`, `s3:PutObject` | `opstream-gtm-preview-db5553a4/data.js`, `/refresh.json`, `/workspace.json` and `/_state/hubspot-live.json` only |
 | `s3:ListBucket` | the preview bucket, so a missing `refresh.json` reads as 404 rather than 403 |
 | `sns:Publish` | `opstream-gtm-refresh-failures` |
 
@@ -52,6 +63,7 @@ There is no Secrets Manager or CloudFront permission. `gtm-preview-refresh-sched
 workspace/refresh/deploy.sh             # idempotent: roles, log group, function, alarm, schedule, page files; keeps the schedule's state
 workspace/refresh/deploy.sh --enable    # ... and enable the schedule
 workspace/refresh/deploy.sh --disabled  # ... and create/leave it DISABLED
+WORKSPACE_SCRUB_PATTERNS_FILE=… workspace/refresh/deploy.sh --onepage-app   # serve the one-page workspace (see onepage/README.md)
 workspace/refresh/gtm-preview-refresh-off.sh        # off switch (get-schedule, then update-schedule with State DISABLED)
 ON=1 workspace/refresh/gtm-preview-refresh-off.sh   # back on
 aws lambda invoke --profile opstream-deploy --region us-east-2 --function-name gtm-preview-refresh --payload '{"dryRun":true}' /tmp/out.json   # read-only check

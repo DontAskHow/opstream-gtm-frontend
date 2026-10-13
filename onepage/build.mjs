@@ -1,7 +1,11 @@
 #!/usr/bin/env node
-// One-page GTM workspace. Reads the JSON scripts/workspace-data.py writes and
-// renders one self-contained index.html (inline CSS and JS, no network). No data
-// lives in this file. Usage:
+// One-page GTM workspace. Two outputs, one set of components (page.cjs, view.cjs):
+//   --app                 index.html with NO data: it fetches workspace.json (and refresh.json)
+//                         from its own origin and renders client-side. This is what is deployed;
+//                         the preview refresh Lambda keeps workspace.json current.
+//   --data workspace.json index.html with the data inside (local previews, tests).
+// No data lives in this file.
+//   node onepage/build.mjs --app --out <dir>
 //   node onepage/build.mjs --data workspace.json --out <dir>
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
@@ -11,10 +15,9 @@ import { createRequire } from 'node:module';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const page = require('./page.cjs');
-const lostReasons = require('../workspace/src/lost-reasons.js');
-const insightsLib = require('../workspace/src/insights.js');
-const SCOPE = JSON.parse(readFileSync(join(HERE, '..', 'shared', 'workspace-scope.json'), 'utf8'));
-const USAGE = 'Usage: node onepage/build.mjs --data <workspace.json> --out <output-dir>';
+const { buildView: viewOf } = require('./view.cjs');
+const USAGE = 'Usage: node onepage/build.mjs (--app | --data <workspace.json>) --out <output-dir>';
+export const DATA_FILE = 'workspace.json';
 
 export function parseArgs(argv) {
   const args = {};
@@ -22,97 +25,88 @@ export function parseArgs(argv) {
     const m = /^--(data|out)(?:=(.*))?$/.exec(argv[i]);
     if (m) args[m[1]] = m[2] ?? argv[++i];
     else if (argv[i] === '--quiet') args.quiet = true;
+    else if (argv[i] === '--app') args.app = true;
     else throw new Error(`unknown argument ${argv[i]}\n${USAGE}`);
   }
-  if (!args.data || !args.out) throw new Error(USAGE);
-  return { data: resolve(args.data), out: resolve(args.out), quiet: !!args.quiet };
+  if ((!args.data && !args.app) || (args.data && args.app) || !args.out) throw new Error(USAGE);
+  return { data: args.data ? resolve(args.data) : null, app: !!args.app, out: resolve(args.out), quiet: !!args.quiet };
 }
 
-// Lost reasons: lost-reasons.json decides the deals it lists; HubSpot's reason
-// auto-maps the rest (workspace/src/lost-reasons.js, the one categorizer).
-function lostView(closed) {
-  const doc = closed.reasonsDoc;
-  const checked = doc ? lostReasons.validate(doc) : null;
-  const valid = checked && checked.ok ? doc : null;
-  const pipeline = SCOPE.salesPipelineId;
-  // New business only: a loss created after the company's first win is an expansion at a customer.
-  const deals = closed.lost.filter((d) => !d.postWin).map((d) => ({ id: lostReasons.dealKey(d.id), lost: true, pipeline, name: d.name, amount: d.amount, lostReason: d.lostReason }));
-  const cat = lostReasons.categorize({ closedLost: { pipeline }, deals }, valid);
-  const stageOf = Object.fromEntries(closed.lost.map((d) => [d.id, d.stage]));
-  const rows = cat.rows.map((r) => ({
-    key: r.key, label: r.label, count: r.count, amount: r.amount, competitors: r.competitors, unnamed: r.unnamed,
-    byStage: r.deals.reduce((a, d) => { const st = stageOf[d.id.replace(/^deal-/, '')]; a[st] = (a[st] || 0) + 1; return a; }, {}),
-    deals: r.deals.map((d) => ({ ...d, id: d.id.replace(/^deal-/, ''), stage: stageOf[d.id.replace(/^deal-/, '')] })),
-  }));
-  const basis = !doc ? 'No lost-reasons.json given: every deal is auto-mapped from HubSpot\'s lost reason.'
-    : !valid ? `lost-reasons.json did not pass validation (${checked.errors[0]}), so every deal is auto-mapped from HubSpot's lost reason.`
-      : `${cat.fromFile} of ${cat.count} deals categorized by lost-reasons.json (generated ${page.dateTime(doc.generated_at)}); ${cat.auto} auto-mapped from HubSpot's lost reason.`;
-  return { rows, basis, fromFile: cat.fromFile, count: cat.count };
+export const buildView = (data, refresh) => viewOf(data, refresh);
+
+// Scrub patterns are never in the repo: WORKSPACE_SCRUB_PATTERNS (comma list), else the file
+// WORKSPACE_SCRUB_PATTERNS_FILE (comma- or line-separated). Same rules as scripts/workspace-data.py.
+export function scrubPatterns(env = process.env) {
+  let raw = env.WORKSPACE_SCRUB_PATTERNS || '';
+  if (!raw.trim() && env.WORKSPACE_SCRUB_PATTERNS_FILE && existsSync(env.WORKSPACE_SCRUB_PATTERNS_FILE)) raw = readFileSync(env.WORKSPACE_SCRUB_PATTERNS_FILE, 'utf8');
+  return [...new Set(raw.split(/[,\n]/).map((x) => x.trim().toLowerCase()).filter((x) => x && !x.startsWith('#')))];
 }
 
-function insightsView(doc) {
-  if (!doc) return null;
-  const r = insightsLib.validate(doc);
-  return r.ok ? { ok: true, errors: [], doc } : { ok: false, errors: r.errors || ['invalid'], doc: null };
-}
-
-// The view model the page renders: workspace.json plus the lost-reason categories.
-export function buildView(data) {
-  const v = structuredClone(data);
-  v.closed.reasons = v.closed.lost.length ? lostView(v.closed) : null;
-  const cat = {};
-  for (const r of v.closed.reasons?.rows || []) for (const d of r.deals) cat[d.id] = { label: r.label, basis: d.basis };
-  for (const d of v.closed.lost) if (cat[d.id]) { d.lostCategory = cat[d.id].label; d.lostBasis = cat[d.id].basis; }
-  delete v.closed.reasonsDoc;
-  v.insights = insightsView(v.insights);
-  const c = v.headline.change;
-  if (c) c.key = `chg:${c.since}:${c.to.count}:${c.to.amount}`;
-  return v;
+// A scrubbed person must not appear anywhere in what the page ships. Without patterns, refuse.
+export function assertScrubbed(text, what, patterns = scrubPatterns()) {
+  if (!patterns.length) throw new Error('scrub check failed: no scrub patterns (set WORKSPACE_SCRUB_PATTERNS or WORKSPACE_SCRUB_PATTERNS_FILE)');
+  const low = text.toLowerCase();
+  for (const p of patterns) {
+    const i = low.indexOf(p);
+    if (i !== -1) throw new Error(`scrub check failed: ${what} contains a scrub pattern at offset ${i}`);
+  }
 }
 
 const safeJson = (x) => JSON.stringify(x).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+const asset = (f) => readFileSync(join(HERE, f), 'utf8');
 
-export function renderHtml(view) {
-  const css = readFileSync(join(HERE, 'styles.css'), 'utf8');
-  const js = readFileSync(join(HERE, 'page.cjs'), 'utf8');
-  const { header, main, drawer } = page.renderPage(view, {});
+function shell({ csp, header, main, drawer, data, scripts }) {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="referrer" content="no-referrer">
 <title>GTM workspace</title>
-<style>${css}</style>
+<style>${asset('styles.css')}</style>
 </head>
 <body>
 ${header}
 <main id="main" tabindex="-1">${main}</main>
 <div id="drawer-root">${drawer}</div>
-<script type="application/json" id="gtm-data">${safeJson(view)}</script>
-<script>${js}</script>
+${data == null ? '' : `<script type="application/json" id="gtm-data">${safeJson(data)}</script>\n`}${scripts.map((s) => `<script>${s}</script>`).join('\n')}
 </body>
 </html>
 `;
 }
 
-// The hidden owner must not appear anywhere in what the page ships.
-export function assertScrubbed(text, what) {
-  const p = SCOPE.hiddenOwner.pattern.toLowerCase();
-  const i = text.toLowerCase().indexOf(p);
-  if (i !== -1) throw new Error(`scrub check failed: ${what} contains the hidden owner at offset ${i}`);
+// The built page: data inside, no network.
+export function renderHtml(view, opts = {}) {
+  const { header, main, drawer } = page.renderPage(view, {}, opts);
+  return shell({ csp: "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'",
+    header, main, drawer, data: view, scripts: [asset('page.cjs')] });
+}
+
+// The deployed page: no data; fetches workspace.json and refresh.json from its own origin.
+export function renderAppHtml() {
+  return shell({ csp: "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'",
+    header: page.loadingHeader(), main: '<p class="loading" id="loading">Loading the workspace…</p>', drawer: '', data: null,
+    scripts: [readFileSync(join(HERE, '..', 'workspace', 'src', 'lost-reasons.js'), 'utf8'), readFileSync(join(HERE, '..', 'workspace', 'src', 'insights.js'), 'utf8'),
+      asset('view.cjs'), asset('page.cjs')] });
 }
 
 export function build(opts) {
   const log = opts.quiet ? () => {} : (...a) => console.log(...a);
+  mkdirSync(opts.out, { recursive: true });
+  if (opts.app) {
+    const html = renderAppHtml();
+    writeFileSync(join(opts.out, 'index.html'), html);
+    log(`wrote ${join(opts.out, 'index.html')} (${Math.round(html.length / 1024)} KB, no data: fetches ${DATA_FILE})`);
+    return { html };
+  }
   if (!existsSync(opts.data)) throw new Error(`--data ${opts.data} not found (write it with scripts/workspace-data.py)`);
   const raw = readFileSync(opts.data, 'utf8');
-  assertScrubbed(raw, opts.data);
+  const patterns = scrubPatterns();
+  assertScrubbed(raw, opts.data, patterns);
   const view = buildView(JSON.parse(raw));
   const html = renderHtml(view);
-  assertScrubbed(html, 'index.html');
-  mkdirSync(opts.out, { recursive: true });
+  assertScrubbed(html, 'index.html', patterns);
   writeFileSync(join(opts.out, 'index.html'), html);
   const h = view.headline;
   log(`wrote ${join(opts.out, 'index.html')} (${Math.round(html.length / 1024)} KB)`);

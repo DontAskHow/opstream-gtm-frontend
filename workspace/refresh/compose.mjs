@@ -165,11 +165,12 @@ export function refreshDoc({ nowIso, hash, changed, prev = {}, live, runId, snap
 
 // Alarm when the set of problems changes (including recovery), and again once
 // a day while something keeps failing. Hard errors alarm separately.
-export function alarmDecision({ failing, prev = {}, nowMs, remindMs = 24 * 3600e3 }) {
+export function alarmDecision({ failing, prev = {}, nowMs, remindMs = 24 * 3600e3, quiet = [] }) {
   const before = Array.isArray(prev.failing) ? prev.failing : [];
   const same = before.length === failing.length && before.every((f, i) => f === failing[i]);
   const last = Date.parse(prev.lastAlarmAt ?? '') || 0;
   if (!same) return { send: true, reason: failing.length ? 'changed' : 'recovered' };
-  if (failing.length && nowMs - last >= remindMs) return { send: true, reason: 'reminder' };
+  // `quiet` problems alarm once when they start or clear, never as a daily reminder.
+  if (failing.some((f) => !quiet.includes(f)) && nowMs - last >= remindMs) return { send: true, reason: 'reminder' };
   return { send: false };
 }

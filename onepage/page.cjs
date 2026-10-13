@@ -160,15 +160,43 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
   const ext = (href, label) => (href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${label}</a>` : '');
 
   // ---------- header ----------
-  function header(v) {
+  const STALE_MS = 45 * 60e3;
+  const NAV = `<nav class="jump" aria-label="Sections">${[['pipeline', 'Pipeline'], ['leads', 'Leads'], ['meetings', 'Meetings'], ['calls', 'Calls'], ['analysis', 'Analysis']].map(([id, l]) => `<button type="button" data-jump="${id}">${l}</button>`).join('')}</nav>`;
+  const LIVE_PROBLEMS = {
+    'snapshot-has-no-workspace-json': 'the latest snapshot has no workspace.json',
+    'workspace-json-invalid': 'the latest workspace.json did not pass its checks',
+    'workspace-scrub-patterns-missing': 'the refresh has no scrub patterns configured',
+  };
+
+  // "Updated <time> PT" from the data's own build time; amber once it is older than 45 minutes.
+  function updatedChip(v, now) {
+    const u = v.meta.generatedAt || v.meta.asOf;
+    const t = parseT(u);
+    const old = !t || now - t.getTime() > STALE_MS;
+    return `<span class="chip chip-${old ? 'warn' : 'ok'}" data-updated="${esc(u || '')}"${old ? ' title="The data is more than 45 minutes old: the sync or the refresh may be behind."' : ''}>${old ? '' : '<i class="dot" aria-hidden="true"></i>'}Updated ${esc(dateTime(u))}${old ? ' · over 45 min ago' : ''}</span>`;
+  }
+
+  function header(v, opts = {}) {
+    const now = opts.now != null ? opts.now : Date.now();
     const fresh = v.freshness.map((f) => f.ok
       ? chip(`${f.label} ${f.lastOkAt ? dateTime(f.lastOkAt).replace(/^.*?, /, '') : DASH}`, 'ok', `${f.label}: last good ${dateTime(f.lastOkAt)}. ${f.detail || ''}`)
       : chip(`${f.label} down · last good ${dateTime(f.lastOkAt)}`, 'alert', `${f.label} failed at ${dateTime(f.at)}: ${f.detail || ''}. The page shows its last good data.`)).join('');
     const flags = v.flags.filter((f) => f.level !== 'alert').map((f) => chip(f.label, f.level, f.text)).join('');
+    const live = v.live && v.live.problem ? chip(`Showing the last good data: ${LIVE_PROBLEMS[v.live.problem] || v.live.problem}`, 'alert', `Checked ${dateTime(v.live.checkedAt)}`) : '';
     return `<header class="top"><div class="top-in">
-<div class="brand"><h1>GTM workspace</h1><p class="sub">Sales Pipeline · data as of ${esc(dateTime(v.meta.asOf))}</p></div>
-<nav class="jump" aria-label="Sections">${[['pipeline', 'Pipeline'], ['leads', 'Leads'], ['meetings', 'Meetings'], ['calls', 'Calls'], ['analysis', 'Analysis']].map(([id, l]) => `<button type="button" data-jump="${id}">${l}</button>`).join('')}</nav>
-</div><div class="top-in chips" aria-label="Data freshness">${fresh}${flags}</div></header>`;
+<div class="brand"><h1>GTM workspace</h1><p class="sub">Sales Pipeline · ${updatedChip(v, now)}</p></div>
+${NAV}
+</div><div class="top-in chips" aria-label="Data freshness">${live}${fresh}${flags}</div></header>`;
+  }
+
+  function loadingHeader(note) {
+    return `<header class="top"><div class="top-in"><div class="brand"><h1>GTM workspace</h1><p class="sub">${esc(note || 'Loading…')}</p></div>${NAV}</div></header>`;
+  }
+
+  function errorView(message) {
+    return `<section class="sec error" role="alert"><h2>The workspace data could not be loaded</h2><p>${esc(message)}</p>
+<p class="muted small">The page reads workspace.json from this site. If this keeps happening, the scheduled refresh may not have published it yet.</p>
+<p><button type="button" class="btn" data-retry="1">Try again</button></p></section>`;
   }
 
   // ---------- pipeline ----------
@@ -274,7 +302,7 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     }
     const rows = s.sub ? xs.filter((l) => (l.subSource || 'No sub-source') === s.sub) : xs;
     const lst = list('leads-' + src + '-' + (s.sub || ''), [
-      { key: 'company', label: 'Company', cell: (l) => esc(l.company) + (l.tag ? ` <span class="tag">${esc(l.tag)}</span>` : '') },
+      { key: 'company', label: 'Company', cell: (l) => esc(l.company) + (l.tag ? ` <span class="tag">${esc(l.tag)}</span>` : '') + (l.predatesSpendWindow ? ' <span class="tag tag-warn">predates spend window</span>' : '') + (l.hold ? ` <span class="tag tag-warn">${esc(l.hold)}</span>` : '') },
       { key: 'leadDate', label: 'Lead date', cell: (l) => esc(date(l.leadDate)) },
       { key: 'basis', label: 'Source from', opt: true, sortVal: (l) => l.sourceBasis, cell: (l) => (l.sourceBasis === 'hubspot' ? 'HubSpot' : '<span class="muted">Lead Tracker</span>') },
       { key: 'subSource', label: 'Sub-source', opt: true, cell: (l) => esc(l.subSource || DASH) },
@@ -296,10 +324,11 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
       expand: open ? list('review', [
         { key: 'company', label: 'Company', cell: (x) => esc(x.company) },
         { key: 'sheet_source', label: 'Lead Tracker', cell: (x) => esc(x.sheet_source) },
-        { key: 'hubspot_sources', label: 'HubSpot (used)', cell: (x) => esc(x.hubspot_sources) },
-        { key: 'evidence', label: 'Evidence', opt: true, cell: (x) => `<span class="small">${esc(x.evidence)}</span>` },
+        { key: 'hubspot_sources', label: 'HubSpot', cell: (x) => esc(x.hubspot_sources) },
+        { key: 'status', label: 'Status', cell: (x) => (x.hold ? `<span class="tag tag-warn">${esc(x.hold)}</span>` : esc((x.status || '').replace(/_/g, ' '))) + (x.mql_channel && x.mql_channel !== 'undetermined' ? `<div class="small">MQL touch: ${esc(x.mql_channel)}</div>` : '') + (x.different_first_touch ? `<div class="muted small">first touch: ${esc(x.different_first_touch)}</div>` : '') },
+        { key: 'evidence', label: 'Evidence', opt: true, cell: (x) => `<span class="small">${esc(x.evidence)}</span>${x.attribution_evidence ? `<div class="muted small">${esc(x.attribution_evidence)}</div>` : ''}` },
       ], r.rows, { sort: 'company', dir: 'asc', noun: 'rows', noun1: 'row', target: (x) => (r.leadIds[x.row] ? 'lead=' + r.leadIds[x.row] : 'rv=1'), active: (x) => s.lead && r.leadIds[x.row] === s.lead, text: (x) => [x.company, x.sheet_source, x.hubspot_sources, x.evidence].join(' ') }) +
-        `<p class="muted small">${esc((r.rows[0] || {}).action || '')}. Nothing is written to the Sheet.</p>` : null,
+        `<p class="muted small">Resolved rows are credited to the touch at the MQL booking; undetermined rows (no MQL yet) keep the HubSpot-primary source; rows on hold keep their current source. Nothing is written to the Sheet or HubSpot.</p>` : null,
     }];
     return `<h3>Review list</h3>` + table([{ label: 'List' }, { label: 'Rows', num: true }], rows);
   }
@@ -318,13 +347,14 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
           { key: 'name', label: 'Deal', cell: (d) => esc(d.name) + (d.branded ? ` <span class="tag">${esc(v.rules.brandedFlag)}</span>` : '') },
           { key: 'stage', label: 'Stage', opt: true, cell: (d) => esc(d.stage) },
           { key: 'amount', label: 'Amount', num: true, cell: (d) => usd(d.amount) },
+          { key: 'conversionDate', label: 'Conversion', opt: true, cell: (d) => esc(date(d.conversionDate)) + (d.predatesSpendWindow ? ' <span class="tag tag-warn">predates spend window</span>' : '') },
           { key: 'via', label: 'Evidence', opt: true, cell: (d) => esc(d.via || DASH) + (d.level === 'company' ? ' <span class="muted small">(company-level)</span>' : '') },
         ], xs, { sort: 'amount', noun: 'deals', noun1: 'deal', target: (d) => 'deal=' + d.id, active: (d) => s.deal === d.id, text: (d) => [d.name, d.company, d.via].join(' ') }) : null,
       };
     });
     return `<h3>Paid-attributed deals</h3>` + table([{ label: 'Platform' }, { label: 'Sales deals', num: true }, { label: v.rules.brandedFlag, num: true, opt: true }, { label: 'Company-level', num: true, opt: true }, { label: 'Open amount', num: true, opt: true }], rows,
       { foot: ['All platforms', int(p.sales.length), int(p.branded), int(p.companyLevel), usd(p.sales.filter((d) => d.open).reduce((a, d) => a + (d.amount || 0), 0))] }) +
-      `<p class="muted small">${esc(p.basis)}${p.generatedAt ? ', ' + esc(dateTime(p.generatedAt)) : ''}: ${int(p.total)} paid deals in all, ${int(p.sales.length)} in the Sales Pipeline${p.otherPipelines ? ` (${int(p.otherPipelines)} in Renewal / Customer Success, not shown)` : ''}. A deal counts when one of its contacts has a paid signal (paid form, UTM with a paid medium or click id, paid_touch_campaign, original source); "company-level" means the signal is on another contact at the deal's company.</p>`;
+      `<p class="muted small">${esc(p.basis)}${p.generatedAt ? ', ' + esc(dateTime(p.generatedAt)) : ''}: ${int(p.total)} paid deals in all${p.predates ? ` (${int(p.predates)} converted before its platform's spend window: flagged, still counted)` : ''}, ${int(p.sales.length)} in the Sales Pipeline${p.otherPipelines ? ` (${int(p.otherPipelines)} in Renewal / Customer Success, not shown)` : ''}. A deal counts when one of its contacts has a paid signal (paid form, UTM with a paid medium or click id, paid_touch_campaign, original source); "company-level" means the signal is on another contact at the deal's company.</p>`;
   }
 
   function platformBlock(v) {
@@ -466,7 +496,7 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
       ['Deal', kv([['Company', esc(d.company || DASH)], ['Amount', usd(d.amount)], ['Weighted', d.open ? usd(d.weighted) : null], ['Owner', esc(d.owner)],
         ['Close date', esc(date(d.close)) + (d.open && parseT(d.close) && parseT(d.close) < now ? ' <span class="warn-t">passed</span>' : '')], ['Created', esc(date(d.created))],
         ['Lost reason', d.lost ? esc(d.lostReason || 'none recorded') : null], ['Lost category', d.lostCategory ? esc(d.lostCategory) + (d.lostBasis ? `<div class="muted small">${esc(d.lostBasis)}</div>` : '') : (d.postWin ? '<span class="muted">expansion at a customer (created after the first win): not categorized</span>' : null)],
-        ['Paid', d.paid ? `${esc(d.paid.platform)}${d.paid.branded ? ` <span class="tag">${esc(v.rules.brandedFlag)}</span>` : ''} <span class="muted small">${esc(d.paid.via || '')}${d.paid.level === 'company' ? ', company-level' : ''} (${esc(v.paidDeals.basis)})</span>` : null]])],
+        ['Paid', d.paid ? `${esc(d.paid.platform)}${d.paid.branded ? ` <span class="tag">${esc(v.rules.brandedFlag)}</span>` : ''}${d.paid.conversionDate ? ` · converted ${esc(date(d.paid.conversionDate))}` : ''}${d.paid.predatesSpendWindow ? ' <span class="tag tag-warn">predates spend window</span>' : ''} <span class="muted small">${esc(d.paid.via || '')}${d.paid.level === 'company' ? ', company-level' : ''} (${esc(v.paidDeals.basis)})</span>` : null]])],
       ['HubSpot', ext(hsUrl(v, '0-3', d.id), 'Open the deal in HubSpot') || '<span class="muted">No portal id given, so no link.</span>'],
     ]);
   }
@@ -474,7 +504,7 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
   function leadDrawer(v, id) {
     const l = v.leadIndex[id];
     if (!l) return drawer('Lead not found', '', [['', '<p>This lead is not in the data.</p>']]);
-    const ev = l.evidence.length ? `<ul class="plain">${l.evidence.map((e) => `<li><b>${esc(e.rule)}</b>${e.decides ? '' : ' <span class="muted small">(evidence only)</span>'}: ${esc(e.source || 'no source')}${e.platform ? ' · ' + esc(e.platform) : ''}${e.branded ? ` <span class="tag">${esc(v.rules.brandedFlag)}</span>` : ''} <span class="muted">${esc(e.detail || '')}</span>${e.at ? ` <span class="muted small">${esc(date(e.at))}</span>` : ''}</li>`).join('')}</ul>` : `<p class="muted">No HubSpot or Lemlist evidence${v.meta.notSynced.length ? ' (form, list, campaign and source fields are not yet synced)' : ''}.</p>`;
+    const ev = l.evidence.length ? `<ul class="plain">${l.evidence.map((e) => `<li><b>${esc(e.rule)}</b>${e.decides ? '' : ' <span class="muted small">(evidence only)</span>'}${e.superseded ? ` <span class="tag">superseded: ${esc(e.superseded)}</span>` : ''}: ${esc(e.source || 'no source')}${e.platform ? ' · ' + esc(e.platform) : ''}${e.branded ? ` <span class="tag">${esc(v.rules.brandedFlag)}</span>` : ''} <span class="muted">${esc(e.detail || '')}</span>${e.at ? ` <span class="muted small">${esc(date(e.at))}</span>` : ''}</li>`).join('')}</ul>` : `<p class="muted">No HubSpot or Lemlist evidence${v.meta.notSynced.length ? ' (form, list, campaign and source fields are not yet synced)' : ''}.</p>`;
     const ins = l.insight;
     const insight = ins ? kv([['Last call', esc(date(ins.lastCall)) + (ins.calls ? ` · ${plural(ins.calls, 'call')}` : '')], ['Summary', ins.text ? esc(ins.text) : null], ['Pains', ins.pains.length ? ins.pains.map(esc).join('<br>') : null], ['Objections', ins.objections.length ? esc(ins.objections.join(', ')) : null], ['Competitors', ins.competitors.length ? esc(ins.competitors.join(', ')) : null], ['Next step', ins.nextStep ? esc(ins.nextStep) : null], ['Risk', ins.risk.length ? ins.risk.map(esc).join('<br>') : null], ['Basis', ins.basis ? `<span class="muted">${esc(ins.basis)}</span>` : null]]) : '';
     const deals = l.deals.length ? `<ul class="plain">${l.deals.map((d) => `<li>${link(esc(d.name), 'deal=' + d.id)} · ${esc(d.stage)} · <span class="num">${usd(d.amount)}</span></li>`).join('')}</ul>` : '<p class="muted">No Sales Pipeline deal at this company.</p>';
@@ -485,6 +515,10 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
       ['Source', kv([['Source', esc(l.source) + ` <span class="muted small">${l.sourceBasis === 'hubspot' ? 'from HubSpot (primary)' : 'Lead Tracker fallback: no HubSpot evidence'}</span>`],
         ['Rule that fired', esc(l.rule)], ['Lead Tracker Source', esc(l.sheetSource) + (l.sheetSource !== l.source ? ' <span class="tag tag-warn">differs: on the review list</span>' : '')],
         ['Sub-source', l.subSource ? esc(l.subSource) + (l.tag ? ` <span class="tag">${esc(l.tag)}</span>` : '') + ` <span class="muted small">${esc(v.meta.provisional)}</span>` : null],
+        ['Paid conversion', l.conversionDate ? esc(date(l.conversionDate)) + (l.predatesSpendWindow ? ' <span class="tag tag-warn">predates spend window</span>' : '') : null],
+        ['First touch', l.firstTouch ? esc(l.firstTouch) + ' <span class="muted small">(differs from the MQL touch)</span>' : null],
+        ['MQL channel', l.mqlChannel === 'undetermined' ? 'undetermined: no MQL booking yet' : null],
+        ['Review', l.hold ? `<span class="tag tag-warn">${esc(l.hold)}</span> <span class="muted small">current source kept</span>` : null],
         ['Possible platforms', l.possiblePlatforms ? esc(l.possiblePlatforms.join(', ')) + ' <span class="muted small">(note matches a configured conversion event)</span>' : null]])],
       ['Evidence', ev + (l.flags.length ? `<ul class="plain">${l.flags.map((f) => `<li><span class="tag tag-warn">${f.kind === 'review' ? 'review' : f.kind === 'conflict' ? 'other evidence' : 'check'}</span> ${esc(f.text)}</li>`).join('')}</ul><p class="muted small">Flagged, not resolved: nothing is written to the Sheet.</p>` : '')],
       ['Dates', kv([['Lead', esc(date(l.leadDate))], ['MQL', esc(date(l.mqlDate))], ['SQL', esc(date(l.sqlDate))]])],
@@ -537,19 +571,22 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     return pipelineSection(v, s) + leadsSection(v, s) + meetingsSection(v, s) + callsSection(v, s) + analysisSection(v, s) + scopeFooter(v);
   }
 
-  function renderPage(v, s) {
+  function renderPage(v, s, opts = {}) {
     index(v);
-    return { header: header(v), main: renderMain(v, s), drawer: renderDrawer(v, s) };
+    return { header: header(v, opts), main: renderMain(v, s), drawer: renderDrawer(v, s) };
   }
 
-  const api = { renderPage, renderMain, renderDrawer, parseState, stateHash, applyChange, inPeriod, esc, usd, int, pct, dateTime, date, ymd };
+  const api = { renderPage, renderMain, renderDrawer, header, loadingHeader, errorView, STALE_MS, parseState, stateHash, applyChange, inPeriod, esc, usd, int, pct, dateTime, date, ymd };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.GtmPage = api;
 
   // ---------- browser behaviour ----------
   if (typeof document === 'undefined' || typeof module === 'object') return;
-  const V = JSON.parse(document.getElementById('gtm-data').textContent);
-  index(V);
+  const DATA_URL = 'workspace.json';
+  const REFRESH_URL = 'refresh.json';
+  const RECHECK_MS = 5 * 60e3;
+  let V = null;
+  let dataText = null;
   let state = parseState(location.hash);
   const main = document.getElementById('main');
   const droot = document.getElementById('drawer-root');
@@ -562,8 +599,14 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     const d = dismissed();
     for (const el of document.querySelectorAll('[data-note]')) if (d.includes(el.getAttribute('data-note'))) el.hidden = true;
   }
-  function render(focusDrawer) {
+  function setHeader(html) {
+    const h = document.querySelector('header.top');
+    if (h) h.outerHTML = html; else document.body.insertAdjacentHTML('afterbegin', html);
+  }
+  function render(focusDrawer, withHeader) {
+    if (!V) return;
     const y = window.scrollY;
+    if (withHeader) setHeader(header(V, { now: Date.now() }));
     main.innerHTML = renderMain(V, state);
     droot.innerHTML = renderDrawer(V, state);
     document.body.classList.toggle('has-drawer', !!droot.innerHTML);
@@ -581,9 +624,34 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     render(opening);
     if (!DRAWERS.some((k) => state[k]) && lastFocus && document.contains(lastFocus)) { lastFocus.focus(); lastFocus = null; }
   }
+  // Fetch mode: workspace.json (required) and refresh.json (optional: newer timestamps, last-good status).
+  async function load(quiet) {
+    try {
+      const r = await fetch(DATA_URL, { cache: 'no-store', credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`${DATA_URL} answered HTTP ${r.status}.`);
+      const text = await r.text();
+      let refresh = null;
+      try { const rr = await fetch(REFRESH_URL, { cache: 'no-store', credentials: 'same-origin' }); if (rr.ok) refresh = await rr.json(); } catch { /* optional */ }
+      const data = JSON.parse(text);
+      if (!data || !data.headline || !data.meta) throw new Error(`${DATA_URL} is not a workspace file.`);
+      if (quiet && text === dataText && V) { V.live = root.GtmView.buildView(data, refresh).live; setHeader(header(V, { now: Date.now() })); return; }
+      dataText = text;
+      V = root.GtmView.buildView(data, refresh);
+      index(V);
+      render(!quiet && !!location.hash, true);
+    } catch (e) {
+      if (quiet && V) return; // keep showing what we have; the header turns amber as it ages
+      V = null;
+      setHeader(loadingHeader('Not loaded'));
+      main.innerHTML = errorView(String((e && e.message) || e));
+      droot.innerHTML = '';
+    }
+  }
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-set],[data-toggle],[data-sort],[data-page],[data-dismiss],[data-jump]');
+    const t = e.target.closest('[data-set],[data-toggle],[data-sort],[data-page],[data-dismiss],[data-jump],[data-retry]');
     if (!t || e.target.closest('a')) return;
+    if (t.dataset.retry) { main.innerHTML = '<p class="loading">Loading the workspace…</p>'; load(false); return; }
+    if (!V) return;
     if (t.dataset.jump) { const el = document.getElementById(t.dataset.jump); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     if (t.dataset.dismiss) {
       const d = dismissed(); d.push(t.dataset.dismiss);
@@ -619,5 +687,13 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     e.target.closest('.list').querySelector('.list-body').innerHTML = listBody(id);
   });
   window.addEventListener('hashchange', () => { state = parseState(location.hash); render(true); });
-  if (location.hash) render(true); else hideDismissed();
+  const baked = document.getElementById('gtm-data');
+  if (baked) {
+    V = JSON.parse(baked.textContent);
+    index(V);
+    if (location.hash) render(true); else hideDismissed();
+  } else {
+    load(false);
+    setInterval(() => { if (!document.hidden) load(true); }, RECHECK_MS);
+  }
 })(typeof window !== 'undefined' ? window : this);

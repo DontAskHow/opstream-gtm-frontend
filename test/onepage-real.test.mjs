@@ -2,7 +2,7 @@
 // Strategy / Pipeline files, asserting the audited figures. Skipped when the files
 // are absent (CI, other machines). Output goes to a temp dir, never the repo.
 // Paths: BRAIN_DB, GTM_INSIGHTS_DIR, GTM_PRIOR_EXPORT, GTM_CURRENT_PAGE, GTM_REFRESH_JSON,
-// CALL_CLASSIFICATION, LEAD_SOURCE_REVIEW, PAID_EXPORT, GTM_LEMLIST_SNAPSHOT.
+// GTM_INPUTS_DIR (the sync job's inputs: lead-sources.json, records.jsonl, …, scrub-patterns.txt), GTM_LEMLIST_SNAPSHOT.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -10,21 +10,21 @@ import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { build } from '../onepage/build.mjs';
+import { build, scrubPatterns } from '../onepage/build.mjs';
+import { validateWorkspace, contentHash } from '../workspace/refresh/workspace-json.mjs';
+import { checkBuild } from '../onepage/deploy-check.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const env = (k, d) => process.env[k] || d;
 const DB = env('BRAIN_DB', '/workspace/numaudit/brain.db');
-const INS = env('GTM_INSIGHTS_DIR', '/workspace/gtm-insights');
+// The sync job's inputs directory (copied from s3://…/state/gtm-inputs/), incl. scrub-patterns.txt.
+const INPUTS = env('GTM_INPUTS_DIR', '/workspace/gtm-redesign/gtm-inputs');
 const PRIOR = env('GTM_PRIOR_EXPORT', '/workspace/gtm-data/live_deals.json');
 const PAGE = env('GTM_CURRENT_PAGE', '/workspace/numaudit/data.json');
 const REFRESH = env('GTM_REFRESH_JSON', '/workspace/numaudit/refresh.json');
-const CALLS = env('CALL_CLASSIFICATION', '/workspace/gtm-redesign/records.jsonl');
-const REVIEW = env('LEAD_SOURCE_REVIEW', join(INS, 'lead-source-review.csv'));
-const PAID = env('PAID_EXPORT', join(homedir(), 'opstream-employee/work/pipeline-recon-20261012/live_deals.json'));
 const LEMLIST_SNAPSHOT = env('GTM_LEMLIST_SNAPSHOT', '/workspace/gtm-data/marketing.json');
-const present = [DB, join(INS, 'lead-sources.json'), CALLS, REVIEW, PAID].every(existsSync);
-const SCOPE = JSON.parse(readFileSync(join(ROOT, 'shared', 'workspace-scope.json'), 'utf8'));
+const PATTERNS_FILE = env('WORKSPACE_SCRUB_PATTERNS_FILE', join(INPUTS, 'scrub-patterns.txt'));
+const present = [DB, join(INPUTS, 'lead-sources.json'), join(INPUTS, 'records.jsonl'), join(INPUTS, 'lead-source-review.csv'), join(INPUTS, 'paid-deals.json'), PATTERNS_FILE].every(existsSync);
 const RULES = JSON.parse(readFileSync(join(ROOT, 'config', 'lead-rules.json'), 'utf8'));
 
 // The audit's figures (Oct 13). The headline may move with HubSpot; it is asserted
@@ -43,12 +43,15 @@ test('real data: audited figures end to end', { skip: !present && `real inputs n
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const asOf = existsSync(REFRESH) ? JSON.parse(readFileSync(REFRESH, 'utf8')).refreshedAt : new Date().toISOString();
   const opt = (flag, p) => (existsSync(p) ? [flag, p] : []);
-  execFileSync('python3', [join(ROOT, 'scripts', 'workspace-data.py'), '--db', DB, '--lead-sources', join(INS, 'lead-sources.json'),
-    ...opt('--lost-reasons', join(INS, 'lost-reasons.json')), ...opt('--insights', join(INS, 'insights.json')),
-    ...opt('--lead-insights', join(INS, 'lead-insights.json')), ...opt('--prior', PRIOR), ...opt('--current-page', PAGE),
-    '--call-classification', CALLS, '--review-list', REVIEW, '--paid-export', PAID, '--as-of', asOf, '--out', join(dir, 'workspace.json'), '--quiet']);
+  process.env.WORKSPACE_SCRUB_PATTERNS_FILE = PATTERNS_FILE;
+  const pyEnv = { ...process.env, WORKSPACE_SCRUB_PATTERNS: '', CALL_CLASSIFICATION: '', LEAD_SOURCE_REVIEW: '', PAID_EXPORT: '' };
+  // As the sync job runs it, plus --as-of (the audit time) and the current page for the cross-check.
+  const dataStep = (out, extra = []) => execFileSync('python3', [join(ROOT, 'scripts', 'workspace-data.py'), '--db', DB, '--inputs-dir', INPUTS,
+    '--portal-id', '12345', ...opt('--prior', PRIOR), '--out', out, '--quiet', ...extra], { env: pyEnv });
+  dataStep(join(dir, 'workspace.json'), ['--as-of', asOf, ...opt('--current-page', PAGE)]);
   const { view, html } = build({ data: join(dir, 'workspace.json'), out: join(dir, 'out'), quiet: true });
-  const d = JSON.parse(readFileSync(join(dir, 'workspace.json'), 'utf8'));
+  const text = readFileSync(join(dir, 'workspace.json'), 'utf8');
+  const d = JSON.parse(text);
   const report = [];
   const check = (name, got, want) => {
     const ok = String(got) === String(want);
@@ -103,7 +106,23 @@ print(json.dumps({'open': [o[0], round(o[1]), round(o[2])], 'onHold': [h[0], rou
   check('OpenAI leads, Lead Tracker notes: named / at most', `${d.leads.openai.trackerNamed} / ${d.leads.openai.trackerAtMost}`, AUDIT.openaiTracker.join(' / '));
   console.log(`OpenAI leads with HubSpot evidence: ${d.leads.openai.confirmed} named, at most ${d.leads.openai.atMost}`);
   check('review list rows', d.reviewList.rows.length, AUDIT.reviewRows);
-  assert.ok(d.leads.items.filter((l) => l.review).length >= AUDIT.reviewRows, 'every review row is on a lead');
+  // Each review row follows its status: resolved -> the MQL-touch channel; undetermined -> HubSpot-primary; on_hold* -> unchanged.
+  const byRow = Object.fromEntries(d.leads.items.flatMap((l) => l.rows.map((r) => [String(r), l])));
+  const statuses = {};
+  for (const r of d.reviewList.rows) {
+    const l = byRow[r.row];
+    assert.ok(l, `review row ${r.row} is a lead`);
+    statuses[r.status] = (statuses[r.status] || 0) + 1;
+    if (r.status === 'resolved' && r.mql_channel && r.mql_channel !== 'undetermined') assert.equal(l.source, r.mql_channel, `row ${r.row}: MQL touch`);
+    else if (String(r.status).startsWith('on_hold')) assert.equal(l.source, l.sheetSource, `row ${r.row}: held`);
+    else assert.equal(l.source, r.hubspot_sources.split(/[|/,;]/)[0].trim(), `row ${r.row}: HubSpot-primary`);
+    if (r.different_first_touch) assert.equal(l.firstTouch, r.different_first_touch);
+  }
+  console.log(`review list statuses: ${JSON.stringify(statuses)}`);
+  // Pipeline's paid leads and deals: the predates-spend-window flag shows.
+  assert.ok(d.leads.items.some((l) => l.predatesSpendWindow && l.conversionDate), 'a paid lead before its spend window is flagged with its date');
+  assert.ok(d.paidDeals.sales.some((x) => x.predatesSpendWindow && x.conversionDate), 'a paid deal before its spend window is flagged');
+  check('Reddit: named leads / Lead Tracker notes after Pipeline checks', `${d.leads.platforms.find((p) => p.key === 'reddit').confirmed} / ${d.leads.platforms.find((p) => p.key === 'reddit').trackerNamed}`, '0 / 0');
   check('lead-insights contacts loaded', d.meta.leadInsights, AUDIT.leadInsights);
   check('paid deals (Pipeline export, all pipelines)', d.paidDeals.total, AUDIT.paidDeals);
   console.log(`paid deals in the Sales Pipeline: ${d.paidDeals.sales.length} ${JSON.stringify(d.paidDeals.byPlatform)}; ${d.paidDeals.branded} branded; ${d.paidDeals.companyLevel} company-level`);
@@ -131,8 +150,21 @@ print(json.dumps({'open': [o[0], round(o[1]), round(o[2])], 'onHold': [h[0], rou
   const flags = d.flags.map((f) => f.label).join(' | ');
   for (const re of [/Reddit Ads data ends Sep 28/, /Otterly down/, /Spend actuals missing Aug–Oct/, /GA4 channels: \d+% Unassigned/]) assert.match(flags, re);
   assert.match(html, /provisional \(awaiting \w+\)/);
-  const pat = SCOPE.hiddenOwner.pattern;
-  assert.ok(!html.toLowerCase().includes(pat) && !JSON.stringify(d).toLowerCase().includes(pat), 'hidden owner scrubbed');
+  for (const pat of scrubPatterns()) assert.ok(!html.toLowerCase().includes(pat) && !text.toLowerCase().includes(pat), 'scrubbed');
   assert.ok(!/HubSpot bridge|Sheet-active|recordsOpenCount|recordsDealCount|unmatchedRecordings|<h2[^>]*>This week/i.test(html), 'bridge, records counts and the This week section are dropped');
+  // The published file: the Lambda's checks, the size budget, the deployable page, a stable content hash.
+  const patterns = scrubPatterns();
+  const v = validateWorkspace(text, patterns);
+  assert.deepEqual(v.errors, [], 'the refresh Lambda accepts it');
+  check('workspace.json under the 3 MB budget', Buffer.byteLength(text) < 3 * 1048576, true);
+  console.log(`workspace.json: ${Math.round(Buffer.byteLength(text) / 1024)} KB`);
+  build({ app: true, out: join(dir, 'app'), quiet: true });
+  assert.equal(checkBuild(join(dir, 'app'), { app: true, patterns }).ok, true);
+  assert.equal(checkBuild(join(dir, 'out'), { patterns }).ok, true);
+  dataStep(join(dir, 'a.json'));
+  dataStep(join(dir, 'b.json'));
+  const [a, b] = ['a.json', 'b.json'].map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')));
+  assert.notEqual(a.meta.generatedAt, b.meta.generatedAt);
+  check('same data, new run: same content hash (no spurious publish)', contentHash(a) === contentHash(b), true);
   console.log(report.join('\n'));
 });

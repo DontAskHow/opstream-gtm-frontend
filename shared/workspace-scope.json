@@ -6,11 +6,16 @@
     "686100770": "Partnerships",
     "855205465": "Customer Success"
   },
-  "customerPipelines": ["686463412", "855205465"],
-  "csOwnerIds": ["76564046", "82316863"],
+  "customerPipelines": [
+    "686463412",
+    "855205465"
+  ],
+  "csOwnerIds": [
+    "76564046",
+    "82316863"
+  ],
   "hiddenOwner": {
-    "about": "Owners whose name or email contains this pattern render as 'Unassigned' everywhere, and the build fails if it appears in the output. Written escaped so the public repo text does not carry the name.",
-    "pattern": "zack",
+    "about": "People whose owner name or email matches a scrub pattern render as this label everywhere, and every build step fails if a pattern appears in its output. The patterns are never in the repo: WORKSPACE_SCRUB_PATTERNS (comma list) or WORKSPACE_SCRUB_PATTERNS_FILE, or scrub-patterns.txt in the data step's --inputs-dir.",
     "label": "Unassigned"
   },
   "eventListExclusions": {
@@ -29,8 +34,21 @@
     "rfp": "RFP",
     "outbound": "Outbound"
   },
-  "paidUtmValues": ["cpc", "paid", "ppc", "google", "linkedin", "reddit", "openai", "chatgpt"],
-  "paidAnalyticsSources": ["PAID_SEARCH", "PAID_SOCIAL"],
+  "paidUtmValues": [
+    "cpc",
+    "paid",
+    "ppc",
+    "google",
+    "linkedin",
+    "reddit",
+    "openai",
+    "chatgpt"
+  ],
+  "paidAnalyticsSources": [
+    "PAID_SEARCH",
+    "PAID_SOCIAL"
+  ],
   "meetingsWindowDays": 90,
-  "callsWindowDays": 90
+  "callsWindowDays": 90,
+  "workspaceSchemaVersion": 1
 }

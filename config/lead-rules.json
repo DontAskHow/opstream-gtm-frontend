@@ -4,13 +4,25 @@
   "source": {
     "primary": "hubspot",
     "about": "HubSpot evidence decides a lead's Source (its channel = where its conversion happened). The Lead Tracker Source is used only when HubSpot has no evidence, and is shown as evidence. A disagreement goes to the review list; neither side is overwritten, and nothing is written to the Sheet.",
-    "sheetLabel": "Lead Tracker (fallback: no HubSpot evidence)"
+    "sheetLabel": "Lead Tracker (fallback: no HubSpot evidence)",
+    "attribution": {
+      "about": "Review-list rows (lead-source-review.csv) carry a status. resolved: the lead is credited to mql_channel, the channel of the touch at its MQL booking (outbound-booked meetings stay Outbound); different_first_touch is shown when the first touch was another channel. undetermined: no MQL yet, the HubSpot-primary source is kept. on_hold*: neither side changes; the current source stays and the lead is flagged.",
+      "statusResolved": "resolved",
+      "statusUndetermined": "undetermined",
+      "statusHoldPrefix": "on_hold"
+    }
   },
   "forms": {
     "everyFillIsLead": true,
-    "notLeadBuckets": ["not_a_lead_source"],
+    "notLeadBuckets": [
+      "not_a_lead_source"
+    ],
     "about": "Every form fill is a lead except forms lead-sources.json marks as not a lead source (careers/job applications). The old 'uncertain' flag no longer gates anything.",
-    "mainForms": ["hero email", "contact", "pricing"]
+    "mainForms": [
+      "hero email",
+      "contact",
+      "pricing"
+    ]
   },
   "mql": {
     "metric": "lead_to_mql_rate",
@@ -19,9 +31,18 @@
     "windowDays": 90,
     "meetingSourceProperty": "hs_meeting_source",
     "meetingSourceValue": "MEETINGS_PUBLIC",
-    "bookingLinkProperties": ["hs_meeting_booking_link", "hs_booking_link", "hs_meeting_source_id", "hs_meeting_external_url", "hs_meeting_location"],
+    "bookingLinkProperties": [
+      "hs_meeting_booking_link",
+      "hs_booking_link",
+      "hs_meeting_source_id",
+      "hs_meeting_external_url",
+      "hs_meeting_location"
+    ],
     "bookingLinkPattern": "book-a-demo",
-    "formContactProperties": ["first_conversion_date", "num_conversion_events"],
+    "formContactProperties": [
+      "first_conversion_date",
+      "num_conversion_events"
+    ],
     "hideWhenUnavailable": true
   },
   "ads": {
@@ -29,9 +50,30 @@
     "brandedFlag": "branded term",
     "checksKeyPrefix": "checks_",
     "about": "Paid platform per deal comes from Pipeline's export (deals[].derived.paid_platform, paid_evidence, google_branded) when given; otherwise the same rules are applied to synced contact fields: a paid form (incl. LinkedIn Lead Gen forms), UTMs with a paid signal (cpc/paid/ppc medium, hsa_net or a click id), paid_touch_campaign, then original source; then the deal company's other contacts (level 'company').",
-    "paidForms": ["LinkedIn/Google Ads - Demo Requests", "ProcureCon Connect Ad", "LinkedIn Lead Generation"],
-    "paidMediums": ["cpc", "paid", "ppc", "paid_social", "paidsocial", "paid_search"],
-    "clickIdKeys": ["gclid", "hs_google_click_id", "li_fat_id", "msclkid", "hsa_net"]
+    "paidForms": [
+      "LinkedIn/Google Ads - Demo Requests",
+      "ProcureCon Connect Ad",
+      "LinkedIn Lead Generation"
+    ],
+    "paidMediums": [
+      "cpc",
+      "paid",
+      "ppc",
+      "paid_social",
+      "paidsocial",
+      "paid_search"
+    ],
+    "clickIdKeys": [
+      "gclid",
+      "hs_google_click_id",
+      "li_fat_id",
+      "msclkid",
+      "hsa_net"
+    ],
+    "spendWindowStart": {
+      "about": "A paid conversion before its platform's spend start is flagged \"predates spend window\" (it still counts). Pipeline's export sets the flag itself; this is used when deals are computed here.",
+      "LinkedIn Ads": "2026-09-01"
+    }
   },
   "lemlist": {
     "replyRate": {
@@ -40,15 +82,50 @@
       "about": "Total replies ÷ total sends over every Lemlist campaign in any status (job-changer, website-intent and Bad ICP included). Tags are filters, not exclusions."
     },
     "tags": [
-      { "tag": "job_changer", "bucketContains": "separate sub-source", "label": "Job changer" },
-      { "tag": "website_intent", "bucketContains": "intent-triggered", "label": "Website intent" },
-      { "tag": "event", "bucketContains": "event/webinar", "label": "Event outreach" },
-      { "tag": "nurture", "bucketContains": "nurture", "label": "Nurture" },
-      { "tag": "excluded", "bucketStartsWith": "exclude", "label": "Hiring / test" },
-      { "tag": "sales", "bucketStartsWith": "sales_outbound", "label": "Sales outbound" }
+      {
+        "tag": "job_changer",
+        "bucketContains": "separate sub-source",
+        "label": "Job changer"
+      },
+      {
+        "tag": "website_intent",
+        "bucketContains": "intent-triggered",
+        "label": "Website intent"
+      },
+      {
+        "tag": "event",
+        "bucketContains": "event/webinar",
+        "label": "Event outreach"
+      },
+      {
+        "tag": "nurture",
+        "bucketContains": "nurture",
+        "label": "Nurture"
+      },
+      {
+        "tag": "excluded",
+        "bucketStartsWith": "exclude",
+        "label": "Hiring / test"
+      },
+      {
+        "tag": "sales",
+        "bucketStartsWith": "sales_outbound",
+        "label": "Sales outbound"
+      }
     ],
-    "flags": [{ "nameContains": "Bad ICP", "flag": "Bad ICP", "note": "counted in totals per the r12 definition; flagged for review" }],
-    "outboundTags": ["sales", "job_changer", "website_intent", "event"]
+    "flags": [
+      {
+        "nameContains": "Bad ICP",
+        "flag": "Bad ICP",
+        "note": "counted in totals per the r12 definition; flagged for review"
+      }
+    ],
+    "outboundTags": [
+      "sales",
+      "job_changer",
+      "website_intent",
+      "event"
+    ]
   },
   "reviewList": {
     "about": "The page shows the review list file (lead-source-review.csv, data-side) as is. Columns used: row, company, sheet_source, hubspot_sources, evidence, action."

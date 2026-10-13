@@ -10,7 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location('workspace_data', os.path.join(HERE, '..', 'workspace-data.py'))
 wd = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wd)
-PAT = wd.SCOPE['hiddenOwner']['pattern']
+PAT = 'quill'  # synthetic; real scrub patterns never enter the repo
 
 
 def company(**kw):
@@ -43,7 +43,7 @@ class CallRule(unittest.TestCase):
 class Scrub(unittest.TestCase):
     def setUp(self):
         name = PAT.capitalize() + ' Kay'
-        self.s = wd.Scrubber(PAT, [name, PAT + '@example.com'])
+        self.s = wd.Scrubber([PAT, 'ozzy'], [name, PAT + '@example.com'])
         self.name = name
 
     def test_text_and_person(self):
@@ -52,6 +52,22 @@ class Scrub(unittest.TestCase):
         self.assertEqual(self.s.person(PAT.upper()), 'Unassigned')
         self.assertEqual(self.s.person('not assigned'), 'Unassigned')
         self.assertEqual(self.s.person('Alex'), 'Alex')
+
+    def test_several_patterns(self):
+        self.assertEqual(self.s.text('ozzy and alex'), 'Unassigned and alex')
+        self.assertEqual(self.s.person('Ozzy Q'), 'Unassigned')
+
+    def test_patterns_from_env_or_file(self):
+        import tempfile
+        self.assertEqual(wd.load_scrub_patterns(env={'WORKSPACE_SCRUB_PATTERNS': ' Quill, ozzy ,'}), ['ozzy', 'quill'])
+        with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as f:
+            f.write('# comment\nquill\nOzzy,extra\n')
+        try:
+            self.assertEqual(wd.load_scrub_patterns(env={'WORKSPACE_SCRUB_PATTERNS_FILE': f.name}), ['extra', 'ozzy', 'quill'])
+            self.assertEqual(wd.load_scrub_patterns(path=f.name, env={}), ['extra', 'ozzy', 'quill'])
+        finally:
+            os.unlink(f.name)
+        self.assertEqual(wd.load_scrub_patterns(env={}), [])
 
     def test_deep(self):
         out = self.s.deep({'a': [self.name, {'k': PAT + 'ary'}], PAT: 1})
@@ -108,6 +124,16 @@ class LeadRules(unittest.TestCase):
         self.assertEqual(wd.contact_paid(c(hs_google_click_id='x'), self.platforms)['platform'], 'Google Ads')
         self.assertTrue(wd.contact_paid(c(utm_source='google', utm_medium='cpc', utm_term='brand term'), self.platforms)['branded'])
         self.assertEqual(wd.contact_paid(c(hs_analytics_source='PAID_SOCIAL'), self.platforms)['rule'], 'HubSpot original source')
+
+    def test_review_status_labels(self):
+        self.assertEqual(wd.hold_label({'status': 'on_hold_pending_some_one'}), 'On hold, pending Some One')
+        self.assertEqual(wd.hold_label({'status': 'on_hold'}), 'On hold')
+
+    def test_check_verdict(self):
+        ls = wd.LeadSources({'ads': {'platforms': ['Google Ads', 'Reddit Ads'],
+                                     'checks_x': {'acme': 'Not Reddit. Verdict: paid Google branded search.'}}})
+        c = ls.check_for('Acme')
+        self.assertEqual((c['platform'], c['branded']), ('Google Ads', True))
 
     def test_call_classification_missing_falls_back(self):
         out, why = wd.load_call_classification('/nonexistent/records.jsonl', lambda *a: None)

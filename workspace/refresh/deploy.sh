@@ -8,11 +8,19 @@
 #   workspace/refresh/deploy.sh --enable   # also (re)enable the schedule
 #   workspace/refresh/deploy.sh --disabled # create or leave the schedule DISABLED
 #   workspace/refresh/deploy.sh --no-app   # skip uploading index.html/app.js/styles.css/vendor
+#   workspace/refresh/deploy.sh --onepage-app
+#                                          # serve the one-page workspace with live data: build the data-less
+#                                          # onepage index.html (it fetches /workspace.json), update the function
+#                                          # (it copies each snapshot's workspace.json to the preview bucket), run
+#                                          # it once, and upload index.html only once workspace.json is there.
 #   workspace/refresh/deploy.sh --onepage DIR
-#                                          # serve the one-page workspace: upload DIR/index.html (built by
-#                                          # scripts/workspace-data.py + onepage/build.mjs) as the preview's
-#                                          # index.html instead of the workspace app. Checked first with
-#                                          # onepage/deploy-check.mjs; its data is fixed at build time.
+#                                          # static fallback: upload DIR/index.html (a page built with its data
+#                                          # inside by onepage/build.mjs --data); its data is fixed at build time.
+#
+# Scrub patterns (people who must never appear) are never in the repo. Pass them as
+# WORKSPACE_SCRUB_PATTERNS (comma list) or WORKSPACE_SCRUB_PATTERNS_FILE; they go into the
+# function's environment. Without them the function keeps its current value; --onepage-app
+# requires them and refuses before any AWS call.
 #
 # Never uploads insights.json or lost-reasons.json: the Strategy seat publishes
 # those with refresh/publish-insights.mjs and refresh/publish-lost-reasons.mjs.
@@ -23,13 +31,14 @@ export AWS_PROFILE="${AWS_PROFILE:-opstream-deploy}"
 export AWS_REGION=us-east-2 AWS_DEFAULT_REGION=us-east-2
 export AWS_PAGER=""
 
-ENABLE=0; DISABLE=0; APP=1; ONEPAGE=""
+ENABLE=0; DISABLE=0; APP=1; ONEPAGE=""; ONEPAGE_APP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --enable) ENABLE=1 ;;
     --disabled) DISABLE=1 ;;
     --no-app) APP=0 ;;
     --onepage) ONEPAGE="${2:?--onepage needs a directory}"; shift ;;
+    --onepage-app) ONEPAGE_APP=1 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
   shift
@@ -38,6 +47,19 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The one-page build is checked before anything touches AWS.
 if [ -n "$ONEPAGE" ]; then ONEPAGE_FILE=$(node "$ROOT/onepage/deploy-check.mjs" "$ONEPAGE") || exit 1; APP=0; fi
+[ -n "$ONEPAGE" ] && [ "$ONEPAGE_APP" = 1 ] && { echo "--onepage and --onepage-app are exclusive" >&2; exit 2; }
+SCRUB="${WORKSPACE_SCRUB_PATTERNS:-}"
+if [ -z "$SCRUB" ] && [ -n "${WORKSPACE_SCRUB_PATTERNS_FILE:-}" ]; then
+  [ -r "$WORKSPACE_SCRUB_PATTERNS_FILE" ] || { echo "WORKSPACE_SCRUB_PATTERNS_FILE $WORKSPACE_SCRUB_PATTERNS_FILE is not readable" >&2; exit 1; }
+  SCRUB=$(grep -v '^[[:space:]]*#' "$WORKSPACE_SCRUB_PATTERNS_FILE" | tr '\n' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')
+fi
+if [ "$ONEPAGE_APP" = 1 ]; then
+  [ -n "$SCRUB" ] || { echo "--onepage-app needs scrub patterns: set WORKSPACE_SCRUB_PATTERNS or WORKSPACE_SCRUB_PATTERNS_FILE" >&2; exit 1; }
+  ONEPAGE_APP_DIR="$(mktemp -d)"
+  node "$ROOT/onepage/build.mjs" --app --out "$ONEPAGE_APP_DIR" --quiet || exit 1
+  ONEPAGE_FILE=$(node "$ROOT/onepage/deploy-check.mjs" --app "$ONEPAGE_APP_DIR") || exit 1
+  APP=0
+fi
 ACCOUNT=080403790510
 FN=gtm-preview-refresh
 ROLE=gtm-preview-refresh-role
@@ -74,8 +96,8 @@ cat > "$TMP/policy-lambda.json" <<EOF
  {"Sid":"SnapshotList","Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::$DATA_BUCKET",
   "Condition":{"StringLike":{"s3:prefix":["published/*"]}}},
  {"Sid":"SnapshotRead","Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::$DATA_BUCKET/published/*"},
- {"Sid":"PreviewDataJsAndRefreshJson","Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],
-  "Resource":["arn:aws:s3:::$PREVIEW_BUCKET/data.js","arn:aws:s3:::$PREVIEW_BUCKET/refresh.json","arn:aws:s3:::$PREVIEW_BUCKET/_state/hubspot-live.json"]},
+ {"Sid":"PreviewDataJsRefreshJsonWorkspaceJson","Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],
+  "Resource":["arn:aws:s3:::$PREVIEW_BUCKET/data.js","arn:aws:s3:::$PREVIEW_BUCKET/refresh.json","arn:aws:s3:::$PREVIEW_BUCKET/workspace.json","arn:aws:s3:::$PREVIEW_BUCKET/_state/hubspot-live.json"]},
  {"Sid":"PreviewListSoMissingIs404","Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::$PREVIEW_BUCKET"},
  {"Sid":"Alarm","Effect":"Allow","Action":"sns:Publish","Resource":"$TOPIC"}
 ]}
@@ -110,7 +132,7 @@ SCHED_ROLE_ARN=$(aws iam get-role --role-name "$SCHED_ROLE" --query Role.Arn --o
 ( cd "$ROOT" && python3 - "$TMP/fn.zip" <<'PY'
 import sys, zipfile
 # sources.mjs holds the LIVE_PULL code (and the Fathom matcher compose.mjs uses); it never runs with LIVE_PULL=0.
-files = ["workspace/refresh/handler.mjs", "workspace/refresh/compose.mjs", "workspace/refresh/sources.mjs",
+files = ["workspace/refresh/handler.mjs", "workspace/refresh/compose.mjs", "workspace/refresh/sources.mjs", "workspace/refresh/workspace-json.mjs",
          "workspace/build.mjs", "workspace/lib/project.mjs", "workspace-model.cjs", "shared/open-pipeline.json"]
 with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
     for f in files:
@@ -122,8 +144,18 @@ PY
 )
 
 # ---------- Lambda ----------
+# The function's environment: LIVE_PULL=0 and the scrub patterns (given now, else kept from the current function).
+if [ -z "$SCRUB" ]; then
+  SCRUB=$(aws lambda get-function-configuration --function-name "$FN" --query 'Environment.Variables.WORKSPACE_SCRUB_PATTERNS' --output text 2>/dev/null || true)
+  [ "$SCRUB" = "None" ] && SCRUB=""
+fi
+if [ -z "$SCRUB" ]; then
+  [ "$ONEPAGE_APP" = 1 ] && { echo "--onepage-app needs scrub patterns: set WORKSPACE_SCRUB_PATTERNS or WORKSPACE_SCRUB_PATTERNS_FILE" >&2; exit 1; }
+  echo "warning: no scrub patterns; the function will keep the last good workspace.json and alarm workspace-scrub-patterns-missing" >&2
+fi
+ENV_JSON=$(SCRUB="$SCRUB" python3 -c 'import json,os; v={"LIVE_PULL":"0"}; s=os.environ["SCRUB"]; v.update({"WORKSPACE_SCRUB_PATTERNS":s} if s else {}); print(json.dumps({"Variables":v}))')
 FN_CONFIG=(--runtime nodejs20.x --handler workspace/refresh/handler.handler --role "$ROLE_ARN"
-  --memory-size 512 --timeout 120 --environment "Variables={LIVE_PULL=0}"
+  --memory-size 512 --timeout 120 --environment "$ENV_JSON"
   --description "GTM preview refresh: published snapshot -> data.js when changed (no AI, no provider APIs)"
   --logging-config "LogFormat=Text,LogGroup=$LOG_GROUP")
 if aws lambda get-function --function-name "$FN" >/dev/null 2>&1; then
@@ -178,6 +210,20 @@ fi
 if [ -n "$ONEPAGE" ]; then
   aws s3 cp "$ONEPAGE_FILE" "s3://$PREVIEW_BUCKET/index.html" --content-type "text/html; charset=utf-8" --cache-control no-store --only-show-errors
   echo "page      s3://$PREVIEW_BUCKET/index.html (one-page workspace from $ONEPAGE)"
+fi
+# Live one-page workspace: run the updated function once so workspace.json is in place, then swap index.html.
+if [ "$ONEPAGE_APP" = 1 ]; then
+  for i in 1 2 3 4 5 6; do
+    aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out --payload '{}' "$TMP/invoke.json" >/dev/null 2>"$TMP/invoke.err" && break
+    grep -q "TooManyRequests" "$TMP/invoke.err" && [ "$i" -lt 6 ] && { sleep 20; continue; }
+    cat "$TMP/invoke.err" >&2; echo "the function did not run; index.html NOT uploaded (the live page is unchanged)" >&2; exit 1
+  done
+  if ! aws s3api head-object --bucket "$PREVIEW_BUCKET" --key workspace.json >/dev/null 2>&1; then
+    echo "workspace.json is not in s3://$PREVIEW_BUCKET yet (does the latest snapshot run have one? see refresh.json .workspace);" >&2
+    echo "index.html NOT uploaded: the live page is unchanged" >&2; exit 1
+  fi
+  aws s3 cp "$ONEPAGE_FILE" "s3://$PREVIEW_BUCKET/index.html" --content-type "text/html; charset=utf-8" --cache-control no-store --only-show-errors
+  echo "page      s3://$PREVIEW_BUCKET/index.html (one-page workspace, live: fetches workspace.json)"
 fi
 
 echo "function  $FN_ARN"

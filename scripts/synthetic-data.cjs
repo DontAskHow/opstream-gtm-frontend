@@ -28,10 +28,12 @@ for(const [name,value]of Object.entries({verified,records,evidence,'draft-seeds'
 // (lead-sources.json, lost-reasons.json, insights.json, lead-insights.json, a prior
 // HubSpot export, a current-page data.json) and the figures the tests expect.
 // synced: true adds the tables and contact fields the parallel sync change adds.
-function brainFixture({ synced = false } = {}) {
+// The scrub pattern the synthetic data plants (tests pass it as WORKSPACE_SCRUB_PATTERNS).
+const SYNTHETIC_SCRUB = 'quill';
+function brainFixture({ synced = false, scrub = SYNTHETIC_SCRUB } = {}) {
   const path = require('node:path');
   const scope = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'shared', 'workspace-scope.json'), 'utf8'));
-  const pat = scope.hiddenOwner.pattern;
+  const pat = scrub;
   const hiddenFirst = pat[0].toUpperCase() + pat.slice(1);
   const AS_OF = '2026-10-13T16:00:00Z';
   const DOM = 'opstream.example';
@@ -161,6 +163,7 @@ function brainFixture({ synced = false } = {}) {
     lt('Pine Robotics', 'Paid', 'Sam', '08/04/2026', '08/10/2026', '08/20/2026', 'ChatGPT ad lead', ''),
     lt('Orchid Retail', 'Inbound', 'Sam', '09/01/2026', '', '', 'OpenAI ads lead', ''),
     lt('Quartz Media', 'Paid', 'Alex', '09/20/2026', '', '', `Google paid ad lead. Booked by ${hiddenFirst}.`, ''),
+    lt('Spruce Labs', 'Inbound', 'Sam', '07/01/2026', '07/01/2026', '', 'Reddit ad lead', ''),
     lt('Willow Health', 'Outbound', 'Alex', '', '', '', '', '10/2/2026'),
     lt('Birch Co', 'Webinar', 'Sam', '06/01/2026', '06/05/2026', '', '', ''),
     lt('Birch Co', 'Events', 'Sam', '06/03/2026', '', '', '', ''),
@@ -243,7 +246,9 @@ function brainFixture({ synced = false } = {}) {
   const leadSources = {
     generated_at: '2026-10-13T09:00:00-07:00', owner: 'synthetic', needs_reviewer: ['1. Which forms count?'],
     ads: { platforms: ['Google Ads', 'LinkedIn Ads', 'Reddit Ads', 'OpenAI (ChatGPT) Ads'],
-      checks_2026_10_13: { quartz: 'Paid Google, confirmed: synthetic contact with gclid and utm_medium=cpc.', reddit: '0 traceable HubSpot leads, confirmed (synthetic).' } },
+      checks_2026_10_13: { quartz: 'Paid Google, confirmed: synthetic contact with gclid and utm_medium=cpc.', reddit: '0 traceable HubSpot leads, confirmed (synthetic).',
+        spruce: 'Not Reddit. Synthetic contact arrived from branded search with a click id. Verdict: paid Google branded search; Sheet note left as entered.' },
+      paid_leads: [{ company: 'Elm Partners', platform: 'LinkedIn', conversion_date: '2026-01-17', predates_spend_window: true, counts_in_roi: true, note: 'Synthetic: counts in ROI; predates the spend window.' }] },
     forms: [{ id: 'f-demo', name: 'Demo Request', bucket: 'demo_request', detail: 'demo', counts_as_lead_source: true, uncertain: false },
       { id: 'f-pricing', name: 'Pricing form', bucket: 'contact', detail: 'pricing', counts_as_lead_source: true, uncertain: true },
       { id: 'f-jobs', name: 'Job application', bucket: 'not_a_lead_source', detail: 'jobs', counts_as_lead_source: false, uncertain: false }],
@@ -288,12 +293,13 @@ function brainFixture({ synced = false } = {}) {
       objections: [{ category: 'price_budget', quote: 'Synthetic budget worry.' }], competitors: { Zip: 2 }, next_steps: ['Send the pilot plan.'] }),
     crec(1002, 'customer'), crec(1003, 'customer'), crec(1004, 'prospect', { deal: null }), crec(1005, 'customer'), crec(1006, 'internal'),
     crec(1007, 'prospect', { deal: null }), crec(1008, 'partner_other')].map((r) => JSON.stringify(r)).join('\n') + '\n';
-  const reviewList = 'row,company,sheet_source,hubspot_sources,evidence,sheet_note,action\n' +
-    '9,Orchid Retail,Inbound,Paid,gus@orchid.example: OpenAI via utm,OpenAI ads lead,review (HubSpot is primary; Sheet unchanged)\n' +
-    '5,Cedar Harbor,Events,Outbound,ben@cedar.example: Lemlist reply,Met at the booth,review (HubSpot is primary; Sheet unchanged)\n';
+  const reviewList = 'row,company,sheet_source,hubspot_sources,evidence,sheet_note,action,status,mql_channel,different_first_touch,attribution_evidence\n' +
+    '9,Orchid Retail,Inbound,Paid,gus@orchid.example: OpenAI via utm,OpenAI ads lead,Analysis only,undetermined,undetermined,,no MQL booking yet\n' +
+    '5,Cedar Harbor,Events,Outbound,ben@cedar.example: Lemlist reply,Met at the booth,Analysis only,resolved,Outbound,Events (Synthetic show),meeting booked after a Lemlist reply\n' +
+    '13,Birch Co,Webinar,Events,synthetic contact: Event Attendee,,Held for review,on_hold_pending_reviewer,,,\n';
   const paidExport = { generated_at: '2026-10-13T16:30:00+00:00', stages: {}, deals: [
-    { id: '7002', properties: { dealname: 'Cedar expansion', pipeline: 'default' }, derived: { pipelineId: 'default', stageLabel: 'Demo meeting', paid_platform: 'Google', paid_evidence: { via: 'utm', level: 'deal' }, google_branded: true } },
-    { id: '7011', properties: { dealname: 'Northstar enterprise', pipeline: 'default' }, derived: { pipelineId: 'default', stageLabel: 'Legal & Compliance', paid_platform: 'LinkedIn', paid_evidence: { via: 'form (company contact)', level: 'company' }, google_branded: false } },
+    { id: '7002', properties: { dealname: 'Cedar expansion', pipeline: 'default' }, derived: { pipelineId: 'default', stageLabel: 'Demo meeting', paid_platform: 'Google', paid_evidence: { via: 'utm', level: 'deal' }, google_branded: true, conversion_date: '2026-08-18', predates_spend_window: false } },
+    { id: '7011', properties: { dealname: 'Northstar enterprise', pipeline: 'default' }, derived: { pipelineId: 'default', stageLabel: 'Legal & Compliance', paid_platform: 'LinkedIn', paid_evidence: { via: 'form (company contact)', level: 'company' }, google_branded: false, conversion_date: '2026-02-20', predates_spend_window: true } },
     { id: '7101', properties: { dealname: 'Bluebird renewal', pipeline: '686463412' }, derived: { pipelineId: '686463412', paid_platform: 'Google', paid_evidence: { via: 'utm', level: 'deal' }, google_branded: false } },
     { id: '7001', properties: { dealname: 'Northstar pilot', pipeline: 'default' }, derived: { pipelineId: 'default', paid_platform: null } }] };
 
@@ -302,7 +308,7 @@ function brainFixture({ synced = false } = {}) {
     headline: { count: 4, amount: 750000, weighted: 340000, onHoldCount: 2, onHoldAmount: 80000 },
     change: { fromCount: 3, fromAmount: 600000, toCount: 4, toAmount: 750000, newIds: ['7003'], stageIds: ['7002'] },
     closed: { lost: 3, lostAmount: 65000, dq: 1, dqAmount: 10000, won: 2, reasons: 3, postWin: ['7012'] },
-    leads: { total: 9, mql: 4, sql: 2, openaiConfirmed: 2, openaiAtMost: 3 },
+    leads: { total: 10, mql: 5, sql: 2, openaiConfirmed: 2, openaiAtMost: 3 },
     meetings: { thisMonth: { matched: 4, unmatched: 1, noContact: 1 }, upcoming: { matched: 3, unmatched: 0, noContact: 0 },
       scope: { total: 16, cs: 1, customer: 6, internal: 1, inScope: 8 } },
     callsFallback: { total: 8, internal: 1, cs: 1, customer: 2, prospect: 4, listed: 3 },
@@ -314,7 +320,7 @@ function brainFixture({ synced = false } = {}) {
   return { tables: T, inputs: { leadSources, lostReasons, insights, leadInsights, prior, currentPage, paidExport }, text: { 'records.jsonl': callClassification, 'review.csv': reviewList }, expect };
 }
 
-module.exports = { writeDemo, brainFixture };
+module.exports = { writeDemo, brainFixture, SYNTHETIC_SCRUB };
 if (require.main === module) {
   const i = process.argv.indexOf('--brain');
   if (i === -1) writeDemo();

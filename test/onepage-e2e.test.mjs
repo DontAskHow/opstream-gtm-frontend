@@ -7,7 +7,7 @@
 //         fallbacks: built-in call rule, paid rules on contact fields).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,26 +17,40 @@ import { build, buildView, assertScrubbed } from '../onepage/build.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const { brainFixture } = require('../scripts/synthetic-data.cjs');
+const { brainFixture, SYNTHETIC_SCRUB } = require('../scripts/synthetic-data.cjs');
 const page = require('../onepage/page.cjs');
-const SCOPE = JSON.parse(readFileSync(join(ROOT, 'shared', 'workspace-scope.json'), 'utf8'));
 const RULES = JSON.parse(readFileSync(join(ROOT, 'config', 'lead-rules.json'), 'utf8'));
+// The synthetic person the fixture plants; the real patterns never enter the repo.
+process.env.WORKSPACE_SCRUB_PATTERNS = SYNTHETIC_SCRUB;
+delete process.env.WORKSPACE_SCRUB_PATTERNS_FILE;
 
-function run({ synced = false, inputs = true, files = true, env = {} } = {}) {
+// Runs the data step the way the sync job does: --inputs-dir with the files named as in S3
+// (state/gtm-inputs/<name>), then builds the page with the data inside.
+function run({ synced = false, inputs = true, files = true, env = {}, patternsFile = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'onepage-e2e-'));
   const fx = brainFixture({ synced });
   writeFileSync(join(dir, 'fixture.json'), JSON.stringify(fx));
   for (const [k, v] of Object.entries(fx.inputs)) writeFileSync(join(dir, k + '.json'), JSON.stringify(v));
-  for (const [k, v] of Object.entries(fx.text)) writeFileSync(join(dir, k), v);
   execFileSync('python3', [join(ROOT, 'scripts', 'fixture-db.py'), join(dir, 'fixture.json'), join(dir, 'brain.db')]);
-  const args = [join(ROOT, 'scripts', 'workspace-data.py'), '--db', join(dir, 'brain.db'), '--lead-sources', join(dir, 'leadSources.json'),
-    '--as-of', fx.expect.asOf, '--out', join(dir, 'workspace.json'), '--quiet'];
+  const ind = join(dir, 'inputs');
+  mkdirSync(ind);
+  const put = (name, text) => writeFileSync(join(ind, name), text);
+  put('lead-sources.json', JSON.stringify(fx.inputs.leadSources));
   if (inputs) {
-    args.push('--lost-reasons', join(dir, 'lostReasons.json'), '--insights', join(dir, 'insights.json'), '--lead-insights', join(dir, 'leadInsights.json'),
-      '--prior', join(dir, 'prior.json'), '--current-page', join(dir, 'currentPage.json'), '--portal-id', '12345');
+    put('lost-reasons.json', JSON.stringify(fx.inputs.lostReasons));
+    put('insights.json', JSON.stringify(fx.inputs.insights));
+    put('lead-insights.json', JSON.stringify(fx.inputs.leadInsights));
   }
+  if (files) {
+    put('records.jsonl', fx.text['records.jsonl']);
+    put('lead-source-review.csv', fx.text['review.csv']);
+    put('paid-deals.json', JSON.stringify(fx.inputs.paidExport));
+  }
+  if (patternsFile) put('scrub-patterns.txt', '# synthetic\n' + SYNTHETIC_SCRUB + '\n');
+  const args = [join(ROOT, 'scripts', 'workspace-data.py'), '--db', join(dir, 'brain.db'), '--inputs-dir', ind,
+    '--as-of', fx.expect.asOf, '--out', join(dir, 'workspace.json'), '--quiet'];
+  if (inputs) args.push('--prior', join(dir, 'prior.json'), '--current-page', join(dir, 'currentPage.json'), '--portal-id', '12345');
   const e = { ...process.env, CALL_CLASSIFICATION: '', LEAD_SOURCE_REVIEW: '', PAID_EXPORT: '', ...env };
-  if (files) Object.assign(e, { CALL_CLASSIFICATION: join(dir, 'records.jsonl'), LEAD_SOURCE_REVIEW: join(dir, 'review.csv'), PAID_EXPORT: join(dir, 'paidExport.json') });
   execFileSync('python3', args, { env: e, stdio: ['ignore', 'pipe', 'pipe'] });
   const { view, html } = build({ data: join(dir, 'workspace.json'), out: join(dir, 'out'), quiet: true });
   const json = readFileSync(join(dir, 'workspace.json'), 'utf8');
@@ -117,7 +131,7 @@ test('leads: Lead Tracker companies with their first lead date', () => {
   assert.equal(L.total, ex.leads.total);
   assert.equal(L.mql, ex.leads.mql);
   assert.equal(L.sql, ex.leads.sql);
-  assert.equal(fig(html, 'leads'), '9');
+  assert.equal(fig(html, 'leads'), '10');
   const north = lead(base, 'Northstar Labs');
   assert.equal(north.leadDate, '2026-08-01', 'earliest of the duplicate rows');
   assert.deepEqual(north.rows, [4, 6]);
@@ -126,29 +140,55 @@ test('leads: Lead Tracker companies with their first lead date', () => {
   assert.ok(lead(base, 'Birch Co').flags.some((f) => f.kind === 'sheet'));
 });
 
-test('HubSpot is primary for source; the Sheet is the fallback; disagreements go to the review list', () => {
+test('HubSpot is primary for source; the Sheet is the fallback; review-list statuses decide', () => {
+  // undetermined (no MQL yet): the HubSpot-primary source is kept.
   const orchid = lead(base, 'Orchid Retail');
   assert.deepEqual([orchid.sheetSource, orchid.source, orchid.sourceBasis, orchid.rule], ['Inbound', 'Paid', 'hubspot', 'HubSpot source (review list)']);
   assert.equal(orchid.platform, 'OpenAI (ChatGPT) Ads');
+  assert.equal(orchid.mqlChannel, 'undetermined');
   assert.ok(orchid.review && orchid.flags.some((f) => f.kind === 'review'));
+  // resolved: credited to the channel of the touch at the MQL; a different first touch is shown.
   const cedar = lead(base, 'Cedar Harbor');
-  assert.deepEqual([cedar.sheetSource, cedar.source], ['Events', 'Outbound']);
+  assert.deepEqual([cedar.sheetSource, cedar.source, cedar.rule, cedar.firstTouch], ['Events', 'Outbound', 'MQL touch (review list)', 'Events (Synthetic show)']);
+  // on_hold*: neither side changes; the current source stays, flagged.
+  const birch = lead(base, 'Birch Co');
+  assert.deepEqual([birch.source, birch.sourceBasis, birch.hold], ['Webinar', 'sheet', 'On hold, pending Reviewer']);
+  assert.ok(birch.evidence.every((e) => !e.decides));
+  assert.ok(birch.flags.some((f) => f.kind === 'hold'));
   const quartz = lead(base, 'Quartz Media');
   assert.deepEqual([quartz.source, quartz.sourceBasis, quartz.rule, quartz.review], ['Paid', 'hubspot', 'HubSpot check (Pipeline)', false]);
-  const elm = lead(base, 'Elm Partners');
-  assert.deepEqual([elm.source, elm.sourceBasis], ['RFP', 'sheet']);
-  assert.equal(base.data.leads.hubspotSourced, 3);
-  assert.equal(base.data.leads.reviewLeads, 2);
+  assert.equal(base.data.leads.hubspotSourced, 5);
+  assert.equal(base.data.leads.reviewLeads, 5);
   // The review list file is shown as is, linked to the leads.
-  assert.equal(base.data.reviewList.rows.length, 2);
+  assert.equal(base.data.reviewList.rows.length, 3);
   assert.equal(base.data.reviewList.leadIds['9'], orchid.id);
   const rv = page.renderPage(base.view, { rv: '1' }).main;
   assert.match(rv, /Source disagreements to review/);
   assert.match(rv, /gus@orchid\.example: OpenAI via utm/);
+  assert.match(rv, /On hold, pending Reviewer/);
   // The Pipeline export names platforms but never moves a source.
   const north = lead(base, 'Northstar Labs');
   assert.equal(north.source, 'Inbound');
   assert.ok(north.evidence.some((e) => e.rule === 'Paid deal (Pipeline export)' && !e.decides));
+});
+
+test("Pipeline's paid leads and deals: conversion date and the predates-spend-window flag; a check supersedes a Sheet note", () => {
+  const elm = lead(base, 'Elm Partners');
+  assert.deepEqual([elm.sheetSource, elm.source, elm.platform, elm.conversionDate, elm.predatesSpendWindow], ['RFP', 'Paid', 'LinkedIn Ads', '2026-01-17', true]);
+  const d = page.renderPage(base.view, { lead: elm.id }).drawer;
+  assert.match(d, /predates spend window/);
+  assert.match(d, /Jan 17, 2026/);
+  const li = base.data.paidDeals.sales.find((x) => x.id === '7011');
+  assert.deepEqual([li.conversionDate, li.predatesSpendWindow], ['2026-02-20', true]);
+  assert.equal(base.data.paidDeals.predates, 1);
+  assert.match(page.renderPage(base.view, { pd: 'LinkedIn Ads' }).main, /predates spend window/);
+  assert.match(page.renderPage(base.view, { deal: '7011' }).drawer, /predates spend window/);
+  // The Sheet note says Reddit; Pipeline's check says branded Google: Google it is, and Reddit has none.
+  const spruce = lead(base, 'Spruce Labs');
+  assert.deepEqual([spruce.source, spruce.platform, spruce.tag], ['Paid', 'Google Ads', RULES.ads.brandedFlag]);
+  assert.ok(spruce.evidence.find((e) => e.rule === 'Lead Tracker note').superseded);
+  const reddit = base.data.leads.platforms.find((p) => p.key === 'reddit');
+  assert.deepEqual([reddit.confirmed, reddit.trackerNamed], [0, 0]);
 });
 
 test('paid platforms: named vs at most, Lead Tracker notes alone vs with HubSpot evidence', () => {
@@ -298,7 +338,7 @@ test('calls without the classification file: the built-in rule, labelled "call c
 });
 
 test('hidden owner: "Unassigned" everywhere, and nowhere in the HTML or JSON', () => {
-  const pat = SCOPE.hiddenOwner.pattern;
+  const pat = SYNTHETIC_SCRUB;
   for (const r of [base, synced]) {
     assert.ok(!r.json.toLowerCase().includes(pat), 'workspace.json');
     assert.ok(!r.html.toLowerCase().includes(pat), 'index.html');
@@ -317,7 +357,7 @@ test('the build refuses data that still carries the hidden owner', () => {
   const dir = mkdtempSync(join(tmpdir(), 'onepage-scrub-'));
   try {
     const d = structuredClone(base.data);
-    d.deals[0].owner = SCOPE.hiddenOwner.pattern + ' K';
+    d.deals[0].owner = SYNTHETIC_SCRUB + ' K';
     writeFileSync(join(dir, 'w.json'), JSON.stringify(d));
     assert.throws(() => build({ data: join(dir, 'w.json'), out: join(dir, 'out'), quiet: true }), /scrub check failed/);
     assert.ok(!existsSync(join(dir, 'out', 'index.html')));
@@ -379,7 +419,8 @@ test('the page is self-contained, labels times PT and works on mobile', () => {
   const { html } = base;
   assert.match(html, /Content-Security-Policy" content="default-src 'none'/);
   assert.ok(!/<script src=|<link [^>]*href=/.test(html), 'no external scripts or styles');
-  assert.match(html, /data as of Oct 13, 9:00 AM PT/);
+  assert.match(html, /Updated [A-Z][a-z]{2} \d+, \d+:\d\d [AP]M PT/);
+  assert.equal(base.data.meta.asOf, '2026-10-13T16:00:00Z');
   assert.match(html, /@media \(max-width: 640px\)/);
   assert.match(html, /\.drawer \{ width: 100%/);
   assert.match(html, /provisional \(awaiting Reviewer\)/, 'who from needs_<who> in lead-sources.json');
@@ -391,4 +432,29 @@ test('buildView: an invalid lost-reasons file is ignored and every deal auto-map
   const v = buildView(d);
   assert.match(v.closed.reasons.basis, /did not pass validation/);
   assert.equal(v.closed.reasons.fromFile, 0);
+});
+
+test('scrub patterns: from the env or --inputs-dir/scrub-patterns.txt; without any the data step refuses', () => {
+  const r = run({ env: { WORKSPACE_SCRUB_PATTERNS: '' }, patternsFile: true });
+  try {
+    assert.ok(!r.json.toLowerCase().includes(SYNTHETIC_SCRUB));
+    assert.equal(r.data.deals.find((d) => d.id === '7011').owner, 'Unassigned');
+  } finally { r.cleanup(); }
+  assert.throws(() => run({ env: { WORKSPACE_SCRUB_PATTERNS: '' } }), (e) => /no scrub patterns/.test(String(e.stderr)));
+  // The build refuses too, without patterns.
+  const saved = process.env.WORKSPACE_SCRUB_PATTERNS;
+  process.env.WORKSPACE_SCRUB_PATTERNS = '';
+  try {
+    assert.throws(() => build({ data: join(base.dir, 'workspace.json'), out: join(base.dir, 'out2'), quiet: true }), /no scrub patterns/);
+  } finally { process.env.WORKSPACE_SCRUB_PATTERNS = saved; }
+});
+
+test('inputs degrade one by one and are listed in meta.inputs', () => {
+  assert.deepEqual(base.data.meta.inputs, { 'lead-sources.json': true, 'lost-reasons.json': true, 'insights.json': true, 'lead-insights.json': true,
+    'records.jsonl': true, 'lead-source-review.csv': true, 'paid-deals.json': true });
+  const s = synced.data.meta.inputs;
+  assert.deepEqual([s['records.jsonl'], s['lead-source-review.csv'], s['paid-deals.json']], [false, false, false]);
+  assert.equal(synced.data.calls.classification, 'fallback');
+  assert.equal(synced.data.reviewList, null);
+  assert.match(synced.data.paidDeals.basis, /computed/);
 });

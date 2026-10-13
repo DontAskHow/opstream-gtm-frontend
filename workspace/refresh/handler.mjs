@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync
 import { join } from 'node:path';
 import { readInputs } from '../build.mjs';
 import { compose, stamp, sha256, refreshDoc, alarmDecision, problems, isHubspotExport, hubspotLive } from './compose.mjs';
+import { publishWorkspace, scrubPatterns, WORKSPACE_FILE, PROBLEMS as WORKSPACE_PROBLEMS } from './workspace-json.mjs';
 
 export const CONFIG = {
   region: process.env.AWS_REGION || 'us-east-2',
@@ -15,6 +16,9 @@ export const CONFIG = {
   previewBucket: process.env.PREVIEW_BUCKET || 'opstream-gtm-preview-db5553a4',
   dataKey: 'data.js',
   refreshKey: 'refresh.json',
+  // The one-page workspace's data (onepage/), copied from the snapshot run when its content changes.
+  workspaceKey: WORKSPACE_FILE,
+  scrubPatterns: scrubPatterns(),
   topicArn: process.env.TOPIC_ARN || 'arn:aws:sns:us-east-2:080403790510:opstream-gtm-refresh-failures',
   // The sync job publishes every 15 minutes; an older pointer than this alarms.
   staleMinutes: Number(process.env.SNAPSHOT_STALE_MINUTES || 60),
@@ -83,7 +87,13 @@ export async function loadSnapshot(deps, cfg = CONFIG) {
   // shape), skipping the multi-MB evidence files build.mjs would skip anyway.
   const files = objects.filter((o) => /^[^/]+\.json$/.test(o.key.slice(prefix.length)) && o.size <= cfg.maxSnapshotFileBytes);
   if (!files.some((o) => o.key === prefix + 'records.json')) throw new Error(`snapshot ${meta.runId} has no records.json`);
-  for (const o of files) writeFileSync(join(dir, o.key.slice(prefix.length)), await deps.getText(cfg.dataBucket, o.key));
+  let workspaceText = null;
+  for (const o of files) {
+    const text = await deps.getText(cfg.dataBucket, o.key);
+    if (o.key === prefix + WORKSPACE_FILE) { workspaceText = text; continue; }
+    writeFileSync(join(dir, o.key.slice(prefix.length)), text);
+  }
+  const workspaceTooLarge = objects.some((o) => o.key === prefix + WORKSPACE_FILE && o.size > cfg.maxSnapshotFileBytes);
   const snapshot = readInputs(dir);
   for (const f of readdirSync(dir).sort()) {
     if (f === 'records.json') continue;
@@ -98,7 +108,7 @@ export async function loadSnapshot(deps, cfg = CONFIG) {
   // build.mjs only lists transcripts that records.json links to; same here.
   const ids = objects.map((o) => /^transcripts\/([A-Za-z0-9_-]+)\.json$/.exec(o.key.slice(prefix.length))?.[1]).filter(Boolean).sort();
   const wanted = new Set((snapshot.records?.companies || []).flatMap((c) => (c.recordings || []).filter((r) => r.hasTranscript).map((r) => r.id)));
-  cache = { runId: meta.runId, tmp: cfg.tmp, meta, snapshot, transcripts: ids.filter((t) => wanted.has(t)) };
+  cache = { runId: meta.runId, tmp: cfg.tmp, meta, snapshot, transcripts: ids.filter((t) => wanted.has(t)), workspaceText, workspaceTooLarge };
   return cache;
 }
 
@@ -134,6 +144,13 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
   try { prev = prevText ? JSON.parse(prevText) : {}; } catch { prev = {}; }
 
   const snap = await loadSnapshot(deps, cfg);
+  // The one-page workspace first, so a problem in the older data.js build never holds it back.
+  const ws = cfg.workspaceKey
+    ? await publishWorkspace({
+      deps, previewBucket: cfg.previewBucket, key: cfg.workspaceKey, runId: snap.runId, prev: prev.workspace || {},
+      text: snap.workspaceText, tooLarge: snap.workspaceTooLarge, patterns: cfg.scrubPatterns || [], nowIso: now().toISOString(),
+    })
+    : { block: null, problem: null, uploaded: false };
   let live = null;
   if (cfg.livePull) {
     const gen = Date.parse(snap.snapshot.records?.generatedAt ?? '');
@@ -166,7 +183,9 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
   }
 
   const failing = problems({ live, hubspotMode: data.refresh.hubspot, snapshotPublishedAt: snap.meta.publishedAt, nowMs: Date.parse(nowIso), staleMinutes: cfg.staleMinutes });
-  const alarm = alarmDecision({ failing, prev, nowMs: Date.parse(nowIso) });
+  if (ws.problem) failing.push(ws.problem);
+  // Workspace problems alarm once when they start (and when they clear), with no daily reminder.
+  const alarm = alarmDecision({ failing, prev, nowMs: Date.parse(nowIso), quiet: Object.values(WORKSPACE_PROBLEMS) });
   let lastAlarmAt = prev.lastAlarmAt ?? null;
   if (alarm.send) {
     const lines = [
@@ -174,6 +193,7 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
       `HubSpot figures: ${{ live: 'live pull', snapshot: 'the snapshot’s HubSpot export', 'last-good': 'the last good live pull', records: 'records.json only (the snapshot has no HubSpot pipeline export; shown as unreconciled)' }[data.refresh.hubspot]}`,
     ];
     if (failing.includes('snapshot-stale')) lines.push(`LATEST.json is older than ${cfg.staleMinutes} minutes: is the sync job running?`);
+    if (ws.block) lines.push(`workspace.json: ${ws.block.status}${ws.problem ? ' (' + ws.problem + (ws.block.errors.length ? ': ' + ws.block.errors.join('; ') : '') + '); the page keeps the last good copy from ' + (ws.block.publishedGeneratedAt || 'never') : ''}`);
     if (live) for (const k of ['hubspot', 'lemlist', 'fathom']) lines.push(`${k}: ${live[k].ok ? 'ok' : 'FAILED - ' + live[k].error}`);
     if (live?.hubspot.rotated) lines.push('HubSpot returned a new refresh token. It was NOT saved (this function cannot write secrets); check opstream-gtm/hubspot-oauth.');
     await deps.notify(
@@ -185,11 +205,13 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
 
   const doc = refreshDoc({ nowIso, hash, changed, prev, live, runId: snap.runId, snapshotPublishedAt: snap.meta.publishedAt, failing, lastAlarmAt, vols });
   if (hubspotSha256) doc.hubspotSha256 = hubspotSha256;
+  if (ws.block) doc.workspace = ws.block;
   await deps.put(cfg.previewBucket, cfg.refreshKey, JSON.stringify(doc), { contentType: 'application/json', cacheControl: 'no-store' });
 
   const summary = {
     changed, sha256: hash, snapshot: snap.runId, snapshotPublishedAt: snap.meta.publishedAt ?? null, livePull: !!live,
     failing, alarm: alarm.send ? alarm.reason : null, hubspotMode: data.refresh.hubspot, deals: data.deals.length,
+    workspace: ws.block ? { status: ws.block.status, uploaded: ws.uploaded, sha256: ws.block.sha256, problem: ws.problem } : null,
     ...(live ? { sources: Object.fromEntries(Object.entries(live).map(([k, r]) => [k, { ok: r.ok, ms: r.ms, ...(r.ok ? { detail: r.detail } : { error: r.error }) }])) } : {}),
     ms: Date.now() - started.getTime(),
   };

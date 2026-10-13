@@ -144,3 +144,9 @@ body.has-drawer { overflow: hidden; }
   .top-in.chips { flex-wrap: nowrap; overflow-x: auto; }
 }
 @media print { .top { position: static; } .scrim, .drawer { display: none; } }
+
+/* fetch states */
+.loading { color: var(--muted); padding: var(--s4) 0; }
+.sec.error { border-color: var(--alert); }
+.sec.error h2 { color: var(--alert); }
+.brand .sub .chip { vertical-align: middle; }
