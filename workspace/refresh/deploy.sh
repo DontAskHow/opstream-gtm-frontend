@@ -149,7 +149,8 @@ import sys, zipfile
 # The page's view and render code (onepage/, workspace/src validators) let workspace-json.mjs trial-render each file.
 files = ["workspace/refresh/handler.mjs", "workspace/refresh/compose.mjs", "workspace/refresh/sources.mjs", "workspace/refresh/workspace-json.mjs",
          "workspace/build.mjs", "workspace/lib/project.mjs", "workspace-model.cjs", "shared/open-pipeline.json",
-         "onepage/view.cjs", "onepage/page.cjs", "workspace/src/lost-reasons.js", "workspace/src/insights.js"]
+         "onepage/view.cjs", "onepage/page.cjs", "workspace/src/lost-reasons.js", "workspace/src/insights.js",
+         "config/freshness-sources.json"]
 with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
     for f in files:
         info = zipfile.ZipInfo(f, date_time=(2020, 1, 1, 0, 0, 0))

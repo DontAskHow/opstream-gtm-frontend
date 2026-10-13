@@ -8,7 +8,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, chmodSync, existsSync, r
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { renderHtml, renderAppHtml, buildView } from '../onepage/build.mjs';
 import { checkBuild } from '../onepage/deploy-check.mjs';
@@ -96,13 +96,15 @@ test('deploy.sh --onepage-app builds and checks the data-less page, then needs A
 
 // A fake `aws` for the whole --onepage-app run: logs every call's arguments and answers the
 // queries deploy.sh makes. FAKE_FUNCTION_ERROR, FAKE_REFRESH, FAKE_NO_WORKSPACE and
-// FAKE_INDEX_META steer the invoke -> check -> upload sequence.
+// FAKE_INDEX_META steer the invoke -> check -> upload sequence; FAKE_ZIP_OUT keeps the function zip.
 const FAKE_AWS = `#!/bin/bash
 echo "$*" >> "$FAKE_LOG"
 case "$1 $2" in
   "sts get-caller-identity") echo 080403790510 ;;
   "iam get-role") [[ "$*" == *--query* ]] && echo arn:aws:iam::080403790510:role/fake ;;
   "lambda get-function-configuration") echo "\${FAKE_CURRENT_PATTERNS:-None}" ;;
+  "lambda update-function-code")
+    if [ -n "$FAKE_ZIP_OUT" ]; then for a in "$@"; do [[ "$a" == fileb://* ]] && cp "\${a#fileb://}" "$FAKE_ZIP_OUT"; done; fi ;;
   "lambda invoke")
     out="\${@: -1}"; echo '{"ok":true}' > "$out"
     if [ -n "$FAKE_FUNCTION_ERROR" ]; then echo '{"StatusCode":200,"FunctionError":"Unhandled"}'; else echo '{"StatusCode":200}'; fi ;;
@@ -195,5 +197,36 @@ test('deploy.sh: a patterns file with only comments stops with a message', () =>
     assert.equal(r.status, 1);
     assert.match(r.stderr, /has no patterns/);
     assert.equal(r.calls.length, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The function zip alone must trial-render a real data-step file: every file the page's view and
+// render code require has to be packaged (config/freshness-sources.json was once missing, so the
+// live function refused every workspace.json as "does not render").
+test('deploy.sh: the packaged function validates a synthetic workspace.json on its own', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'onepage-deploy-zip-'));
+  try {
+    const zip = join(dir, 'fn.zip');
+    const r = deployRun(['--onepage-app'], { WORKSPACE_SCRUB_PATTERNS: SYNTHETIC_SCRUB, FAKE_REFRESH: ok, FAKE_ZIP_OUT: zip });
+    assert.equal(r.status, 0, r.stderr);
+    const fn = join(dir, 'fn');
+    execFileSync('python3', ['-c', 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])', zip, fn]);
+    const { brainFixture } = require('../scripts/synthetic-data.cjs');
+    const fx = brainFixture({});
+    writeFileSync(join(dir, 'fixture.json'), JSON.stringify(fx));
+    execFileSync('python3', [join(ROOT, 'scripts', 'fixture-db.py'), join(dir, 'fixture.json'), join(dir, 'brain.db')]);
+    const ind = join(dir, 'in');
+    mkdirSync(ind);
+    writeFileSync(join(ind, 'lead-sources.json'), JSON.stringify(fx.inputs.leadSources));
+    writeFileSync(join(ind, 'records.jsonl'), fx.text['records.jsonl']);
+    writeFileSync(join(ind, 'scrub-patterns.txt'), SYNTHETIC_SCRUB + '\n');
+    const env = { ...process.env, WORKSPACE_SCRUB_PATTERNS: '', WORKSPACE_SCRUB_PATTERNS_FILE: '', CALL_CLASSIFICATION: '', LEAD_SOURCE_REVIEW: '', PAID_EXPORT: '' };
+    execFileSync('python3', [join(ROOT, 'scripts', 'workspace-data.py'), '--db', join(dir, 'brain.db'), '--inputs-dir', ind,
+      '--portal-id', '12345', '--out', join(dir, 'workspace.json'), '--quiet'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const check = `import { validateWorkspace } from ${JSON.stringify(join(fn, 'workspace', 'refresh', 'workspace-json.mjs'))};
+      import { readFileSync } from 'node:fs';
+      console.log(JSON.stringify(validateWorkspace(readFileSync(process.argv[1], 'utf8'), [process.argv[2]]).errors));`;
+    const out = execFileSync('node', ['--input-type=module', '-e', check, join(dir, 'workspace.json'), SYNTHETIC_SCRUB], { cwd: dir, encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(out), []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
