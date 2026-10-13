@@ -31,6 +31,11 @@ between the 6-hourly full refresh runs without calling OpenAI.
    brief when the ids differ. `generatedAt` and `model` stay as the AI run
    wrote them, and `carriedFrom` names the source run. Facts-only copies are
    not carried; the fresh ones from `align-run.py` are kept.
+   Until `:latest` is rebuilt, the 6-hourly job counts the open book from
+   the Sheet's active rows, so these carried files (and each 6-hourly
+   publish, until the next sync-only run) can show a different open count
+   than `workspace.json` and `align-run.py`, which use the HubSpot Sales
+   Pipeline.
 8. Hashes the output tree with volatile fields removed: `generatedAt`,
    `runId`, `collectedAt`, `fetchedAt`, `capturedAt`, per-source `at` and
    `lastOkAt`, and the per-run counters in a successful source's `detail`.
