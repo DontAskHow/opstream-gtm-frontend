@@ -166,6 +166,16 @@ class HubSpotFake:
                          "createdAt": iso(now - timedelta(days=20))},
                         {"id": "502", "importName": "Test import 2", "state": "DONE",
                          "createdAt": iso(now - timedelta(days=2))}]
+        # Companies and deals the CRM search returns ({int id: properties}), associations (both directions) the v4
+        # endpoints return, and per-deal property history the deals batch read returns. Empty unless a test sets them
+        # (test_rules_e2e.py).
+        self.objects = {"companies": {}, "deals": {}}
+        self.assocs = {}            # (type, id) -> {to type: [ids]}
+        self.history = {}           # deal id -> {property: [{value, timestamp, sourceType}]}
+        self.pipelines = [{"id": "default", "label": "Sales", "stages": [
+            {"id": "s1", "label": "Open", "displayOrder": 0, "metadata": {"isClosed": "false", "probability": "0.2"}},
+            {"id": "s2", "label": "Won", "displayOrder": 1, "metadata": {"isClosed": "true", "probability": "1.0"}},
+        ]}]
         # Fault injection, set by the tests.
         self.imports_status = 200
         self.forms_status = 200           # the forms list answers this status
@@ -175,6 +185,11 @@ class HubSpotFake:
         self.fail_backfill_after = None   # contacts keyset search with this GT value answers 500
         self.fail_meeting_backfill_after = None
         self.once_429 = set()             # route keys that answer 429 once
+
+    def link(self, a, ai, b, bi):
+        """An association, stored both ways."""
+        self.assocs.setdefault((a, str(ai)), {}).setdefault(b, []).append(str(bi))
+        self.assocs.setdefault((b, str(bi)), {}).setdefault(a, []).append(str(ai))
 
     def _submission(self, fid, k, when):
         return {"conversionId": "%s-c%d" % (fid[-1], k), "submittedAt": ms(when), "pageUrl": "https://example.com/p",
@@ -214,10 +229,7 @@ class HubSpotFake:
             return 200, {"results": [{"id": "1", "firstName": "Test", "lastName": "Owner",
                                       "email": "owner@example.com", "archived": False}]}
         if req.method == "GET" and p == "/crm/v3/pipelines/deals":
-            return 200, {"results": [{"id": "default", "label": "Sales", "stages": [
-                {"id": "s1", "label": "Open", "displayOrder": 0, "metadata": {"isClosed": "false", "probability": "0.2"}},
-                {"id": "s2", "label": "Won", "displayOrder": 1, "metadata": {"isClosed": "true", "probability": "1.0"}},
-            ]}]}
+            return 200, {"results": self.pipelines}
         if req.method == "GET" and p == "/crm/v3/properties/contacts":
             return 200, {"results": [{"name": n, "label": n, "type": "string"} for n in self.properties]}
         if req.method == "GET" and p == "/crm/v3/properties/meetings":
@@ -228,7 +240,29 @@ class HubSpotFake:
         if req.method == "POST" and p.startswith("/crm/v3/objects/") and p.endswith("/search"):
             return self._search(p.split("/")[4], req.json())
         if req.method == "GET" and p.startswith("/crm/v4/objects/"):
-            return 200, {"results": []}
+            _, _, _, _, frm, oid, _, to = p.split("/")
+            return 200, {"results": [{"toObjectId": int(i), "associationTypes": []}
+                                     for i in self.assocs.get((frm, oid), {}).get(to, [])]}
+        if req.method == "POST" and p.startswith("/crm/v4/associations/") and p.endswith("/batch/read"):
+            _, _, _, _, frm, to, _, _ = p.split("/")
+            out = []
+            for x in (req.json() or {}).get("inputs") or []:
+                tos = self.assocs.get((frm, str(x["id"])), {}).get(to, [])
+                if tos:
+                    out.append({"from": {"id": str(x["id"])}, "to": [
+                        {"toObjectId": int(i), "associationTypes": [{"typeId": 5 if n == 0 else 6}]} for n, i in enumerate(tos)]})
+            return 200, {"status": "COMPLETE", "results": out}
+        if req.method == "POST" and p == "/crm/v3/objects/deals/batch/read":
+            body = req.json() or {}
+            out = []
+            for x in body.get("inputs") or []:
+                d = self.objects["deals"].get(int(x["id"]))
+                if d is None:
+                    continue
+                hist = self.history.get(str(x["id"]), {})
+                out.append({"id": str(x["id"]), "properties": {k: d.get(k) for k in body.get("properties") or []},
+                            "propertiesWithHistory": {k: hist.get(k, []) for k in body.get("propertiesWithHistory") or []}})
+            return 200, {"status": "COMPLETE", "results": out}
         if req.method == "POST" and p.endswith("/batch/read"):
             return 200, {"status": "COMPLETE", "results": []}
         if req.method == "GET" and p == "/marketing/v3/forms":
@@ -290,6 +324,8 @@ class HubSpotFake:
         elif otype == "meetings":
             objs, modfield, fail = self.meetings, "hs_lastmodifieddate", self.fail_meeting_backfill_after
             known = [n for n, _label in self.meeting_properties]
+        elif self.objects.get(otype):
+            objs, modfield, fail, known = self.objects[otype], "hs_lastmodifieddate", None, []
         else:
             return 200, {"total": 0, "results": []}
         flt = body["filterGroups"][0]["filters"][0]
