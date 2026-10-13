@@ -16,15 +16,19 @@ and a failure in one does not fail the sync or stop the other:
   lemlist_activities  GET /api/activities?version=v2 for ACTIVITY_TYPES, all
                       campaigns at once, in minDate/maxDate windows paged by
                       offset. sync_state 'lemlist_activities' holds the end of
-                      the last complete window per type, so a first pull that
-                      runs out of LEMLIST_ACTIVITY_MAX_CALLS (default 300)
-                      resumes there next run. Later runs re-read the last hour.
+                      the last complete window per type. A run stops after
+                      LEMLIST_ACTIVITY_MAX_CALLS (default 300); a window it cut
+                      short is kept in 'lemlist_activities_resume' with its
+                      offset, and the next run carries on from there. Later
+                      runs re-read the last hour.
   lemlist_leads       one row per lead per campaign from the v2 leads export
                       (JSON), or the paged campaign leads route when the export
-                      is refused. contacted/opened/clicked/replied/meeting
-                      times are the first matching activity. raw_json keeps the
-                      export row; reply activities keep their full raw_json so
-                      later code can tell auto-replies.
+                      is refused, at most every LEMLIST_LEADS_MIN_INTERVAL_MIN
+                      (default 360) per campaign. contacted/opened/clicked/
+                      replied/meeting times are the first matching activity and
+                      are updated every run. raw_json keeps the export row;
+                      reply activities keep their full raw_json so later code
+                      can tell auto-replies.
 """
 
 import base64
@@ -45,8 +49,8 @@ from common import (
     access_token_for,
     db_connect,
     get_sync_state,
-    record_outcome,
     run_main,
+    run_part,
     set_sync_state,
     truncate_value,
     url_with_access_token,
@@ -69,6 +73,8 @@ ACTIVITY_PAGE = 100  # API maximum
 ACTIVITY_WINDOW = timedelta(days=30)
 ACTIVITY_OVERLAP = timedelta(hours=1)
 ACTIVITY_MAX_CALLS = int(os.environ.get("LEMLIST_ACTIVITY_MAX_CALLS") or 300)
+# A campaign's leads are exported again at most this often (0: every run).
+LEADS_MIN_INTERVAL_MIN = float(os.environ.get("LEMLIST_LEADS_MIN_INTERVAL_MIN") or 360)
 LEAD_TIMES = (("contacted_at", ("emailsSent",)), ("opened_at", ("emailsOpened",)),
               ("clicked_at", ("emailsClicked",)), ("replied_at", REPLY_TYPES),
               ("meeting_booked_at", ("meetingBooked",)))
@@ -208,23 +214,13 @@ def _load_state(source):
     return state if isinstance(state, dict) else {}
 
 
-def run_part(name, fn, log):
-    """Run one extra pull and record its outcome. Returns True on success; never raises."""
-    try:
-        detail = fn()
-    except Exception as e:
-        log.warning("%s failed (the rest of the sync continues): %s", name, e)
-        record_outcome(name, False, getattr(e, "route", None), getattr(e, "status", None),
-                       "%s: %s" % (type(e).__name__, str(e)[:200]))
-        return False
-    log.info("%s: %s", name, detail)
-    record_outcome(name, True, None, None, detail)
-    return True
-
-
 def sync_activities(campaigns, log):
     """Activities of ACTIVITY_TYPES across all campaigns, windowed by date (see module doc)."""
     state = _load_state("lemlist_activities")
+    # A window cut short by the call budget: {type: {start, end, offset}}. The
+    # next run re-reads that same window from the offset, so a window holding
+    # more rows than one run's budget still advances.
+    resume = _load_state("lemlist_activities_resume")
     now = datetime.now(timezone.utc)
     starts = [t for t in (_parse(c.get("createdAt")) for c in campaigns) if t]
     earliest = min(starts) if starts else now - timedelta(days=365)
@@ -238,11 +234,20 @@ def sync_activities(campaigns, log):
         con.execute("CREATE INDEX IF NOT EXISTS lemlist_activities_lead ON lemlist_activities"
                     "(campaign_id, lead_id, type, created_at)")
         for typ in ACTIVITY_TYPES:
+            if out_of_calls:
+                break
             mark = _parse(state.get(typ))
             start = mark - ACTIVITY_OVERLAP if mark else earliest
+            part = resume.get(typ) if isinstance(resume.get(typ), dict) else {}
+            part_start, part_end = _parse(part.get("start")), _parse(part.get("end"))
+            if not (part_start and part_end and part_start < part_end <= now and isinstance(part.get("offset"), int)):
+                part = {}
+            if part:
+                start = part_start
             while start < now and not out_of_calls:
-                end = min(start + ACTIVITY_WINDOW, now)
-                offset = 0
+                end = part_end if part else min(start + ACTIVITY_WINDOW, now)
+                offset = part.get("offset", 0) if part else 0
+                part = {}
                 fetched_at = now_iso()
                 while True:
                     if calls >= ACTIVITY_MAX_CALLS:
@@ -276,16 +281,26 @@ def sync_activities(campaigns, log):
                     offset += len(rows)
                 con.commit()
                 if out_of_calls:
+                    if offset:
+                        resume[typ] = {"start": _iso(start), "end": _iso(end), "offset": offset}
+                        set_sync_state("lemlist_activities_resume", json.dumps(resume, sort_keys=True),
+                                       "per-type window cut short by LEMLIST_ACTIVITY_MAX_CALLS, and its offset")
                     break
                 state[typ] = _iso(end)
                 set_sync_state("lemlist_activities", json.dumps(state, sort_keys=True), "per-type end of last window")
+                if resume.pop(typ, None) is not None:
+                    set_sync_state("lemlist_activities_resume", json.dumps(resume, sort_keys=True),
+                                   "per-type window cut short by LEMLIST_ACTIVITY_MAX_CALLS, and its offset")
                 start = end
     finally:
         con.close()
-    pending = [t for t in ACTIVITY_TYPES if not _parse(state.get(t)) or _parse(state[t]) < now - ACTIVITY_WINDOW]
+    pending = [t for t in ACTIVITY_TYPES if t in resume or not _parse(state.get(t))
+               or _parse(state[t]) < now - ACTIVITY_WINDOW]
     detail = "%d activities stored in %d calls" % (stored, calls)
     if out_of_calls:
-        detail += "; LEMLIST_ACTIVITY_MAX_CALLS reached, resuming next run (%s behind)" % ", ".join(pending)
+        detail += "; LEMLIST_ACTIVITY_MAX_CALLS reached, resuming next run"
+        if pending:
+            detail += " (%s behind)" % ", ".join(pending)
     return detail
 
 
@@ -318,9 +333,13 @@ def _campaign_leads(cid):
 
 
 def sync_leads(campaigns, log):
-    """Replace each campaign's leads, then set the first-activity times (see module doc)."""
+    """Replace each due campaign's leads, then set the first-activity times (see module doc)."""
     fetched_at = now_iso()
+    now = datetime.now(timezone.utc)
+    # Per campaign, when its leads were last replaced in full.
+    refreshed = _load_state("lemlist_leads")
     total = 0
+    done = fresh = 0
     failed = []
     con = db_connect()
     try:
@@ -331,6 +350,10 @@ def sync_leads(campaigns, log):
         for c in campaigns:
             cid = str(c.get("_id") or c.get("id") or "")
             if not cid:
+                continue
+            last = _parse(refreshed.get(cid))
+            if last and (now - last).total_seconds() < LEADS_MIN_INTERVAL_MIN * 60:
+                fresh += 1
                 continue
             try:
                 leads = _campaign_leads(cid)
@@ -359,6 +382,10 @@ def sync_leads(campaigns, log):
                             "email_status, raw_json, fetched_at) VALUES(?,?,?,?,?,?,?,?,?)", list(rows.values()))
             con.commit()
             total += len(rows)
+            done += 1
+            refreshed[cid] = _iso(now)
+            set_sync_state("lemlist_leads", json.dumps(refreshed, sort_keys=True),
+                           "per-campaign time of the last full leads refresh")
         have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "lemlist_activities" in have:
             sets = ", ".join(
@@ -369,7 +396,10 @@ def sync_leads(campaigns, log):
             con.commit()
     finally:
         con.close()
-    detail = "%d leads across %d campaigns" % (total, len(campaigns) - len(failed))
+    detail = "%d leads across %d campaigns" % (total, done)
+    if fresh:
+        detail += "; %d campaigns skipped, refreshed within LEMLIST_LEADS_MIN_INTERVAL_MIN (%.0f min)" % (
+            fresh, LEADS_MIN_INTERVAL_MIN)
     if failed:
         raise SourceError(HOST, failed[-1].route, failed[-1].status,
                           "%s; leads failed for %d campaigns" % (detail, len(failed)))

@@ -147,6 +147,9 @@ class HubSpotFake:
                          "createdAt": iso(now - timedelta(days=2))}]
         # Fault injection, set by the tests.
         self.imports_status = 200
+        self.forms_status = 200           # the forms list answers this status
+        self.lists_shape = None           # "no-lists": no lists array; "empty": an empty catalog
+        self.members_status = {}          # listId -> status its memberships answer
         self.fail_backfill_after = None   # keyset search with this GT value answers 500
         self.once_429 = set()             # route keys that answer 429 once
 
@@ -158,7 +161,8 @@ class HubSpotFake:
                                                      "objectTypeId": "0-1"}]}
 
     def add_submissions(self, fid, n):
-        newest = self.submissions[fid][0]["submittedAt"] if self.submissions[fid] else ms(self.now)
+        newest = max((s["submittedAt"] for s in self.submissions[fid] if isinstance(s["submittedAt"], int)),
+                     default=ms(self.now))
         for k in range(n):
             sub = self._submission(fid, 1000 + k, datetime.fromtimestamp(newest / 1000 + 60 * (k + 1), timezone.utc))
             self.submissions[fid].insert(0, sub)
@@ -203,6 +207,8 @@ class HubSpotFake:
             hit = self._maybe_429("forms")
             if hit:
                 return hit
+            if self.forms_status != 200:
+                return self.forms_status, {"status": "error", "category": "MISSING_SCOPES"}
             forms = [f for f in self.forms if f["archived"] == (q.get("archived") == "true")]
             return self._paged(forms, q.get("after"), self.FORMS_PAGE)
         if req.method == "GET" and p.startswith("/form-integrations/v1/submissions/forms/"):
@@ -214,6 +220,10 @@ class HubSpotFake:
                 return 404, {"status": "error", "message": "form not found"}
             return self._paged(self.submissions[fid], q.get("after"), min(int(q.get("limit") or 20), 50))
         if req.method == "POST" and p == "/crm/v3/lists/search":
+            if self.lists_shape == "no-lists":
+                return 200, {"results": [], "total": len(self.lists)}
+            if self.lists_shape == "empty":
+                return 200, {"lists": [], "hasMore": False, "offset": 0, "total": 0}
             body = req.json() or {}
             off = int(body.get("offset") or 0)
             page = self.lists[off:off + self.LISTS_PAGE]
@@ -223,6 +233,8 @@ class HubSpotFake:
             return 200, {"lists": out, "hasMore": more, "offset": off + len(page), "total": len(self.lists)}
         if req.method == "GET" and p.startswith("/crm/v3/lists/") and p.endswith("/memberships"):
             lid = p.split("/")[4]
+            if self.members_status.get(lid, 200) != 200:
+                return self.members_status[lid], {"status": "error", "message": "internal error"}
             rows = [{"recordId": str(r), "membershipTimestamp": iso(self.now - timedelta(days=3))}
                     for r in self.members.get(lid, [])]
             return self._paged(rows, q.get("after"), min(int(q.get("limit") or 100), 250))

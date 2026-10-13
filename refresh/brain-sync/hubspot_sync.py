@@ -25,12 +25,19 @@ and does not move watermarks.
 After the objects, four extra pulls run. Each records its own sync_outcomes
 row and a failure in one (a missing scope, say) does not fail the sync or
 stop the others:
-  hubspot_forms             forms (archived too) and their submissions
-  hubspot_lists             list catalog; contact list memberships at most
-                            every LIST_MIN_INTERVAL_MIN minutes (default 360)
+  hubspot_forms             forms (archived too) and their submissions; first
+                            pulls share FORM_SUBMISSION_MAX_CALLS pages a run
+                            (default 200) and resume next run
+  hubspot_lists             list catalog; each contact list's memberships at
+                            most every LIST_MIN_INTERVAL_MIN minutes (default
+                            360), LIST_MEMBERSHIP_MAX_CALLS pages a run
+                            (default 400), resumed next run
   hubspot_imports           the import log
-  hubspot_contact_backfill  only with HUBSPOT_CONTACT_BACKFILL=1 (or restart):
-                            re-reads every contact's properties once
+  hubspot_contact_backfill  only with HUBSPOT_CONTACT_BACKFILL=1 (or restart,
+                            which starts over once per value): re-reads
+                            every contact's properties once
+A failed extra pull also logs `EXTRA_PULL_FAILED <name> <route> <status>` to
+stdout; the exit code does not change.
 """
 
 import hashlib
@@ -48,8 +55,8 @@ from common import (
     SourceRefused,
     db_connect,
     get_sync_state,
-    record_outcome,
     run_main,
+    run_part,
     set_sync_state,
     truncate_props,
     truncate_value,
@@ -472,6 +479,9 @@ IMPORTS_ROUTE = "GET /crm/v3/imports"
 CONTACT_SEARCH_ROUTE = "POST /crm/v3/objects/contacts/search"
 CONTACT_LIST_TYPE = "0-1"
 LIST_MIN_INTERVAL_MIN = float(os.environ.get("LIST_MIN_INTERVAL_MIN") or 360)
+# Per-run page caps, so a first pull fits the 15-minute cadence; both resume next run.
+LIST_MEMBERSHIP_MAX_CALLS = int(os.environ.get("LIST_MEMBERSHIP_MAX_CALLS") or 400)
+FORM_SUBMISSION_MAX_CALLS = int(os.environ.get("FORM_SUBMISSION_MAX_CALLS") or 200)
 BACKFILL_PAGE = 200  # CRM search maximum
 
 
@@ -485,6 +495,9 @@ EXTRA_TABLES = (
     "CREATE TABLE IF NOT EXISTS hubspot_lists(list_id TEXT PRIMARY KEY, name TEXT, processing_type TEXT, "
     "object_type TEXT, size INTEGER, created_at TEXT, updated_at TEXT, raw_json TEXT, fetched_at TEXT)",
     "CREATE TABLE IF NOT EXISTS hubspot_list_memberships(list_id TEXT, record_id TEXT, added_at TEXT, "
+    "PRIMARY KEY(list_id, record_id))",
+    # Pages of a list whose read is not finished yet; moved into hubspot_list_memberships when it is.
+    "CREATE TABLE IF NOT EXISTS hubspot_list_memberships_pending(list_id TEXT, record_id TEXT, added_at TEXT, "
     "PRIMARY KEY(list_id, record_id))",
     "CREATE TABLE IF NOT EXISTS hubspot_imports(import_id TEXT PRIMARY KEY, name TEXT, state TEXT, "
     "created_at TEXT, raw_json TEXT, fetched_at TEXT)",
@@ -515,25 +528,36 @@ def hs_pages(client, url_for, route, max_pages=500):
         seen.add(after)
 
 
+def _ms(value):
+    """An epoch-ms value as int, or None when it is missing or not a number."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
 def _iso_ms(value):
     try:
-        return datetime.fromtimestamp(int(value) / 1000.0, timezone.utc).isoformat()
-    except (TypeError, ValueError):
+        return datetime.fromtimestamp(_ms(value) / 1000.0, timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
         return None
 
 
-def run_part(name, fn, log):
-    """Run one extra pull and record its outcome. Returns True on success; never raises."""
+def _next_after(payload):
+    return ((payload.get("paging") or {}).get("next") or {}).get("after")
+
+
+def _json_state(source):
+    """A sync_state watermark holding a JSON object, or {}."""
+    raw, _run, _note = get_sync_state(source)
     try:
-        detail = fn()
-    except Exception as e:
-        log.warning("%s failed (the rest of the sync continues): %s", name, e)
-        record_outcome(name, False, getattr(e, "route", None), getattr(e, "status", None),
-                       "%s: %s" % (type(e).__name__, str(e)[:200]))
-        return False
-    log.info("%s: %s", name, detail)
-    record_outcome(name, True, None, None, detail)
-    return True
+        state = json.loads(raw) if raw else {}
+    except ValueError:
+        state = {}
+    return state if isinstance(state, dict) else {}
 
 
 def discover_contact_props(client, log):
@@ -554,9 +578,11 @@ def sync_forms(client, log):
     """Forms (active and archived) and their submissions.
 
     Submissions come newest first. A form with a watermark (newest submittedAt
-    seen, in ms) is read until a page reaches older submissions; a form without
-    one is read in full. Archived forms are read once. A failing form keeps its
-    watermark and is counted; the others go on.
+    seen, in ms) is read until a page reaches older submissions. A form without
+    one is read in full; those first pulls share FORM_SUBMISSION_MAX_CALLS
+    pages a run, and one cut short resumes from its saved paging cursor. An
+    archived form is read once more after it is archived, then no longer. A
+    failing form keeps its watermark and is counted; the others go on.
     """
     forms = {}
     for archived in (False, True):
@@ -573,15 +599,21 @@ def sync_forms(client, log):
                 if fid and not (archived and fid in forms):
                     forms[fid] = dict(f, archived=bool(f.get("archived", archived)))
     fetched_at = datetime.now(timezone.utc).isoformat()
-    raw, _run, _note = get_sync_state("hubspot_forms")
-    try:
-        marks = json.loads(raw) if raw else {}
-        if not isinstance(marks, dict):
-            marks = {}
-    except ValueError:
-        marks = {}
+    marks = _json_state("hubspot_forms")
+    # cursors: first pulls cut short by FORM_SUBMISSION_MAX_CALLS, {formId: {after, newest}}.
+    # archivedRead: archived forms read since they were archived.
+    progress = _json_state("hubspot_forms_progress")
+    cursors = progress.get("cursors") if isinstance(progress.get("cursors"), dict) else {}
+    archived_read = {str(x) for x in progress.get("archivedRead") or [] if x}
+
+    def save_progress():
+        set_sync_state("hubspot_forms_progress", json.dumps(
+            {"cursors": cursors, "archivedRead": sorted(archived_read)}, sort_keys=True),
+            "first-pull paging cursors; archived forms read since archiving")
+
     con = db_connect()
     new_total = 0
+    first_calls = 0
     failed = []
     try:
         for fid, f in forms.items():
@@ -593,57 +625,101 @@ def sync_forms(client, log):
                 (fid, truncate_value(str(f.get("name") or "")), f.get("formType"), f.get("createdAt"),
                  f.get("updatedAt"), int(f["archived"]), json.dumps(f, ensure_ascii=False), fetched_at))
         con.commit()
-        for fid, f in forms.items():
-            if f["archived"] and fid in marks:
+        # Forms with a watermark first: their reads are short and not capped.
+        for fid in sorted(forms, key=lambda x: _ms(marks.get(x)) is None):
+            f = forms[fid]
+            if f["archived"] and fid in archived_read:
                 continue
-            mark = marks.get(fid)
-            newest = int(mark or 0)
+            mark = _ms(marks.get(fid))
+            cur = cursors.get(fid) if mark is None and isinstance(cursors.get(fid), dict) else None
+            after = (cur or {}).get("after") or None
+            newest = max(mark or 0, _ms((cur or {}).get("newest")) or 0)
             new = 0
+            done = False
 
             def url_for(after, fid=fid):
                 url = client.api_base + "/form-integrations/v1/submissions/forms/%s?limit=50" % _query_value(fid)
                 return url + ("&after=" + _query_value(after) if after else "")
             try:
-                for page in hs_pages(client, url_for, SUBMISSIONS_ROUTE, max_pages=2000):
+                seen = set()
+                for _page in range(2000):
+                    if mark is None and first_calls >= FORM_SUBMISSION_MAX_CALLS:
+                        break
+                    page = hs_call(client, "GET", url_for(after), SUBMISSIONS_ROUTE)
+                    if mark is None:
+                        first_calls += 1
                     reached = False
                     for sub in page.get("results") or []:
-                        ms = int(sub.get("submittedAt") or 0)
-                        if mark is not None and ms < int(mark):
+                        if not isinstance(sub, dict):
+                            continue
+                        ms = _ms(sub.get("submittedAt"))
+                        if mark is not None and ms is not None and ms < mark:
                             reached = True
                             break
-                        values = sub.get("values") or []
+                        raw_values = sub.get("values") or []
+                        values = [{k: truncate_value(v) for k, v in x.items()} if isinstance(x, dict)
+                                  else truncate_value(x) for x in raw_values]
                         email = next((v.get("value") for v in values
                                       if isinstance(v, dict) and str(v.get("name") or "").lower() == "email"), None)
                         key = str(sub.get("conversionId") or "") or "sha1:" + hashlib.sha1(json.dumps(
-                            [sub.get("submittedAt"), sub.get("pageUrl"), values], sort_keys=True).encode()).hexdigest()
-                        cur = con.execute(
+                            [sub.get("submittedAt"), sub.get("pageUrl"), raw_values], sort_keys=True,
+                            default=str).encode()).hexdigest()
+                        cur_row = con.execute(
                             "INSERT INTO hubspot_form_submissions(form_id, conversion_id, submitted_at, contact_email, "
                             "page_url, page_title, values_json, fetched_at) VALUES(?,?,?,?,?,?,?,?) "
                             "ON CONFLICT(form_id, conversion_id) DO NOTHING",
-                            (fid, key, _iso_ms(sub.get("submittedAt")), email, sub.get("pageUrl"),
-                             sub.get("pageTitle"), json.dumps(values, ensure_ascii=False), fetched_at))
-                        new += cur.rowcount
-                        newest = max(newest, ms)
-                    if reached:
+                            (fid, key, _iso_ms(sub.get("submittedAt")), email, truncate_value(sub.get("pageUrl")),
+                             truncate_value(sub.get("pageTitle")), json.dumps(values, ensure_ascii=False), fetched_at))
+                        new += cur_row.rowcount
+                        if ms is not None:
+                            newest = max(newest, ms)
+                    nxt = _next_after(page)
+                    if reached or not nxt or nxt in seen:
+                        done = True
                         break
+                    seen.add(nxt)
+                    after = nxt
+                else:
+                    done = True
             except SourceRefused:
                 raise  # the forms scope is missing: every form would answer the same
             except SourceError as e:
                 con.rollback()
                 if f["archived"] and e.status == 404:
                     marks[fid] = 0
+                    set_sync_state("hubspot_forms", json.dumps(marks, sort_keys=True),
+                                   "per-form newest submittedAt (ms)")
+                    archived_read.add(fid)
+                    cursors.pop(fid, None)
+                    save_progress()
                     continue
+                if cursors.pop(fid, None) is not None:
+                    save_progress()  # the saved cursor may be what failed: start this form over
                 log.warning("form %s submissions: %s", fid, e)
                 failed.append(e)
                 continue
             con.commit()
-            marks[fid] = newest
             new_total += new
+            if not done:
+                if after:
+                    cursors[fid] = {"after": after, "newest": newest}
+                    save_progress()
+                continue
+            marks[fid] = newest
             set_sync_state("hubspot_forms", json.dumps(marks, sort_keys=True), "per-form newest submittedAt (ms)")
+            changed = cursors.pop(fid, None) is not None
+            if f["archived"]:
+                archived_read.add(fid)
+                changed = True
+            if changed:
+                save_progress()
     finally:
         con.close()
+    pending = sum(1 for fid, f in forms.items() if _ms(marks.get(fid)) is None)
     detail = "%d forms (%d archived), %d new submissions" % (
         len(forms), sum(1 for f in forms.values() if f["archived"]), new_total)
+    if first_calls >= FORM_SUBMISSION_MAX_CALLS and pending:
+        detail += "; FORM_SUBMISSION_MAX_CALLS reached, %d forms resume next run" % pending
     if failed:
         raise SourceError(HOST, SUBMISSIONS_ROUTE, failed[-1].status,
                           "%s; submissions failed for %d forms" % (detail, len(failed)))
@@ -651,18 +727,35 @@ def sync_forms(client, log):
 
 
 def sync_lists(client, log):
-    """List catalog every run; contact list memberships every LIST_MIN_INTERVAL_MIN."""
+    """List catalog every run; each contact list's memberships at most every LIST_MIN_INTERVAL_MIN.
+
+    The catalog is mirrored (a deleted list goes, with its memberships), but
+    only from a complete, well-formed answer: a page without a lists array,
+    or no lists at all while some are stored, fails the pull and changes
+    nothing. Membership pages share LIST_MEMBERSHIP_MAX_CALLS a run. A list
+    cut short is staged in hubspot_list_memberships_pending and resumes from
+    its paging cursor next run; its stored rows are replaced only once its
+    read is complete. Each list is marked refreshed only when its own read
+    completed, so a list that failed is retried next run.
+    """
     lists = []
     offset = 0
+    payload = {}
     for _page in range(100):
         payload = hs_call(client, "POST", client.api_base + "/crm/v3/lists/search", LISTS_ROUTE, body={
             "offset": offset, "count": 500, "query": "", "listIds": [],
             "processingTypes": ["MANUAL", "DYNAMIC", "SNAPSHOT"], "additionalProperties": ["hs_list_size"]})
-        lists.extend(x for x in payload.get("lists") or [] if isinstance(x, dict) and x.get("listId") is not None)
-        nxt = payload.get("offset")
-        if not payload.get("hasMore") or not isinstance(nxt, int) or nxt <= offset:
+        if not isinstance(payload.get("lists"), list):
+            raise SourceError(HOST, LISTS_ROUTE, 200, "answer has no lists array; stored lists left as they were")
+        lists.extend(x for x in payload["lists"] if isinstance(x, dict) and x.get("listId") is not None)
+        if not payload.get("hasMore"):
             break
+        nxt = payload.get("offset")
+        if not isinstance(nxt, int) or nxt <= offset:
+            raise SourceError(HOST, LISTS_ROUTE, 200, "hasMore without a later offset; stored lists left as they were")
         offset = nxt
+    else:
+        raise SourceError(HOST, LISTS_ROUTE, 200, "over 100 pages of lists; stored lists left as they were")
     fetched_at = datetime.now(timezone.utc).isoformat()
     rows = []
     for x in lists:
@@ -677,57 +770,124 @@ def sync_lists(client, log):
     contact_ids = [r[0] for r in rows if r[3] == CONTACT_LIST_TYPE]
     con = db_connect()
     try:
+        if not rows:
+            stored = con.execute("SELECT COUNT(*) FROM hubspot_lists").fetchone()[0]
+            total = payload.get("total")
+            if stored or (isinstance(total, int) and total > 0):
+                raise SourceError(HOST, LISTS_ROUTE, 200, "no lists in the answer (total %s, %d stored); "
+                                  "stored lists left as they were" % (total, stored))
         # The table mirrors HubSpot: a deleted list goes, with its memberships.
         con.execute("DELETE FROM hubspot_lists")
         con.executemany("INSERT INTO hubspot_lists(list_id, name, processing_type, object_type, size, created_at, "
                         "updated_at, raw_json, fetched_at) VALUES(?,?,?,?,?,?,?,?,?)", rows)
-        con.execute("DELETE FROM hubspot_list_memberships WHERE list_id NOT IN (%s)"
-                    % ",".join("?" * len(contact_ids)), contact_ids)
+        marks = ",".join("?" * len(contact_ids))
+        con.execute("DELETE FROM hubspot_list_memberships WHERE list_id NOT IN (%s)" % marks, contact_ids)
+        con.execute("DELETE FROM hubspot_list_memberships_pending WHERE list_id NOT IN (%s)" % marks, contact_ids)
         con.commit()
     finally:
         con.close()
     detail = "%d lists (%d contact lists)" % (len(rows), len(contact_ids))
-    last, _run, _note = get_sync_state("hubspot_lists")
-    try:
-        age_min = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() / 60.0
-    except (TypeError, ValueError):
-        age_min = None
-    if age_min is not None and age_min < LIST_MIN_INTERVAL_MIN:
-        return detail + "; memberships %.0f min old, next refresh after %.0f" % (age_min, LIST_MIN_INTERVAL_MIN)
-    members = 0
+
+    # sync_state 'hubspot_lists': {"refreshed": {listId: time of its last complete read},
+    #                              "resume": {"listId", "after"} for a read cut short}.
+    state = _json_state("hubspot_lists")
+    refreshed = {k: v for k, v in (state.get("refreshed") or {}).items() if k in contact_ids} \
+        if isinstance(state.get("refreshed"), dict) else {}
+    resume = state.get("resume") if isinstance(state.get("resume"), dict) else None
+    if not (resume and resume.get("listId") in contact_ids and resume.get("after")):
+        resume = None
+    now = datetime.now(timezone.utc)
+
+    def due(list_id):
+        try:
+            age_min = (now - datetime.fromisoformat(refreshed[list_id])).total_seconds() / 60.0
+        except (KeyError, TypeError, ValueError):
+            return True
+        return age_min >= LIST_MIN_INTERVAL_MIN
+
+    def save_state():
+        set_sync_state("hubspot_lists", json.dumps({"refreshed": refreshed, "resume": resume}, sort_keys=True),
+                       "per-list time of the last complete membership read; a read cut short")
+
+    todo = [lid for lid in contact_ids if due(lid) or (resume and resume["listId"] == lid)]
+    if resume:
+        todo.sort(key=lambda lid: lid != resume["listId"])
+    if not todo:
+        return detail + "; memberships: none due (LIST_MIN_INTERVAL_MIN=%.0f)" % LIST_MIN_INTERVAL_MIN
+    members = done = calls = 0
+    out_of_calls = False
     failed = []
     con = db_connect()
     try:
-        for list_id in contact_ids:
-            def url_for(after, list_id=list_id):
-                url = client.api_base + "/crm/v3/lists/%s/memberships?limit=250" % _query_value(list_id)
-                return url + ("&after=" + _query_value(after) if after else "")
-            got = []
+        for list_id in todo:
+            after = resume["after"] if resume and resume["listId"] == list_id else None
+            if after is None:
+                con.execute("DELETE FROM hubspot_list_memberships_pending WHERE list_id=?", (list_id,))
+                con.commit()
+            finished = False
+            seen = set()
             try:
-                for page in hs_pages(client, url_for, MEMBERSHIPS_ROUTE, max_pages=4000):
+                while True:
+                    if calls >= LIST_MEMBERSHIP_MAX_CALLS:
+                        out_of_calls = True
+                        break
+                    url = client.api_base + "/crm/v3/lists/%s/memberships?limit=250" % _query_value(list_id)
+                    page = hs_call(client, "GET", url + ("&after=" + _query_value(after) if after else ""),
+                                   MEMBERSHIPS_ROUTE)
+                    calls += 1
+                    got = []
                     for m in page.get("results") or []:
                         if isinstance(m, dict):
                             got.append((list_id, str(m.get("recordId")), m.get("membershipTimestamp")))
                         elif m is not None:
                             got.append((list_id, str(m), None))
+                    con.executemany("INSERT OR REPLACE INTO hubspot_list_memberships_pending(list_id, record_id, "
+                                    "added_at) VALUES(?,?,?)", got)
+                    con.commit()
+                    nxt = _next_after(page)
+                    if not nxt or nxt in seen:
+                        finished = True
+                        break
+                    seen.add(nxt)
+                    after = nxt
             except SourceRefused:
                 raise
             except SourceError as e:
+                con.rollback()
+                # Start this list over next run: the saved cursor may be what failed.
+                con.execute("DELETE FROM hubspot_list_memberships_pending WHERE list_id=?", (list_id,))
+                con.commit()
+                if resume and resume["listId"] == list_id:
+                    resume = None
+                    save_state()
                 log.warning("list %s memberships: %s", list_id, e)
                 failed.append(e)
                 continue
+            if not finished:
+                if after:
+                    resume = {"listId": list_id, "after": after}
+                    save_state()
+                break
             con.execute("DELETE FROM hubspot_list_memberships WHERE list_id=?", (list_id,))
-            con.executemany("INSERT OR REPLACE INTO hubspot_list_memberships(list_id, record_id, added_at) "
-                            "VALUES(?,?,?)", got)
+            n = con.execute("INSERT INTO hubspot_list_memberships(list_id, record_id, added_at) SELECT list_id, "
+                            "record_id, added_at FROM hubspot_list_memberships_pending WHERE list_id=?",
+                            (list_id,)).rowcount
+            con.execute("DELETE FROM hubspot_list_memberships_pending WHERE list_id=?", (list_id,))
             con.commit()
-            members += len(got)
+            members += n
+            done += 1
+            refreshed[list_id] = datetime.now(timezone.utc).isoformat()
+            if resume and resume["listId"] == list_id:
+                resume = None
+            save_state()
     finally:
         con.close()
-    detail += "; memberships refreshed: %d rows" % members
-    set_sync_state("hubspot_lists", datetime.now(timezone.utc).isoformat(), detail)
+    detail += "; memberships refreshed for %d lists: %d rows" % (done, members)
+    if out_of_calls:
+        detail += "; LIST_MEMBERSHIP_MAX_CALLS reached, %d lists resume next run" % (len(todo) - done - len(failed))
     if failed:
         raise SourceError(HOST, MEMBERSHIPS_ROUTE, failed[-1].status,
-                          "%s; memberships failed for %d lists" % (detail, len(failed)))
+                          "%s; memberships failed for %d lists (retried next run)" % (detail, len(failed)))
     return detail
 
 
@@ -759,9 +919,12 @@ def backfill_contacts(client, props, log):
     Keyset paging: each search asks for hs_object_id > the last id stored, so
     the 10,000-result cap of one search does not apply. sync_state
     'hubspot_contact_backfill' holds that id after every page, so a run that
-    stops resumes there. When done it says so and later runs skip it;
-    HUBSPOT_CONTACT_BACKFILL=restart starts over. Properties are merged into
-    the stored ones; associations and the contacts watermark are untouched.
+    stops resumes there. When done it says so and later runs skip it.
+    HUBSPOT_CONTACT_BACKFILL=restart starts over once: the value is recorded
+    as restartKey, so leaving it set resumes instead of restarting every run.
+    Another value starting with "restart" (restart:2, say) starts over again.
+    Properties are merged into the stored ones; associations and the contacts
+    watermark are untouched.
     """
     raw, _run, _note = get_sync_state("hubspot_contact_backfill")
     try:
@@ -770,10 +933,12 @@ def backfill_contacts(client, props, log):
             state = {}
     except ValueError:
         state = {}
-    if os.environ.get("HUBSPOT_CONTACT_BACKFILL", "").strip().lower() == "restart":
-        state = {}
+    mode = os.environ.get("HUBSPOT_CONTACT_BACKFILL", "").strip().lower()
+    if mode.startswith("restart") and state.get("restartKey") != mode:
+        log.info("contact backfill: starting over (HUBSPOT_CONTACT_BACKFILL=%s)", mode)
+        state = {"restartKey": mode}
     if state.get("done"):
-        return "already complete (%s contacts, %s); HUBSPOT_CONTACT_BACKFILL=restart runs it again" % (
+        return "already complete (%s contacts, %s); a new HUBSPOT_CONTACT_BACKFILL=restart value runs it again" % (
             state.get("count"), state.get("finishedAt"))
     after_id = int(state.get("afterId") or 0)
     count = int(state.get("count") or 0)
@@ -913,7 +1078,8 @@ def main_sync(log):
         ("hubspot_lists", lambda: sync_lists(client, log)),
         ("hubspot_imports", lambda: sync_imports(client, log)),
     ]
-    if os.environ.get("HUBSPOT_CONTACT_BACKFILL", "").strip().lower() in ("1", "true", "yes", "restart"):
+    backfill = os.environ.get("HUBSPOT_CONTACT_BACKFILL", "").strip().lower()
+    if backfill in ("1", "true", "yes") or backfill.startswith("restart"):
         parts.append(("hubspot_contact_backfill", lambda: backfill_contacts(client, contact_props, log)))
     failed = [name for name, fn in parts if not run_part(name, fn, log)]
     return note + ("; failed: " + ", ".join(failed) if failed else "")

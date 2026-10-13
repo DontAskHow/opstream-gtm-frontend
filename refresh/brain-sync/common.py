@@ -494,6 +494,25 @@ def record_outcome(source: str, ok: bool, route: str | None = None, http: int | 
         con.close()
 
 
+def run_part(name: str, fn, log) -> bool:
+    """Run one extra pull and record its outcome. Returns True on success; never raises.
+
+    A failure also logs one line `EXTRA_PULL_FAILED <name> <route> <status>`
+    to stdout (CloudWatch). The sync's exit code does not change.
+    """
+    try:
+        detail = fn()
+    except Exception as e:
+        route, status = getattr(e, "route", None), getattr(e, "status", None)
+        log.warning("%s failed (the rest of the sync continues): %s", name, e)
+        log.warning("EXTRA_PULL_FAILED %s %s %s", name, route or "-", "-" if status is None else status)
+        record_outcome(name, False, route, status, "%s: %s" % (type(e).__name__, str(e)[:200]))
+        return False
+    log.info("%s: %s", name, detail)
+    record_outcome(name, True, None, None, detail)
+    return True
+
+
 def run_main(source: str, fn) -> None:
     """Entrypoint: logging, exit codes, and a recorded outcome. Watermarks move only on success."""
     log = setup_logger(source)

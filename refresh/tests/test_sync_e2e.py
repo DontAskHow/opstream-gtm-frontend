@@ -11,10 +11,13 @@ Run from the repo root:
     python3 -m unittest discover -s refresh/tests -v
 
 Needs python3 with boto3 (as the refresh image has) and the openssl CLI.
-Takes about two minutes, mostly the scripts' own request pacing.
+Takes about two and a half minutes, mostly the scripts' own request pacing.
 """
 
+import contextlib
+import copy
 import json
+import math
 import os
 import re
 import shutil
@@ -105,6 +108,21 @@ class SyncE2E(unittest.TestCase):
     def state(self, source):
         rows = self.q("SELECT watermark FROM sync_state WHERE source=?", source)
         return rows[0][0] if rows else None
+
+    @contextlib.contextmanager
+    def fresh_db(self, name):
+        """Point the syncs at a new seeded brain.db, and put the fakes back afterwards."""
+        db = self.tmp / name
+        seed_db(db, self.world.now)
+        hub, lem = self.world.hubspot, self.world.lemlist
+        saved = (self.db, copy.deepcopy(hub.forms), copy.deepcopy(hub.submissions), copy.deepcopy(hub.members),
+                 list(lem.activities))
+        self.db = db
+        try:
+            yield db
+        finally:
+            self.db, hub.forms, hub.submissions, hub.members, lem.activities = saved
+            hub.forms_status, hub.lists_shape, hub.members_status = 200, None, {}
 
     def assert_hubspot_read_only(self, reqs):
         hs = [r for r in reqs if r.host == fakes.HUBSPOT_HOST]
@@ -224,6 +242,150 @@ class SyncE2E(unittest.TestCase):
         self.assertIn("already complete", self.outcome("hubspot_contact_backfill")[3])
         self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions")[0][0], 130)
 
+    def test_hubspot_caps_resume(self):
+        """First submission pulls and membership reads stop at their per-run caps and resume."""
+        hub = self.world.hubspot
+        with self.fresh_db("caps.db"):
+            forms = [f["id"] for f in hub.forms]
+            f1 = forms[0]
+            n1 = len(hub.submissions[f1])                      # over 100: three pages of 50
+            self.assertGreater(n1, 100)
+            caps = {"FORM_SUBMISSION_MAX_CALLS": 2, "LIST_MEMBERSHIP_MAX_CALLS": 1}
+
+            # Run 1: two pages of the first form, one page of list 11. Nothing marked done.
+            reqs, _out = self.run_sync("hubspot_sync.py", **caps)
+            self.assert_hubspot_read_only(reqs)
+            self.assertEqual(sum(1 for r in reqs if r.path.startswith("/form-integrations/")), 2)
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", f1)[0][0], 100)
+            self.assertEqual(json.loads(self.state("hubspot_forms") or "{}"), {})
+            self.assertEqual(json.loads(self.state("hubspot_forms_progress"))["cursors"][f1]["after"], "100")
+            ok, _route, _http, detail = self.outcome("hubspot_forms")
+            self.assertEqual(ok, 1)
+            self.assertIn("FORM_SUBMISSION_MAX_CALLS reached", detail)
+            self.assertEqual(sum(1 for r in reqs if r.path.endswith("/memberships")), 1)
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_list_memberships")[0][0], 0)
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_list_memberships_pending "
+                                    "WHERE list_id='11'")[0][0], 250)
+            self.assertEqual(json.loads(self.state("hubspot_lists"))["resume"], {"listId": "11", "after": "250"})
+            self.assertIn("LIST_MEMBERSHIP_MAX_CALLS reached", self.outcome("hubspot_lists")[3])
+
+            # Run 2: both resume from their cursors and finish; the next form and list wait.
+            reqs, _out = self.run_sync("hubspot_sync.py", **caps)
+            subs = [r for r in reqs if r.path.startswith("/form-integrations/")]
+            self.assertEqual((subs[0].path.endswith(f1), subs[0].query.get("after")), (True, "100"))
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", f1)[0][0], n1)
+            self.assertEqual(json.loads(self.state("hubspot_forms"))[f1], hub.submissions[f1][0]["submittedAt"])
+            self.assertNotIn(f1, json.loads(self.state("hubspot_forms_progress"))["cursors"])
+            members = [r for r in reqs if r.path.endswith("/memberships")]
+            self.assertEqual([(r.path, r.query.get("after")) for r in members],
+                             [("/crm/v3/lists/11/memberships", "250")])
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_list_memberships WHERE list_id='11'")[0][0],
+                             len(hub.members["11"]))
+
+            # Runs 3 and 4: the rest. Run 5, uncapped: incremental only, memberships not due.
+            for _ in range(2):
+                self.run_sync("hubspot_sync.py", **caps)
+            self.assertEqual(sorted(json.loads(self.state("hubspot_forms"))), sorted(forms))
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions")[0][0],
+                             sum(len(v) for v in hub.submissions.values()))
+            self.assertEqual(self.q("SELECT list_id, COUNT(*) FROM hubspot_list_memberships GROUP BY list_id"),
+                             [("11", len(hub.members["11"])), ("12", len(hub.members["12"]))])
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_list_memberships_pending")[0][0], 0)
+            self.assertIsNone(json.loads(self.state("hubspot_lists"))["resume"])
+            reqs, _out = self.run_sync("hubspot_sync.py")
+            self.assertEqual(sum(1 for r in reqs if r.path.startswith("/form-integrations/")), 3)  # active forms
+            self.assertFalse([r for r in reqs if r.path.endswith("/memberships")])
+
+    def test_hubspot_odd_answers(self):
+        """A 403 on forms, odd list answers, a failing list, an archived form, bad submittedAt, restart."""
+        hub = self.world.hubspot
+        with self.fresh_db("odd.db") as db:
+            now = self.world.now
+            forms = [f["id"] for f in hub.forms]
+            f2 = forms[1]
+            # Newest submission of f2: no usable submittedAt, and fields over the 8000-char limit.
+            hub.submissions[f2].insert(0, {"conversionId": "bad-ts", "submittedAt": "not-a-number",
+                                           "pageUrl": "https://example.com/p?q=" + "x" * 9000, "pageTitle": "Test",
+                                           "values": [{"name": "message", "value": "y" * 9000}]})
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL="restart")
+            self.assertEqual(self.outcome("hubspot_forms")[0], 1)
+            row = self.q("SELECT submitted_at, page_url, values_json FROM hubspot_form_submissions "
+                         "WHERE conversion_id='bad-ts'")[0]
+            self.assertIsNone(row[0])
+            self.assertEqual(len(row[1]), 8000)
+            self.assertEqual(len(json.loads(row[2])[0]["value"]), 8000)
+            self.assertEqual(json.loads(self.state("hubspot_forms"))[f2],
+                             max(s["submittedAt"] for s in hub.submissions[f2][1:]))
+            lists = self.q("SELECT * FROM hubspot_lists ORDER BY list_id")
+            members = self.q("SELECT * FROM hubspot_list_memberships ORDER BY list_id, record_id")
+            self.assertEqual(len(lists), 3)
+            self.assertTrue(members)
+            self.assertTrue(json.loads(self.state("hubspot_contact_backfill"))["done"])
+
+            # Run 2: forms 403, lists without a lists array. Both fail alone and say so on stdout;
+            # stored lists and memberships stay. restart is not repeated.
+            hub.forms_status = 403
+            hub.lists_shape = "no-lists"
+            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL="restart")
+            self.assertEqual(self.outcome("hubspot")[0], 1)
+            self.assertEqual(self.outcome("hubspot_forms")[:3], (0, "GET /marketing/v3/forms", 403))
+            self.assertEqual(self.outcome("hubspot_lists")[:3], (0, "POST /crm/v3/lists/search", 200))
+            self.assertEqual(self.outcome("hubspot_imports")[0], 1)
+            self.assertIn("EXTRA_PULL_FAILED hubspot_forms GET /marketing/v3/forms 403", out)
+            self.assertIn("EXTRA_PULL_FAILED hubspot_lists POST /crm/v3/lists/search 200", out)
+            self.assertNotIn("EXTRA_PULL_FAILED hubspot_imports", out)
+            self.assertFalse([r for r in reqs if r.path.startswith("/form-integrations/")])
+            self.assertEqual(self.q("SELECT * FROM hubspot_lists ORDER BY list_id"), lists)
+            self.assertEqual(self.q("SELECT * FROM hubspot_list_memberships ORDER BY list_id, record_id"), members)
+            self.assertFalse([r for r in reqs if r.path == "/crm/v3/objects/contacts/search"
+                              and r.json()["filterGroups"][0]["filters"][0]["propertyName"] == "hs_object_id"])
+            self.assertIn("already complete", self.outcome("hubspot_contact_backfill")[3])
+
+            # Run 3: an empty catalog is not mirrored either. f2, archived after its watermark,
+            # is read once more and its new submission lands.
+            hub.forms_status = 200
+            hub.lists_shape = "empty"
+            hub.forms[1]["archived"] = True
+            hub.add_submissions(f2, 1)
+            reqs, out = self.run_sync("hubspot_sync.py")
+            self.assertEqual(self.outcome("hubspot_lists")[:3], (0, "POST /crm/v3/lists/search", 200))
+            self.assertIn("EXTRA_PULL_FAILED hubspot_lists", out)
+            self.assertEqual(self.q("SELECT * FROM hubspot_lists ORDER BY list_id"), lists)
+            self.assertEqual(self.q("SELECT * FROM hubspot_list_memberships ORDER BY list_id, record_id"), members)
+            self.assertEqual(self.outcome("hubspot_forms")[0], 1)
+            self.assertEqual(sum(1 for r in reqs if r.path.endswith(f2)), 1)
+            self.assertEqual(self.q("SELECT archived FROM hubspot_forms WHERE form_id=?", f2)[0][0], 1)
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", f2)[0][0],
+                             len(hub.submissions[f2]))
+
+            # Run 4: both lists were last read 7 hours ago, so both are due; list 12's memberships
+            # fail. List 11 is refreshed and marked; 12 is not.
+            hub.lists_shape = None
+            hub.members_status = {"12": 500}
+            old = fakes.iso(now - timedelta(hours=7)).replace(".000Z", "+00:00")
+            state = dict(json.loads(self.state("hubspot_lists")), refreshed={"11": old, "12": old})
+            con = sqlite3.connect(str(db))
+            con.execute("UPDATE sync_state SET watermark=? WHERE source='hubspot_lists'", (json.dumps(state),))
+            con.commit()
+            con.close()
+            before = state["refreshed"]
+            reqs, out = self.run_sync("hubspot_sync.py")
+            self.assertFalse([r for r in reqs if r.path.endswith(f2)])          # archived: read once more only
+            self.assertEqual(self.outcome("hubspot_lists")[:3], (0, "GET /crm/v3/lists/{listId}/memberships", 500))
+            self.assertIn("EXTRA_PULL_FAILED hubspot_lists GET /crm/v3/lists/{listId}/memberships 500", out)
+            after = json.loads(self.state("hubspot_lists"))["refreshed"]
+            self.assertEqual((after["11"] > before["11"], after["12"]), (True, before["12"]))
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_list_memberships WHERE list_id='12'")[0][0],
+                             len(hub.members["12"]))                            # the old rows stay
+
+            # Run 5: list 12 is retried at once; list 11, just read, is not due.
+            hub.members_status = {}
+            reqs, _out = self.run_sync("hubspot_sync.py")
+            self.assertEqual([r.path for r in reqs if r.path.endswith("/memberships")],
+                             ["/crm/v3/lists/12/memberships"])
+            self.assertEqual(self.outcome("hubspot_lists")[0], 1)
+            self.assertGreater(json.loads(self.state("hubspot_lists"))["refreshed"]["12"], before["12"])
+
     # ------------------------------------------------------------ Lemlist
 
     def test_lemlist(self):
@@ -305,6 +467,66 @@ class SyncE2E(unittest.TestCase):
                              len(self.world.lemlist.activities))
         finally:
             self.db = saved
+
+    def test_lemlist_window_over_budget(self):
+        """A window with more rows than one run's call budget still advances, run by run."""
+        lem = self.world.lemlist
+        with self.fresh_db("window.db") as db:
+            now = self.world.now
+            for k in range(450):
+                lem.activities.append({"_id": "act_bulk_o%d" % k, "type": "emailsOpened", "campaignId": "cam_test1",
+                                       "leadId": "lea_t1_2", "createdAt": fakes.iso(now - timedelta(minutes=10 + k)),
+                                       "leadEmail": "lead@example.com", "bot": False, "isFirst": False})
+            opens = sum(1 for a in lem.activities if a["type"] == "emailsOpened"
+                        and fakes.parse_iso(a["createdAt"]) >= now - timedelta(days=20, hours=1))
+            pages = math.ceil(opens / 100)                                  # 5
+            # Every other type is up to date (one call each); opens are 20 days behind, in one window.
+            marks = {t: fakes.iso(now) for t in ("emailsReplied", "linkedinReplied", "meetingBooked", "emailsSent",
+                                                  "emailsClicked")}
+            marks["emailsOpened"] = fakes.iso(now - timedelta(days=20))
+            con = sqlite3.connect(str(db))
+            con.execute("INSERT INTO sync_state VALUES('lemlist_activities', ?, NULL, 'seed')", (json.dumps(marks),))
+            con.commit()
+            con.close()
+
+            def open_calls(reqs):
+                return [r for r in reqs if r.path == "/api/activities" and r.query["type"] == "emailsOpened"]
+
+            def stored():
+                return self.q("SELECT COUNT(*) FROM lemlist_activities WHERE type='emailsOpened'")[0][0]
+
+            # Budget 7: five calls for the other types, two pages of opens per run.
+            reqs, _out = self.run_sync("lemlist_sync.py", LEMLIST_ACTIVITY_MAX_CALLS=7)
+            first = open_calls(reqs)
+            self.assertEqual([r.query["offset"] for r in first], ["0", "100"])
+            self.assertEqual(stored(), 200)
+            self.assertEqual(json.loads(self.state("lemlist_activities"))["emailsOpened"], marks["emailsOpened"])
+            self.assertEqual(json.loads(self.state("lemlist_activities_resume"))["emailsOpened"]["offset"], 200)
+            ok, _route, _http, detail = self.outcome("lemlist_activities")
+            self.assertEqual(ok, 1)
+            self.assertIn("resuming next run (emailsOpened behind)", detail)
+            self.assertEqual(sum(1 for r in reqs if r.path.endswith("/export/leads")), 2)
+
+            # Run 2: the same window, from offset 200. Leads are not exported again.
+            reqs, _out = self.run_sync("lemlist_sync.py", LEMLIST_ACTIVITY_MAX_CALLS=7)
+            calls = open_calls(reqs)
+            self.assertEqual([r.query["offset"] for r in calls], ["200", "300"])
+            for r in calls:
+                self.assertEqual((r.query["minDate"], r.query["maxDate"]),
+                                 (first[0].query["minDate"], first[0].query["maxDate"]))
+            self.assertEqual(stored(), 400)
+            self.assertFalse([r for r in reqs if "/leads" in r.path])
+            self.assertIn("skipped", self.outcome("lemlist_leads")[3])
+
+            # Run 3: the window finishes and the watermark moves on; leads are due with the interval at 0.
+            reqs, _out = self.run_sync("lemlist_sync.py", LEMLIST_ACTIVITY_MAX_CALLS=7,
+                                       LEMLIST_LEADS_MIN_INTERVAL_MIN=0)
+            self.assertEqual(open_calls(reqs)[0].query["offset"], str((pages - 1) * 100))
+            self.assertEqual(stored(), opens)
+            self.assertGreater(fakes.parse_iso(json.loads(self.state("lemlist_activities"))["emailsOpened"]), now)
+            self.assertEqual(json.loads(self.state("lemlist_activities_resume")), {})
+            self.assertNotIn("resuming", self.outcome("lemlist_activities")[3])
+            self.assertEqual(sum(1 for r in reqs if r.path.endswith("/export/leads")), 2)
 
 
 if __name__ == "__main__":

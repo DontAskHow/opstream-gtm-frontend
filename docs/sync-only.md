@@ -109,30 +109,57 @@ merges them into `hubspot_objects`. Each search asks for `hs_object_id` above
 the last stored id, 200 per call, so the 10,000-result search cap does not
 apply. `sync_state` `hubspot_contact_backfill` holds that id after every
 page, so an interrupted backfill resumes there. When it finishes it is marked
-done and later runs skip it; `HUBSPOT_CONTACT_BACKFILL=restart` starts over.
+done and later runs skip it. `HUBSPOT_CONTACT_BACKFILL=restart` starts over
+once: the value is recorded in that `sync_state` row, so leaving it set does
+not restart every run. Set a new value (`restart:2`, say) to start over again.
 It leaves associations and the contacts watermark alone. 10,000 contacts take
 about 50 searches.
 
 After the objects, three extra pulls run every time. Each writes its own
 `sync_outcomes` row (`hubspot_forms`, `hubspot_lists`, `hubspot_imports`,
 plus `hubspot_contact_backfill` when set). A failure in one, such as a 403
-for a scope the app lacks, is recorded there with its route and status. The
+for a scope the app lacks, is recorded there with its route and status, and
+logged to stdout (CloudWatch) as one line:
+
+    EXTRA_PULL_FAILED <name> <route> <status>
+
+for example `EXTRA_PULL_FAILED hubspot_imports GET /crm/v3/imports 403`. The
 `hubspot` row stays ok, the other pulls still run, and the exit code stays 0.
-Their tables are created up front, so they exist even when the pull fails.
+Lemlist's `lemlist_activities` and `lemlist_leads` log the same line. Their
+tables are created up front, so they exist even when the pull fails.
 
 | Table | Source | Refresh |
 | --- | --- | --- |
 | `hubspot_forms` | `GET /marketing/v3/forms`, `formTypes=all`, active then `archived=true` | every run (one call per 100 forms) |
-| `hubspot_form_submissions` | `GET /form-integrations/v1/submissions/forms/{guid}`, 50 a page, newest first | first run: all pages. Later: stops at the form's watermark |
+| `hubspot_form_submissions` | `GET /form-integrations/v1/submissions/forms/{guid}`, 50 a page, newest first | first pull: all pages, `FORM_SUBMISSION_MAX_CALLS` a run (default 200). Later: stops at the form's watermark |
 | `hubspot_lists` | `POST /crm/v3/lists/search`, 500 a page | every run, mirrored (deleted lists go) |
-| `hubspot_list_memberships` | `GET /crm/v3/lists/{id}/memberships`, 250 a page, contact lists (`0-1`) only | at most every `LIST_MIN_INTERVAL_MIN` (default 360) |
+| `hubspot_list_memberships` | `GET /crm/v3/lists/{id}/memberships`, 250 a page, contact lists (`0-1`) only | each list at most every `LIST_MIN_INTERVAL_MIN` (default 360); `LIST_MEMBERSHIP_MAX_CALLS` pages a run (default 400) |
 | `hubspot_imports` | `GET /crm/v3/imports` | every run |
 
 The per-form watermark (`sync_state` `hubspot_forms`) is the newest
-`submittedAt` in ms. Archived forms are read once. A form that fails keeps its
-watermark, the others go on, and `hubspot_forms` records the failure.
-Submissions are keyed by `conversionId`, or by a hash when it is missing.
-`contact_email` is the `email` field value.
+`submittedAt` in ms. Forms without one are read in full, newest first; these
+first pulls share `FORM_SUBMISSION_MAX_CALLS` pages a run. A form cut short
+keeps its paging cursor in `sync_state` `hubspot_forms_progress` and the next
+run carries on from there. An archived form is read once more after it is
+archived (catching submissions since its watermark), then no longer. A form
+that fails keeps its watermark (and drops its cursor, so its pull starts
+over); the others go on, and `hubspot_forms` records the failure. A
+submission with a missing or non-numeric `submittedAt` is stored with
+`submitted_at` NULL and does not move the watermark. Submissions are keyed by
+`conversionId`, or by a hash when it is missing. `contact_email` is the
+`email` field value. Field values, `page_url`, and `page_title` are cut at
+8000 characters, like other raw fields.
+
+The list catalog is mirrored only from a complete answer. A page without a
+`lists` array, a `hasMore` without a later offset, or an empty catalog while
+lists are stored (or `total` > 0) fails `hubspot_lists` and leaves the stored
+lists and memberships as they were. Each contact list's memberships are read
+when that list's last complete read is older than `LIST_MIN_INTERVAL_MIN`.
+`sync_state` `hubspot_lists` holds that time per list, so a list whose read
+failed is retried next run while the others wait. Membership pages share
+`LIST_MEMBERSHIP_MAX_CALLS` a run. A list cut short is staged in
+`hubspot_list_memberships_pending`, its cursor is kept, and the next run
+resumes it. Its stored rows are replaced only when its read is complete.
 
 ## Lemlist leads and activities
 
@@ -142,18 +169,25 @@ and emailsOpened, across all campaigns. Each request covers a 30-day
 `minDate`/`maxDate` window and pages by `offset`, 100 a page. `sync_state`
 `lemlist_activities` holds, per type, the end of the last complete window, and
 later runs re-read from an hour before it (about 6 calls). The first pull
-starts at the oldest campaign. It stops after `LEMLIST_ACTIVITY_MAX_CALLS`
-calls (default 300, about 2.5 min) and resumes next run. Reply types go first.
+starts at the oldest campaign. A run stops after `LEMLIST_ACTIVITY_MAX_CALLS`
+calls (default 300, about 2.5 min). A window it cut short is kept in
+`sync_state` `lemlist_activities_resume` with its dates and offset, and the
+next run re-reads that same window from that offset, so a window with more
+rows than one run can page through still advances. Reply types go first.
 Reply activities keep their full `raw_json` (message preview and text), so
 later code can tell auto-replies. Other types drop the nested `lead` object.
 
-`lemlist_leads` has one row per lead per campaign, replaced each run, from
-`GET /api/v2/campaigns/{id}/export/leads?state=all&format=json`. When that
+`lemlist_leads` has one row per lead per campaign from
+`GET /api/v2/campaigns/{id}/export/leads?state=all&format=json`. A campaign's
+rows are replaced at most every `LEMLIST_LEADS_MIN_INTERVAL_MIN` (default 360;
+0 exports every run). `sync_state` `lemlist_leads` holds the time of each
+campaign's last complete export, so a campaign that failed is tried again next
+run. When that
 is refused, the rows come from `GET /api/campaigns/{id}/leads/`, paged by
 `offset` (or by `next` cursor). That route has no email or domain.
 `contacted_at`, `opened_at`, `clicked_at`, `replied_at`, and
 `meeting_booked_at` are the first matching activity for that lead id in that
-campaign.
+campaign, updated every run from the stored activities.
 
 Both write their own `sync_outcomes` rows (`lemlist_activities`,
 `lemlist_leads`) and fail alone, as on HubSpot. A 429 is retried after
@@ -162,12 +196,14 @@ Both write their own `sync_outcomes` rows (`lemlist_activities`,
 ## Run time
 
 Incremental extra calls per run: HubSpot about 4 plus one per active form
-(at 0.15 s each, 50 forms add about 8 s), and memberships every 6 h at one
-call per 250 members. Lemlist adds one export per campaign and about 6
-activity calls (0.5 s each, so 30 campaigns add about 18 s). The one-off
-pulls are bounded: the first submission pull reads 50 per call, the first
-activity pull stops at `LEMLIST_ACTIVITY_MAX_CALLS`, and the contact backfill
-runs only with its variable set.
+(at 0.15 s each, 50 forms add about 8 s), and each list's memberships every
+6 h at one call per 250 members, at most `LIST_MEMBERSHIP_MAX_CALLS` (400,
+about 1 min) a run. Lemlist adds about 6 activity calls, and every 6 h one
+export per campaign (each can take up to its 120 s timeout). The one-off pulls
+are capped per run and resume: the first submission pull at
+`FORM_SUBMISSION_MAX_CALLS` (200 pages of 50, about 30 s), the first activity
+pull at `LEMLIST_ACTIVITY_MAX_CALLS`. The contact backfill runs only with its
+variable set.
 
 ## Tests
 
@@ -178,12 +214,17 @@ api.hubapi.com and api.lemlist.com. That proxy serves those hosts itself with
 a CA made for the run (`SSL_CERT_FILE`). Secrets Manager is faked through
 `AWS_ENDPOINT_URL_SECRETS_MANAGER`. The tests check tables, row counts,
 watermarks, and `sync_outcomes` across repeated runs. They cover paging,
-429s, archived forms, a missing scope, resuming an interrupted backfill and
-activity pull, and that only GETs and the read-only POSTs were sent.
+429s, archived forms (including one archived after its watermark), a missing
+scope (403 on imports and on forms), list answers without a `lists` array or
+with no lists, a list whose memberships fail, a non-numeric `submittedAt`,
+the per-run caps on submissions, memberships and activities (including one
+window larger than the budget) resuming, the leads interval, a one-time
+backfill restart, the `EXTRA_PULL_FAILED` lines, and that only GETs and the
+read-only POSTs were sent.
 
     python3 -m unittest discover -s refresh/tests -v
 
-They need Python 3 with boto3 and the `openssl` CLI, and take about 1.5
+They need Python 3 with boto3 and the `openssl` CLI, and take about 2.5
 minutes, mostly the scripts' own pacing. Nothing leaves the machine.
 
 ## GA4
