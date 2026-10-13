@@ -285,6 +285,22 @@ export function dataQuality({ sheetReview, deals, source }) {
   };
 }
 
+// ---------- Lead Tracker counts ----------
+
+// sheet-review.json leads[] are the rows of the pipeline Sheet's Lead Tracker tab. Only those rows
+// count as leads (the Sheet is the source of truth), so only counts leave the build, never rows.
+// mql: the row has an MQL date. unowned: the owner cell is blank or a placeholder such as "not assigned".
+const NO_OWNER = new Set(['', 'notassigned', 'unassigned', 'noowner', 'none', 'na', 'tbd']);
+export function leadTrackerCounts(sheetReview) {
+  if (!Array.isArray(sheetReview?.leads)) return null;
+  const rows = sheetReview.leads.filter((l) => l && typeof l === 'object');
+  return {
+    total: rows.length,
+    mql: rows.filter((l) => l.mql != null && String(l.mql).trim() !== '').length,
+    unowned: rows.filter((l) => NO_OWNER.has(String(l.owner ?? '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, ''))).length,
+  };
+}
+
 // ---------- everything ----------
 
 export function buildData(inp) {
@@ -381,7 +397,7 @@ export function buildData(inp) {
     segmentField: SEGMENT_FIELD,
     times: {
       records: str(records?.generatedAt), marketing: str(mk.generatedAt),
-      outbound: str(mk.outbound?.fetchedAt), web: str(mk.web?.fetchedAt), brief: str(brief?.generatedAt),
+      outbound: str(mk.outbound?.fetchedAt), web: str(mk.web?.fetchedAt), ai: str(mk.ai?.fetchedAt), brief: str(brief?.generatedAt),
       operator: str(operator?.generatedAt), sheet: str(sheetReview?.generatedAt), recon: str(recon?.fetchedAt),
     },
     sources: arr(mk.sources).map((s) => ({ source: str(s.source), label: str(s.label) ?? str(s.source), ok: !!s.ok, at: str(s.at), lastOkAt: str(s.lastOkAt), detail: str(s.detail), live: !!s.live, fromSnapshot: !!s.fromSnapshot })),
@@ -400,6 +416,9 @@ export function buildData(inp) {
         opened: num(c.opened), replied: num(c.replied), bounced: num(c.bounced), meetings: num(c.meetings),
       })),
     } : null,
+    // Otterly: only the share-of-voice figure (percent) and whether the source is connected.
+    ai: mk.ai ? { connected: mk.ai.connected === true, shareOfVoice: num(mk.ai.shareOfVoice) } : null,
+    leadTracker: leadTrackerCounts(sheetReview),
     ads: arr(mk.ads).map((a) => ({
       name: str(a.name), spend: num(a.spend), impressions: num(a.impressions), clicks: num(a.clicks),
       conversions: num(a.conversions), window: str(a.window),

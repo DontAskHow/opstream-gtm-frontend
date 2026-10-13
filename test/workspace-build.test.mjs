@@ -61,8 +61,15 @@ function fixtures() {
       { id: '1', name: 'Acme Widgets - New Deal', stage: 'SQL', amount: 100000, probability: 5 },
       { id: '2', name: 'Globex - New Deal', stage: 'Demo meeting', amount: 50000, probability: 25 },
       { id: '5', name: 'Initech - New Deal', stage: 'Demo meeting', amount: 80000, probability: 25 },
+    ], leads: [
+      { company: 'Acme Widgets', owner: 'Pat Example', lead: '2026-09-01', mql: '2026-09-05', sql: null },
+      { company: 'Globex', owner: '', lead: '2026-09-02', mql: null, sql: null },
+      { company: 'Initech', owner: 'Not Assigned', lead: '2026-09-03', mql: ' ', sql: null },
+      { company: 'Lead Only One', owner: 'n/a', lead: '2026-09-04', mql: '2026-09-10', sql: '2026-09-12' },
+      { company: 'Lead Only Two', owner: 'Sam Sample', lead: null, mql: null, sql: null },
     ] },
     'marketing.json': { generatedAt: GEN, outbound: { fetchedAt: GEN, campaignStats: [{ campaignId: 'cam1', name: 'Example sequence', status: 'running', sent: 10, delivered: 10, opened: 0, replied: 1, meetings: 0 }] },
+      ai: { connected: true, source: 'Otterly', shareOfVoice: 9, prompts: 5, fetchedAt: GEN },
       ads: [{ name: 'Example Ads', spend: 100, clicks: 10, conversions: 1 }], sources: [{ source: 'hubspot', label: 'HubSpot', ok: true, at: GEN }] },
     'agent-brief.json': { generatedAt: GEN, whatsNew: ['One', 'Two'], topActions: [{ title: 'Three' }], watchOuts: ['Four', 'Five', 'Six'] },
     'operator-prep.json': { generatedAt: GEN, brief: { meetings: { items: [] } }, prep: [{ meetingId: 'm1', companyId: 'c1', title: 'Acme intro', start: '2026-10-14T16:00:00Z', attendees: [], unresolvedActions: [], suggestedAgenda: [] }] },
@@ -114,6 +121,11 @@ test('HubSpot export drives the pipeline; pipelines never mix; expected figures 
     assert.equal(data.companies[0].notes[0].text, 'Asked for pricing');
     assert.equal(data.companies[1].segment, 'Industry not set');
     assert.equal(data.operator.prep.length, 1);
+    // Lead Tracker rows become three counts (no rows reach the page); Otterly only its share of voice.
+    assert.deepEqual(data.leadTracker, { total: 5, mql: 2, unowned: 3 });
+    assert.deepEqual(data.ai, { connected: true, shareOfVoice: 9 });
+    assert.equal(data.times.ai, GEN);
+    assert.doesNotMatch(readFileSync(join(fx.out, 'data.js'), 'utf8'), /Lead Only (One|Two)/);
     // Output files, and no way to talk to the network.
     for (const f of ['index.html', 'app.js', 'styles.css', 'vendor/gtm-charts.js', 'logo.svg', 'transcripts/recording-1.js', '.gtm-workspace-build']) {
       assert.ok(existsSync(join(fx.out, f)), f);

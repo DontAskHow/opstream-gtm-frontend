@@ -1133,6 +1133,7 @@
     if (ref.kind === 'account') return companyById.has(ref.id) ? `#/account/${encodeURIComponent(ref.id)}` : null;
     if (ref.kind === 'stage') return `#/pipeline${qs({ pipe: defaultPipe, stage: ref.stage })}`;
     if (ref.kind === 'pipeline') return pipelineByLabel.has(ref.pipe) ? `#/pipeline${qs({ pipe: ref.pipe })}` : null;
+    if (ref.kind === 'metric') return (GI.METRICS[ref.key] && GI.METRICS[ref.key].route) || null;
     return null;
   }
   const panelEl = (key) => {
@@ -1198,11 +1199,16 @@
     return frag;
   }
 
-  const goalValue = (key, v) => (GI.METRICS[key].format === 'money' ? moneyFull(v) : int(v));
+  const goalValue = (key, v) => {
+    const f = GI.METRICS[key].format;
+    return f === 'money' ? moneyFull(v) : f === 'pct' ? (isNum(v) ? `${v.toFixed(1)}%` : DASH) : int(v);
+  };
   const goalTarget = (g) => `${GI.METRICS[g.metric].better === 'down' ? 'at most ' : ''}${goalValue(g.metric, g.target)}`;
+  // The metric line under a goal; a competitor goal names its competitor.
+  const goalMetricLabel = (g) => (GI.METRICS[g.metric].competitor ? `Closed lost to ${g.competitor}` : GI.METRICS[g.metric].label);
   function goalTile(g, values) {
     const m = GI.METRICS[g.metric];
-    const p = GI.goalProgress(g, values[g.metric]);
+    const p = GI.goalProgress(g, GI.goalValue(g, D, values));
     const t = el('div', 'tile goal');
     t.append(el('div', 'label', g.label));
     const v = el('div', 'value', p.value == null ? DASH : goalValue(g.metric, p.value));
@@ -1217,13 +1223,17 @@
     t.append(bar);
     const foot = el('div', 'foot');
     const ref = { kind: 'metric', key: g.metric };
-    foot.append(refNode(ref, m.label) || el('span', null, m.label));
+    foot.append(refNode(ref, goalMetricLabel(g)) || el('span', null, goalMetricLabel(g)));
     if (g.by) {
       foot.append(` · by ${fmtDay(g.by)}`);
       if (g.by < todayYmd() && p.met === false) foot.append(' ', el('span', 'flag', 'passed'));
     }
     if (p.met) foot.append(' ', el('span', 'pill green', 'met'));
     t.append(foot);
+    if (g.metric === 'commit_stage_amount') {
+      const st = GI.commitStages(D).map((x) => x.label);
+      if (st.length) t.append(el('div', 'foot muted', `${st.join(', ')} (≥ ${Math.round(GI.COMMIT_PROBABILITY * 100)}% probability)`));
+    }
     if (g.note) t.append(el('div', 'foot muted', g.note));
     citeHover(t, () => [ref]);
     return t;

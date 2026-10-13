@@ -65,12 +65,24 @@
         "additionalProperties": false,
         "required": ["metric", "target", "label"],
         "properties": {
-          "metric": { "enum": ["open_count", "open_amount", "weighted", "on_hold_count", "on_hold_amount", "closed_lost_count", "closed_won_count", "closed_won_amount", "meetings_this_month", "meetings_upcoming"] },
-          "target": { "type": "number", "minimum": 0 },
+          "metric": { "enum": ["open_count", "open_amount", "weighted", "on_hold_count", "on_hold_amount", "closed_lost_count", "closed_won_count", "closed_won_amount", "meetings_this_month", "meetings_upcoming", "commit_stage_amount", "lead_to_mql_rate", "unowned_lead_count", "outbound_reply_rate", "ai_share_of_voice", "closed_lost_to_competitor_count"] },
+          "target": { "description": "In the metric's unit: dollars, a count, or a percent 0–100.", "type": "number", "minimum": 0 },
           "label": { "type": "string", "minLength": 1, "maxLength": 200 },
           "by": { "description": "Calendar date YYYY-MM-DD.", "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-          "note": { "type": "string", "minLength": 1, "maxLength": 400 }
-        }
+          "note": { "type": "string", "minLength": 1, "maxLength": 400 },
+          "competitor": { "description": "Required with closed_lost_to_competitor_count and not allowed with any other metric. Matched as a whole word, in any case, in each closed-lost deal's lost reason.", "type": "string", "minLength": 1, "maxLength": 100 }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "metric": { "const": "closed_lost_to_competitor_count" } }, "required": ["metric"] },
+            "then": { "required": ["competitor"] },
+            "else": { "not": { "required": ["competitor"] } }
+          },
+          {
+            "if": { "properties": { "metric": { "enum": ["lead_to_mql_rate", "outbound_reply_rate", "ai_share_of_voice"] } }, "required": ["metric"] },
+            "then": { "properties": { "target": { "maximum": 100 } } }
+          }
+        ]
       }
     }
   }

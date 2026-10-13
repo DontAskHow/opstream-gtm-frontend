@@ -25,7 +25,8 @@ The GTM workspace's **Analysis** panel (overview page) shows one JSON file, `/in
   "data_quality_flags": ["A plain-text flag", {"deal": "Example", "issue": "amount missing"}],
   "changed_since_last": "What changed since the previous file (a string, or an array of strings).",
   "goals": [
-    {"metric": "open_amount", "target": 500000, "label": "Grow the open book", "by": "2026-12-31", "note": "Optional context."}
+    {"metric": "open_amount", "target": 500000, "label": "Grow the open book", "by": "2026-12-31", "note": "Optional context."},
+    {"metric": "closed_lost_to_competitor_count", "competitor": "Example Rival", "target": 2, "label": "Lose less to Example Rival"}
   ]
 }
 ```
@@ -46,10 +47,11 @@ The GTM workspace's **Analysis** panel (overview page) shows one JSON file, `/in
 | `changed_since_last` | Required. A string, or an array of ≤ 50 strings. Shown as one muted line under the insights. |
 | `goals` | Optional array of ≤ 12 goals. Files without it are valid. |
 | `goals[].metric` | Required. One of the metric keys below. |
-| `goals[].target` | Required number ≥ 0, in the metric's unit (dollars or a count). |
+| `goals[].target` | Required number ≥ 0, in the metric's unit: dollars, a count, or a percent (0–100, so at most 100) for the rate metrics. |
 | `goals[].label` | Required, ≤ 200 characters. |
 | `goals[].by` | Optional calendar date, `YYYY-MM-DD`. Shown as "by …"; flagged "passed" when the date is past and the goal isn't met. |
 | `goals[].note` | Optional, ≤ 400 characters. |
+| `goals[].competitor` | Required when `metric` is `closed_lost_to_competitor_count`, and rejected with any other metric. ≤ 100 characters. |
 
 ### Goal metrics
 
@@ -67,6 +69,20 @@ Each goal's current value is computed in the page from the same data the overvie
 | `closed_won_amount` | Their amount | ≥ target | — |
 | `meetings_this_month` | CRM meetings starting this calendar month (PT), past and upcoming | ≥ target | — |
 | `meetings_upcoming` | CRM meetings starting from now on | ≥ target | — |
+| `commit_stage_amount` | Open amount of the open, non-On-Hold deals in the headline pipeline's commit stages (see below) | ≥ target | — |
+| `lead_to_mql_rate` | Percent of Lead Tracker rows with an MQL date (see below) | ≥ target | — |
+| `unowned_lead_count` | Lead Tracker rows with no owner (see below) | ≤ target | — |
+| `outbound_reply_rate` | Lemlist replies ÷ sends × 100 over the **running** campaigns that report both | ≥ target | — |
+| `ai_share_of_voice` | Otterly AI share of voice (percent), only while Otterly is connected | ≥ target | — |
+| `closed_lost_to_competitor_count` | Closed-lost deals in the headline pipeline whose lost reason names `competitor` | ≤ target | — |
+
+Rules behind the new metrics. A value the data can't give shows "—" and the goal is neither met nor missed.
+
+- **Commit stages** are picked from HubSpot's stage metadata, never by name: every open stage of the headline pipeline with a stage probability of at least 0.7 (`COMMIT_PROBABILITY`). On Hold deals are left out, as on the Open amount tile. With no such stage the value is unknown. The goal shows which stages it counted.
+- **Leads** are the rows of the pipeline Sheet's Lead Tracker tab (`sheet-review.json` `leads[]`). Only rows in that Sheet count as leads. HubSpot contacts don't. The build keeps three counts (`leadTracker` in `data.js`: rows, rows with an MQL date, rows without an owner), never the rows. A row is unowned when its owner cell is blank or a placeholder such as "not assigned", "unassigned", "none" or "n/a". Rates are rounded to 0.1 percent.
+- **Outbound reply rate** counts running campaigns only, so paused and draft campaigns don't hold the current rate down or up. Campaigns that don't report sends or replies are skipped, and with no sends the rate is unknown.
+- **AI share of voice** is Otterly's `shareOfVoice` as of its last successful fetch (`times.ai`). It's unknown when the Otterly source isn't connected.
+- **Closed lost to a competitor** matches `competitor` as a whole word or phrase, in any case, inside each closed-lost deal's lost reason (or a `competitor` field, if the deal carries one). "Rival" matches "went with rival" but not "rivalry". The count has no headline tile, but it cites the lost-reasons panel.
 
 Every string must be non-empty. Unknown fields at any level are rejected, so a typo such as `why_it_maters` fails loudly instead of disappearing. The whole file must be ≤ 256 KB.
 
@@ -77,7 +93,7 @@ When the page renders a file, it looks for things the text names that the page a
 - **Deals and accounts** by name (an account's legal suffix such as "Inc." is optional). These link to `#/deal/<id>` and `#/account/<id>`.
 - **Stages** of the headline pipeline. Open stages link to the pipeline view filtered to that stage. On Hold, lost and won stages cite the matching metric.
 - **Pipelines** by name. The headline pipeline points at its panel, and the others link to their pipeline view.
-- **Headline metrics**, by phrase ("open amount", "weighted pipeline", "open deals", "closed lost", …), by their data path (`headline.active.openAmount`), or by the figure exactly as the page formats it. **Overview panels** are matched by name ("lost reasons", "close date", "meetings over time", …). Clicking a metric or panel reference scrolls to it and outlines it briefly. Hovering an insight outlines everything it cites.
+- **Headline metrics**, by phrase ("open amount", "weighted pipeline", "open deals", "closed lost", "commit stage", "reply rate", …), by their data path (`headline.active.openAmount`), or by the figure exactly as the page formats it. **Overview panels** are matched by name ("lost reasons", "close date", "meetings over time", …). Clicking a metric or panel reference scrolls to it and outlines it briefly ("reply rate" opens the campaigns page instead). Hovering an insight outlines everything it cites.
 
 A one-word name or stage only matches with the same capitalization. Longer names match in any case. A name that two different things share is never linked. Text that matches nothing stays plain.
 

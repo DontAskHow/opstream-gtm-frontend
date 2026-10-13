@@ -11,18 +11,20 @@
   const LIMITS = {
     fileBytes: 262144, headline: 400, items: 20, title: 200, evidence: 2000, why: 1200, play: 1200,
     owner: 300, citations: 20, citation: 1000, flags: 50, flag: 1000, changes: 50, change: 2000,
-    goals: 12, goalLabel: 200, goalNote: 400,
+    goals: 12, goalLabel: 200, goalNote: 400, competitor: 100,
   };
   const CONFIDENCE = ['low', 'medium', 'high'];
   const TOP_KEYS = ['generated_at', 'headline', 'insights', 'data_quality_flags', 'changed_since_last', 'goals'];
   const ITEM_KEYS = ['title', 'evidence', 'citations', 'why_it_matters', 'recommended_play', 'owner', 'confidence'];
-  const GOAL_KEYS = ['metric', 'target', 'label', 'by', 'note'];
+  const GOAL_KEYS = ['metric', 'target', 'label', 'by', 'note', 'competitor'];
   const TZ = 'America/Phoenix';
 
   // Page metrics a goal can track (goals[].metric), each computed from
   // GTM_DATA the way the overview shows it (metricValues). tile: the headline
-  // tile it appears on; panel: the overview panel that shows it otherwise.
+  // tile it appears on; panel: the overview panel that shows it otherwise;
+  // route: the page that shows it when no overview panel does.
   // better: whether a goal is met at or above the target (up) or at or below it (down).
+  // format pct: a percent 0–100 (the target too). competitor: the goal names one (goals[].competitor).
   const METRICS = {
     open_count: { label: 'Open deals', format: 'int', better: 'up', tile: 'Open deals' },
     open_amount: { label: 'Open amount', format: 'money', better: 'up', tile: 'Open amount' },
@@ -34,7 +36,15 @@
     closed_won_amount: { label: 'Closed-won amount', format: 'money', better: 'up' },
     meetings_this_month: { label: 'Meetings this month', format: 'int', better: 'up', panel: 'meetings' },
     meetings_upcoming: { label: 'Upcoming meetings', format: 'int', better: 'up', panel: 'meetings' },
+    commit_stage_amount: { label: 'Commit-stage amount', format: 'money', better: 'up', panel: 'stages' },
+    lead_to_mql_rate: { label: 'Lead → MQL rate', format: 'pct', better: 'up' },
+    unowned_lead_count: { label: 'Unowned leads', format: 'int', better: 'down' },
+    outbound_reply_rate: { label: 'Outbound reply rate', format: 'pct', better: 'up', route: '#/campaigns' },
+    ai_share_of_voice: { label: 'AI share of voice', format: 'pct', better: 'up' },
+    closed_lost_to_competitor_count: { label: 'Closed lost to a competitor', format: 'int', better: 'down', panel: 'lost', competitor: true },
   };
+  // Commit stages: the headline pipeline's open stages at or above this HubSpot stage probability (0–1).
+  const COMMIT_PROBABILITY = 0.7;
   const has = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);
   const validDay = (v) => {
     if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
@@ -104,8 +114,12 @@
         const p = `goals[${i}].`;
         if (!isObj(g)) { errors.push(`goals[${i}]: must be an object`); return; }
         unknown(g, GOAL_KEYS, p);
-        if (!has(METRICS, g.metric)) errors.push(`${p}metric: must be one of ${Object.keys(METRICS).join(', ')}`);
+        const m = has(METRICS, g.metric) ? METRICS[g.metric] : null;
+        if (!m) errors.push(`${p}metric: must be one of ${Object.keys(METRICS).join(', ')}`);
         if (typeof g.target !== 'number' || !Number.isFinite(g.target) || g.target < 0) errors.push(`${p}target: must be a number ≥ 0`);
+        else if (m && m.format === 'pct' && g.target > 100) errors.push(`${p}target: ${g.metric} is a percent, so at most 100`);
+        if (m && m.competitor) str(g.competitor, p + 'competitor', LIMITS.competitor);
+        else if (g.competitor !== undefined) errors.push(`${p}competitor: only allowed with a metric that names a competitor (${competitorMetrics().join(', ')})`);
         str(g.label, p + 'label', LIMITS.goalLabel);
         if (g.by !== undefined && !validDay(g.by)) errors.push(`${p}by: must be a calendar date YYYY-MM-DD`);
         str(g.note, p + 'note', LIMITS.goalNote, false);
@@ -113,6 +127,8 @@
     }
     return { ok: errors.length === 0, errors };
   }
+
+  const competitorMetrics = () => Object.keys(METRICS).filter((k) => METRICS[k].competitor);
 
   // An object flag is shown as "key: value · key: value" (text only).
   function flagText(f) {
@@ -169,7 +185,66 @@
       if (t.getTime() >= now.getTime()) upcoming++;
     }
     if (Array.isArray(d.companies)) { out.meetings_this_month = thisMonth; out.meetings_upcoming = upcoming; }
+    // Open, non-On-Hold headline deals in a commit stage. No commit stage in the metadata: unknown.
+    const commit = commitStages(d);
+    if (h && commit.length) {
+      const ids = new Set(commit.map((s) => s.id));
+      const xs = arr(d.deals).filter((x) => x && x.open && !x.onHold && x.pipeline === h.pipeline && ids.has(x.stageId));
+      const priced = xs.filter((x) => num(x.amount) != null);
+      out.commit_stage_amount = !xs.length ? 0 : priced.length ? priced.reduce((a, x) => a + x.amount, 0) : null;
+    }
+    // Lead Tracker rows only (the pipeline Sheet's own list of leads).
+    const lt = d.leadTracker;
+    if (lt && num(lt.total) != null) {
+      out.lead_to_mql_rate = lt.total > 0 && num(lt.mql) != null ? pct1(lt.mql / lt.total) : null;
+      out.unowned_lead_count = num(lt.unowned);
+    }
+    // Running campaigns that report both sent and replied.
+    if (d.outbound) {
+      const run = arr(d.outbound.campaigns).filter((c) => c && c.status === 'running' && num(c.sent) != null && num(c.replied) != null);
+      const sent = run.reduce((a, c) => a + c.sent, 0);
+      out.outbound_reply_rate = sent > 0 ? pct1(run.reduce((a, c) => a + c.replied, 0) / sent) : null;
+    }
+    if (d.ai && d.ai.connected === true) out.ai_share_of_voice = num(d.ai.shareOfVoice);
     return out;
+  }
+  // A fraction as a percent rounded to 0.1, so the shown figure and the goal check agree.
+  const pct1 = (f) => Math.round(f * 1000) / 10;
+
+  // The headline pipeline's commit stages (open, probability ≥ COMMIT_PROBABILITY), from HubSpot stage metadata.
+  function commitStages(data) {
+    const d = data || {};
+    if (!d.headline || d.pipelineSource !== 'hubspot') return [];
+    const p = arr(d.pipelines).find((x) => x && x.label === d.headline.pipeline);
+    return arr(p && p.stages).filter((s) => s && !s.closed && num(s.probability) != null && s.probability >= COMMIT_PROBABILITY);
+  }
+
+  // Whole-word, case-insensitive: the term must not continue into a neighbouring letter or digit.
+  function mentions(text, term) {
+    if (typeof text !== 'string' || typeof term !== 'string') return false;
+    const t = fold(term.trim().replace(/\s+/g, ' '));
+    const hay = fold(text.replace(/\s+/g, ' '));
+    if (!t) return false;
+    const edgeL = WORD.test(t[0]), edgeR = WORD.test(t[t.length - 1]);
+    for (let i = hay.indexOf(t); i !== -1; i = hay.indexOf(t, i + 1)) {
+      const j = i + t.length;
+      if (edgeL && i > 0 && WORD.test(hay[i - 1])) continue;
+      if (edgeR && j < hay.length && WORD.test(hay[j])) continue;
+      return true;
+    }
+    return false;
+  }
+
+  // Current value for one goal: the metric's value, or for a competitor goal the
+  // headline pipeline's closed-lost deals whose lost reason (or competitor field) names it.
+  function goalValue(goal, data, values) {
+    const m = goal && has(METRICS, goal.metric) ? METRICS[goal.metric] : null;
+    if (!m) return null;
+    if (!m.competitor) return (values || metricValues(data))[goal.metric];
+    const d = data || {};
+    if (!d.closedLost || d.pipelineSource !== 'hubspot' || typeof goal.competitor !== 'string') return null;
+    const head = headPipe(d);
+    return arr(d.deals).filter((x) => x && x.lost && x.pipeline === head && (mentions(x.lostReason, goal.competitor) || mentions(x.competitor, goal.competitor))).length;
   }
 
   // Progress of one goal: ratio is the bar fill (0–1); over means a down goal
@@ -196,6 +271,8 @@
     closed_won_count: ['closed won', 'closed-won', 'won deals'],
     closed_won_amount: ['closed won amount', 'closed-won amount', 'won amount'],
     meetings_this_month: ['meetings this month'],
+    commit_stage_amount: ['commit stage', 'commit stages', 'commit-stage amount', 'commit amount'],
+    outbound_reply_rate: ['reply rate', 'outbound reply rate'],
   };
   const PANELS = {
     headline: { title: /^New-business pipeline$/, terms: ['new-business pipeline', 'new business pipeline'] },
@@ -257,9 +334,10 @@
     }
     for (const [key, terms] of Object.entries(METRIC_TERMS)) for (const t of terms) add(t, { kind: 'metric', key }, 1, /\./.test(t));
     for (const [key, p] of Object.entries(PANELS)) for (const t of p.terms) add(t, { kind: 'panel', key }, 1, false);
+    // The commit-stage figure is often one deal's amount too, so it is not matched by figure.
     const values = metricValues(d, opts.now);
     for (const [key, m] of Object.entries(METRICS)) {
-      if (m.format !== 'money' || !values[key]) continue;
+      if (m.format !== 'money' || !values[key] || key === 'commit_stage_amount') continue;
       for (const fmt of arr(opts.money)) add(fmt(values[key]), { kind: 'metric', key }, 5, true);
     }
     const terms = [...best.values()].filter((e) => !e.amb).sort((a, b) => b.t.length - a.t.length || b.prio - a.prio);
@@ -289,7 +367,10 @@
     return out.sort((a, b) => a.start - b.start);
   }
 
-  const api = { validate, parse, flagText, LIMITS, CONFIDENCE, METRICS, PANELS, metricValues, goalProgress, refIndex, findRefs, refKey };
+  const api = {
+    validate, parse, flagText, LIMITS, CONFIDENCE, METRICS, PANELS, COMMIT_PROBABILITY,
+    metricValues, commitStages, goalValue, goalProgress, mentions, refIndex, findRefs, refKey,
+  };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.GtmInsights = api;
 })(typeof window !== 'undefined' ? window : this);

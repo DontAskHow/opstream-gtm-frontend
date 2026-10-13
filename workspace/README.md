@@ -35,8 +35,8 @@ The page's CSP sets `connect-src 'self'`. The app makes only two same-origin rea
 
 - `--data`:
   - `records.json`: companies with deals, contacts (counted only), meetings, notes and recordings (`summary`, `actions`), plus owners.
-  - `marketing.json`: `outbound.campaignStats`, `ads`, `spend`, `shows.items`/`eventRoi` and `sources`.
-  - `agent-brief.json`, `sheet-review.json` (the master Sheet's open deal rows). `run-facts.json` is not read.
+  - `marketing.json`: `outbound.campaignStats`, `ads`, `spend`, `shows.items`/`eventRoi`, `sources`, and from `ai` (Otterly) only `connected` and `shareOfVoice`.
+  - `agent-brief.json`, `sheet-review.json` (the master Sheet's open deal rows, plus three counts from its Lead Tracker rows: rows, rows with an MQL date, rows with no owner; the rows themselves are not copied). `run-facts.json` is not read.
   - `transcripts/*.json`.
   - The meeting-prep file is found by its shape: a JSON file with `prep[]` and `brief`.
 - `--brand`: `logo-main.svg`. The colors and fonts are in `src/styles.css`.
