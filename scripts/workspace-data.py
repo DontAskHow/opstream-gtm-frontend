@@ -24,7 +24,10 @@ from zoneinfo import ZoneInfo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAX_BYTES = 3 * 1048576
-TZ = ZoneInfo('America/Phoenix')
+try:
+    TZ = ZoneInfo('America/Phoenix')
+except Exception:  # slim images may lack the tz database; Phoenix has no DST, so UTC-7 is exact
+    TZ = timezone(timedelta(hours=-7), 'MST')
 SCOPE = json.load(open(os.path.join(ROOT, 'shared', 'workspace-scope.json'), encoding='utf-8'))
 OPEN_DEF = json.load(open(os.path.join(ROOT, 'shared', 'open-pipeline.json'), encoding='utf-8'))
 UNASSIGNED = SCOPE['hiddenOwner']['label']

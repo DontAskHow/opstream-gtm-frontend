@@ -85,6 +85,12 @@ class Parsing(unittest.TestCase):
         self.assertIsNone(wd.num(' - '))
         self.assertEqual(wd.num('(5)'), -5.0)
 
+    def test_phoenix_without_tz_database(self):
+        fixed = wd.timezone(wd.timedelta(hours=-7))
+        for iso in ('2026-01-15T19:00:00Z', '2026-07-15T19:00:00Z'):
+            t = wd.parse_time(iso)
+            self.assertEqual(t.astimezone(wd.TZ).strftime('%H:%M'), t.astimezone(fixed).strftime('%H:%M'))
+
     def test_auto_reply(self):
         self.assertTrue(wd.is_auto_reply(json.dumps({'replyText': 'Automatic reply: away'})))
         self.assertTrue(wd.is_auto_reply(json.dumps({'isAutoReply': True})))
