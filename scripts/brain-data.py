@@ -1102,7 +1102,7 @@ def main():
                      'end': max(starts) if starts else None,
                      'completed': mtg_outcomes.get('COMPLETED', 0),
                      'recorded': len(fathom)},
-        'pipeline': {'scope': 'new business, excl. On Hold (pipeline-def.json); On Hold, renewal, customer-success '
+        'pipeline': {'scope': 'new business, excl. On Hold (shared/open-pipeline.json); On Hold, renewal, customer-success '
                               'and partnership pipelines are in onHold / byPipeline only',
                      'weighted': {'value': round(sum(p['weighted'] for p in new_business), 2)},
                      'open': {'value': round(sum(p['openAmount'] for p in new_business), 2)},

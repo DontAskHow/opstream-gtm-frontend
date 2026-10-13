@@ -2,9 +2,9 @@
 // Headline numbers (pipeline, lead counts, quiet days, unworked leads) are computed
 // here and only here. Generators and the assistant describe these results;
 // they do not invent a second figure. Dates are America/Phoenix calendar dates.
-// The open-pipeline rule lives in pipeline-def.json (also read by scripts/gtm_metrics.py).
+// The open-pipeline rule lives in shared/open-pipeline.json (also read by scripts/gtm_metrics.py).
 // Node requires it; the browser build defines window.GTM_PIPELINE_DEF before this file.
-const PIPELINE_DEF=typeof require==='function'?require('./pipeline-def.json'):globalThis.GTM_PIPELINE_DEF;
+const PIPELINE_DEF=typeof require==='function'?require('./shared/open-pipeline.json'):globalThis.GTM_PIPELINE_DEF;
 const workspaceModel = {
   PIPELINE_DEF,
   PHOENIX: 'America/Phoenix',
@@ -222,10 +222,10 @@ const workspaceModel = {
     const d=this.dateOnly(value);
     return !!d&&d>=start&&d<=end;
   },
-  // Pipeline kind from pipeline-def.json: the first kind whose ids or label pattern match, else the
+  // Pipeline kind from shared/open-pipeline.json: the first kind whose ids or label pattern match, else the
   // default kind. '' when the deal has no recorded pipeline.
   pipelineKind(deal) {
-    const id=this.pipelineId(deal),label=String(deal&&deal.pipelineLabel||'').trim();
+    const id=this.pipelineId(deal),label=this.pipelineLabel(deal);
     for(const k of PIPELINE_DEF.pipelineKinds)if(k.ids.includes(id)||new RegExp(k.labelPattern,'i').test(label))return k.kind;
     return label||id?PIPELINE_DEF.defaultKind:'';
   },
@@ -237,9 +237,11 @@ const workspaceModel = {
     const key=s=>String(s??'').toLowerCase().replace(/[^a-z]/g,'');
     return PIPELINE_DEF.onHoldStageLabels.some(l=>key(l)===key(label));
   },
-  // The deal's HubSpot stage. A Sheet override keeps HubSpot's in hubspotStageLabel.
+  // The deal's HubSpot stage: the first present field of fields.stageLabel. A Sheet override keeps
+  // HubSpot's in hubspotStageLabel.
   hubspotStageLabel(deal) {
-    return String(deal&&(deal.hubspotStageLabel??deal.stageLabel??deal.stage)||'');
+    const key=deal&&PIPELINE_DEF.fields.stageLabel.find(k=>deal[k]!=null);
+    return String(key?deal[key]:'');
   },
   // 'closed' (HubSpot stage isClosed), 'onHold' (a declared On Hold stage) or 'open', in any pipeline.
   pipelineStatus(deal) {
@@ -251,7 +253,12 @@ const workspaceModel = {
     return /^(renewal|current agreement)$/i.test(String(value||'').trim());
   },
   pipelineId(deal) {
-    return String((deal&&(deal.pipeline||deal.pipelineId))||'').trim();
+    const key=deal&&PIPELINE_DEF.fields.pipelineId.find(k=>deal[k]);
+    return String(key?deal[key]:'').trim();
+  },
+  pipelineLabel(deal) {
+    const key=deal&&PIPELINE_DEF.fields.pipelineLabel.find(k=>deal[k]);
+    return String(key?deal[key]:'').trim();
   },
   isRenewalPipeline(deal) {
     return this.pipelineKind(deal)==='renewal';
@@ -363,12 +370,18 @@ const workspaceModel = {
     if(this.isRenewalPipeline(deal)&&(!raw||raw==='No stage'||/^\d+$/.test(raw)||shown==='No stage'))return 'Stage name not synced';
     return shown;
   },
-  // HubSpot says the deal is closed: the closed flag from the stage's isClosed metadata (brain-data.py,
-  // project.mjs). A stage name never decides it.
+  // HubSpot says the deal is closed: a closedRule.dealFlags flag set from the stage's isClosed metadata
+  // (brain-data.py, closedFromExport). A stage name never decides it.
   hubspotClosed(deal) {
-    return !deal||deal.closed===true||deal.hubspotClosed===true;
+    return !deal||PIPELINE_DEF.closedRule.dealFlags.some(k=>deal[k]===true);
   },
-  // The open book (pipeline-def.json): headline-pipeline deals HubSpot has not closed, not On Hold.
+  // Closed for a deal in the HubSpot export: the catalog stage's isClosed wins; the deal's own
+  // hs_is_closed only when the stage is not in the catalog.
+  closedFromExport(stage,props) {
+    const r=PIPELINE_DEF.closedRule;
+    return stage?stage[r.stageMetadataKey]===true:String(props&&props[r.fallbackDealProperty]).toLowerCase()==='true';
+  },
+  // The open book (shared/open-pipeline.json): headline-pipeline deals HubSpot has not closed, not On Hold.
   // The Sheet does not decide membership. A past close date stays in the book and is flagged.
   isOpenPipeline(deal) {
     return !!deal&&this.isHeadlinePipeline(deal)&&this.pipelineStatus(deal)==='open';
@@ -433,7 +446,7 @@ const workspaceModel = {
   stageTable(deals) {
     const groups=new Map();
     for(const o of deals||[]){
-      const pipeline=String(o.pipelineLabel||this.pipelineId(o)||'Pipeline not recorded');
+      const pipeline=String(this.pipelineLabel(o)||this.pipelineId(o)||PIPELINE_DEF.fallbackNames.pipeline);
       const stage=this.stageDisplay(o.stageLabel||o.stage);
       const key=pipeline+'\u0000'+stage;
       const g=groups.get(key)||{pipeline,stage,count:0,amount:0};
@@ -448,7 +461,7 @@ const workspaceModel = {
     const byPipe=new Map();
     for(const o of deals||[]){
       if(this.pipelineStatus(o)==='closed')continue;
-      const key=String(o.pipelineLabel||this.pipelineId(o)||'Pipeline not recorded');
+      const key=String(this.pipelineLabel(o)||this.pipelineId(o)||PIPELINE_DEF.fallbackNames.pipeline);
       if(!byPipe.has(key))byPipe.set(key,[]);
       byPipe.get(key).push(o);
     }

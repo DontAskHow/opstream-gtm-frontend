@@ -40,9 +40,9 @@ test('a deal with no recorded pipeline is not new business', () => {
   assert.equal(m.exclusionReason(deal, TODAY), 'pipeline not recorded');
 });
 
-test('the rule is pipeline-def.json, read by both the JS model and gtm_metrics.py', () => {
+test('the rule is shared/open-pipeline.json, read by both the JS model and gtm_metrics.py', () => {
   const root = join(__dirname, '..');
-  assert.deepEqual(m.PIPELINE_DEF, JSON.parse(readFileSync(join(root, 'pipeline-def.json'), 'utf8')));
+  assert.deepEqual(m.PIPELINE_DEF, JSON.parse(readFileSync(join(root, 'shared', 'open-pipeline.json'), 'utf8')));
   const deals = [
     { pipelineLabel: 'Sales Pipeline', stageLabel: 'SQL', closed: false },
     { pipelineLabel: 'Sales Pipeline', stageLabel: 'On Hold', closed: false },

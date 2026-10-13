@@ -1,0 +1,28 @@
+{
+  "about": "The one open-pipeline definition. Data-free. workspace-model.cjs (and through it workspace/lib/project.mjs and the browser build) and scripts/gtm_metrics.py read this file; none of them has its own copy of these rules. Change the rule here.",
+  "definition": "Open pipeline is new-business deals whose HubSpot stage is not closed (the stage's isClosed metadata; hs_is_closed only when the stage is not in the catalog). Stage names never decide closed. On Hold is a separate line, not in the open totals. Renewal, customer-success and partnership pipelines are listed separately and never added in; a deal with no recorded pipeline is not new business. A past close date stays open and is flagged. Weighted = amount x HubSpot stage probability over deals that have both; deals without a probability stay in the open amount and are counted.",
+  "closedRule": {
+    "about": "HubSpot isClosed wins. From the export: the deal stage's catalog entry decides (stageMetadataKey); the deal property fallbackDealProperty is read only when the stage is not in the catalog. On a shaped deal, any of dealFlags being true means closed. Stage names never decide it.",
+    "stageMetadataKey": "closed",
+    "fallbackDealProperty": "hs_is_closed",
+    "dealFlags": ["closed", "hubspotClosed"]
+  },
+  "onHoldStageLabels": ["On Hold"],
+  "pipelineKinds": [
+    { "kind": "renewal", "labelPattern": "renew|customer\\s*success", "ids": [] },
+    { "kind": "partnership", "labelPattern": "partner", "ids": [] }
+  ],
+  "defaultKind": "new business",
+  "headlineKind": "new business",
+  "fields": {
+    "about": "Where a shaped deal's names come from, first match wins. pipelineId: first non-empty value. stageLabel: first value present (a Sheet override keeps HubSpot's stage in hubspotStageLabel).",
+    "pipelineId": ["pipeline", "pipelineId"],
+    "pipelineLabel": ["pipelineLabel"],
+    "stageLabel": ["hubspotStageLabel", "stageLabel", "stage"]
+  },
+  "fallbackNames": {
+    "pipeline": "Pipeline not recorded",
+    "stage": "Stage not in catalog",
+    "deal": "Untitled deal"
+  }
+}

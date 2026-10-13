@@ -99,7 +99,7 @@ class BrainDataEndToEnd(unittest.TestCase):
             self.assertEqual(row["pipeline"], "Sales Pipeline")
         sales = by["Sales Pipeline"]
         self.assertEqual(sales["kind"], "new business")
-        # 104 is On Hold: its own line, not in the open totals (pipeline-def.json).
+        # 104 is On Hold: its own line, not in the open totals (shared/open-pipeline.json).
         self.assertEqual(sales["count"], 3)
         self.assertEqual(sales["openAmount"], 190000)
         self.assertEqual(sales["weighted"], 17500)  # 100000*.05 + 50000*.25

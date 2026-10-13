@@ -2,8 +2,8 @@
 
 The browser copy lives in workspace-model.cjs. Keep the rules aligned:
 Phoenix calendar dates, quiet days, unworked leads, and commit-versus-forecast
-wording. The open-pipeline rule is not copied: both read pipeline-def.json at
-the repo root. Callers describe these numbers; they do not compute a second one.
+wording. The open-pipeline rule is not copied: both read
+shared/open-pipeline.json. Callers describe these numbers; they do not compute a second one.
 """
 import json
 import math
@@ -192,9 +192,12 @@ def apply_sheet_owner_names(owner_names, votes):
 
 
 # The one open-pipeline definition, shared with workspace-model.cjs.
-with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline-def.json")) as _fh:
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "shared", "open-pipeline.json")) as _fh:
     PIPELINE_DEF = json.load(_fh)
 HEADLINE_KIND = PIPELINE_DEF["headlineKind"]
+_FIELDS = PIPELINE_DEF["fields"]
+_CLOSED_RULE = PIPELINE_DEF["closedRule"]
+NO_PIPELINE = PIPELINE_DEF["fallbackNames"]["pipeline"]
 _PIPELINE_KINDS = [(k["kind"], frozenset(k["ids"]), re.compile(k["labelPattern"], re.I))
                    for k in PIPELINE_DEF["pipelineKinds"]]
 
@@ -207,9 +210,9 @@ _ON_HOLD_KEYS = frozenset(_letters(label) for label in PIPELINE_DEF["onHoldStage
 
 
 def pipeline_kind(deal):
-    """Kind from pipeline-def.json, or '' when the deal has no recorded pipeline."""
+    """Kind from shared/open-pipeline.json, or '' when the deal has no recorded pipeline."""
     pid = pipeline_id(deal)
-    label = str((deal or {}).get("pipelineLabel") or "").strip()
+    label = pipeline_label(deal)
     for kind, ids, pattern in _PIPELINE_KINDS:
         if pid in ids or pattern.search(label):
             return kind
@@ -228,9 +231,12 @@ def is_on_hold_stage(label):
 
 
 def hubspot_stage_label(deal):
-    """The deal's HubSpot stage. A Sheet override keeps HubSpot's in hubspotStageLabel."""
+    """The deal's HubSpot stage: the first present field of fields.stageLabel.
+
+    A Sheet override keeps HubSpot's in hubspotStageLabel.
+    """
     deal = deal or {}
-    for key in ("hubspotStageLabel", "stageLabel", "stage"):
+    for key in _FIELDS["stageLabel"]:
         if deal.get(key) is not None:
             return str(deal[key])
     return ""
@@ -248,8 +254,19 @@ def is_placeholder_name(value):
     return re.fullmatch(r"renewal|current agreement", str(value or "").strip(), flags=re.I) is not None
 
 
+def _first_set(deal, keys):
+    for key in keys:
+        if (deal or {}).get(key):
+            return str(deal[key]).strip()
+    return ""
+
+
 def pipeline_id(deal):
-    return str((deal or {}).get("pipeline") or (deal or {}).get("pipelineId") or "").strip()
+    return _first_set(deal, _FIELDS["pipelineId"])
+
+
+def pipeline_label(deal):
+    return _first_set(deal, _FIELDS["pipelineLabel"])
 
 
 def is_renewal_pipeline(deal):
@@ -403,16 +420,60 @@ def renewal_book(deals, today):
 def hubspot_closed(deal):
     """HubSpot says the deal is closed.
 
-    `closed` / `hubspotClosed` come from the pipeline stage's isClosed
-    metadata (brain-data.py). A stage name never decides it.
+    A closedRule.dealFlags flag set from the pipeline stage's isClosed
+    metadata (brain-data.py, closed_from_export). A stage name never decides it.
     """
     if not deal:
         return True
-    return deal.get("closed") is True or deal.get("hubspotClosed") is True
+    return any(deal.get(k) is True for k in _CLOSED_RULE["dealFlags"])
+
+
+def closed_from_export(stage, props):
+    """Closed for a deal in the HubSpot export: the catalog stage's isClosed wins.
+
+    The deal's own hs_is_closed is read only when the stage is not in the catalog.
+    """
+    if stage:
+        return stage.get(_CLOSED_RULE["stageMetadataKey"]) is True
+    return str((props or {}).get(_CLOSED_RULE["fallbackDealProperty"])).lower() == "true"
+
+
+def deals_from_hubspot_export(live):
+    """Deals in the reconciliation export (live_deals.json), shaped for the open-book rules.
+
+    live: {pipes: id -> label, stages: id -> {pipe, label, closed, prob}, deals: [{id, properties}]}.
+    workspace/lib/project.mjs reads the same file with the same rules.
+    """
+    stages = (live or {}).get("stages") or {}
+    pipes = (live or {}).get("pipes") or {}
+    out = []
+    for deal in (live or {}).get("deals") or []:
+        props = deal.get("properties") or {}
+        stage = stages.get(props.get("dealstage"))
+        label = stage.get("pipe") if stage else pipes.get(props.get("pipeline"))
+        try:
+            amount = float(props.get("amount"))
+        except (TypeError, ValueError):
+            amount = None
+        try:
+            prob = float(props.get("hs_deal_stage_probability"))
+        except (TypeError, ValueError):
+            prob = None
+        out.append({
+            "id": "deal-" + str(deal.get("id")).replace("deal-", ""),
+            "dealName": props.get("dealname") or PIPELINE_DEF["fallbackNames"]["deal"],
+            "pipeline": str(props.get("pipeline") or ""),
+            "pipelineLabel": label or "",
+            "stageLabel": str(stage.get("label")).strip() if stage else None,
+            "closed": closed_from_export(stage, props),
+            "amount": amount if amount is not None and math.isfinite(amount) else None,
+            "probability": probability_from_scale(prob, "fraction"),
+        })
+    return out
 
 
 def is_open_pipeline(deal, today=None):
-    """The open book (pipeline-def.json): headline-pipeline deals HubSpot has not closed, not On Hold.
+    """The open book (shared/open-pipeline.json): headline-pipeline deals HubSpot has not closed, not On Hold.
 
     The Sheet does not decide membership. A past close date stays in the book
     and is flagged.
@@ -804,7 +865,7 @@ def stage_table(deals):
     """Count and amount per (pipeline, stage). Pipelines are never mixed."""
     groups = {}
     for deal in deals or []:
-        pipe = str((deal or {}).get("pipelineLabel") or pipeline_id(deal) or "Pipeline not recorded")
+        pipe = str(pipeline_label(deal) or pipeline_id(deal) or NO_PIPELINE)
         stage = stage_display((deal or {}).get("stageLabel") or (deal or {}).get("stage"))
         row = groups.setdefault((pipe, stage), {"pipeline": pipe, "stage": stage, "count": 0, "amount": 0.0})
         row["count"] += 1
@@ -841,7 +902,7 @@ def pipeline_breakdown(deals):
     for deal in deals or []:
         if pipeline_status(deal) == "closed":
             continue
-        key = str((deal or {}).get("pipelineLabel") or pipeline_id(deal) or "Pipeline not recorded")
+        key = str(pipeline_label(deal) or pipeline_id(deal) or NO_PIPELINE)
         by_pipe.setdefault(key, []).append(deal)
     out = []
     for key, rows in by_pipe.items():

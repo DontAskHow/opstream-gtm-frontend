@@ -130,7 +130,13 @@ export function build(opts) {
   log(`wrote ${opts.out}`);
   log(`  ${data.companies.length} accounts, ${data.deals.length} deals, ${data.transcripts.length} transcripts`);
   log(figuresReport(data));
-  if (data.headline) {
+  const h = data.headline;
+  const usd = (v) => '$' + Math.round(v).toLocaleString('en-US');
+  log(h
+    ? `headline (HubSpot, ${h.pipeline}): ${h.active.count} open deals excl On Hold, ${usd(h.active.openAmount)} open, ` +
+      `${usd(h.active.weighted)} weighted; On Hold ${h.onHold.count} deals, ${usd(h.onHold.openAmount)}`
+    : 'headline: none (build with --recon for the HubSpot headline)');
+  if (h) {
     const e = data.expect;
     log(e.checked
       ? `  expected figures: ${e.matches ? 'MATCH' : 'MISMATCH'} (${e.rows.map((r) => `${r.key} ${r.got}${r.ok ? '' : ' != ' + r.want}`).join(', ')})`

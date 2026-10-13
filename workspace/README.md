@@ -43,10 +43,10 @@ The page's CSP sets `connect-src 'none'`, so the app can't make fetch/XHR calls.
 
 ## Pipeline rules
 
-- **One definition**: `pipeline-def.json` at the repo root. `workspace-model.cjs` (and so this builder) and `scripts/gtm_metrics.py` both read it; change the rule there, nowhere else.
+- **One definition**: `shared/open-pipeline.json` (data-free): pipeline kinds, On Hold stage labels, the closed rule (HubSpot `isClosed` wins), and the fields stage and pipeline names are read from, with their fallbacks. `workspace-model.cjs` (and so this builder's `lib/project.mjs`) and `scripts/gtm_metrics.py` all read it; change the rule there, nowhere else. `test/open-pipeline-e2e.test.mjs` runs one synthetic HubSpot export through both and checks they give the same open set.
 - **Open**: the HubSpot stage isn't closed (`isClosed` metadata; `hs_is_closed` only when the stage isn't in the catalog). A stage name never decides closed.
 - **Active** = open and not a stage listed in `onHoldStageLabels` (compared on letters only). On Hold is always reported on its own line.
-- **Pipelines are never mixed.** Each HubSpot pipeline has its own totals, stage table and funnel, chosen with the pipeline selector. The headline is the single new-business pipeline. A pipeline's kind comes from `pipelineKinds` in `pipeline-def.json` (renewal / customer success / partner by label); anything else with a recorded pipeline is new business. Renewal, Customer Success and Partnerships are listed separately.
+- **Pipelines are never mixed.** Each HubSpot pipeline has its own totals, stage table and funnel, chosen with the pipeline selector. The headline is the single new-business pipeline. A pipeline's kind comes from `pipelineKinds` in `shared/open-pipeline.json` (renewal / customer success / partner by label); anything else with a recorded pipeline is new business. Renewal, Customer Success and Partnerships are listed separately.
 - **Weighted** = amount × HubSpot stage probability (0–1), summed over deals that have both. Deals without a probability stay in the open amount and are counted next to the weighted figure. A total over deals that all lack an amount shows "—", not $0.
 - **Stage order** follows HubSpot's stage probability metadata. (`JSON.parse` reorders numeric stage ids, so the export's key order can't be used.)
 - **The caveat**: HubSpot is the only headline. The red "unreconciled" caveat goes away only when the build is given `--expect` and every computed figure matches exactly. Otherwise it stays and says which figures differ.

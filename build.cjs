@@ -3,7 +3,7 @@ async function main(){
  fs.mkdirSync('out/assets',{recursive:true});
  for(const name of ['support.js','_ds','assets'])fs.cpSync('source/'+name,'out/'+name,{recursive:true});
  const modules=["workspace-model.cjs","workspace-domain.cjs","showcase-adapter.js","data-bindings.js","workspace-controls.js","collaboration.js","demo-mode.js"];
- const html=fs.readFileSync('source/workspace.html','utf8').replace('/* FRONTEND_MODULES */',()=>['globalThis.GTM_PIPELINE_DEF='+fs.readFileSync('pipeline-def.json','utf8').trim()+';',...modules.map(f=>fs.readFileSync(f,'utf8'))].join('\n'));
+ const html=fs.readFileSync('source/workspace.html','utf8').replace('/* FRONTEND_MODULES */',()=>['globalThis.GTM_PIPELINE_DEF='+fs.readFileSync('shared/open-pipeline.json','utf8').trim()+';',...modules.map(f=>fs.readFileSync(f,'utf8'))].join('\n'));
  fs.writeFileSync('out/index.html',html);fs.mkdirSync('out/gtm',{recursive:true});fs.writeFileSync('out/gtm/index.html',html);
  fs.mkdirSync('out/data',{recursive:true});fs.writeFileSync('out/data/records.json',JSON.stringify({companies:[],unmatchedRecordings:[]}));fs.writeFileSync('out/data/transcripts.json','{}');
  require('./scripts/synthetic-data.cjs');

@@ -22,11 +22,17 @@ const day = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.sl
 const dealKey = (id) => (id == null ? null : 'deal-' + String(id).replace(/^deal-/, ''));
 const bareId = (id) => String(id ?? '').replace(/^deal-/, '');
 
-// Open / On Hold / closed and the headline pipeline come from pipeline-def.json via
-// workspace-model.cjs, the same rule scripts/gtm_metrics.py reads. Nothing here
-// decides it from a stage name.
-const HEADLINE_KIND = model.PIPELINE_DEF.headlineKind;
-const status = (closed, stageLabel) => model.pipelineStatus({ closed, stageLabel });
+// Open / On Hold / closed, the open book and the headline pipeline come from
+// shared/open-pipeline.json via workspace-model.cjs, the same rule
+// scripts/gtm_metrics.py reads. Nothing here decides it from a stage name.
+const DEF = model.PIPELINE_DEF;
+const HEADLINE_KIND = DEF.headlineKind;
+const NO_PIPELINE = DEF.fallbackNames.pipeline;
+// Status and open-book membership of a deal shaped the way the model reads it.
+function bookFlags(shaped) {
+  const st = model.pipelineStatus(shaped);
+  return { open: st !== 'closed', onHold: st === 'onHold', openBook: model.isOpenPipeline(shaped), onHoldBook: model.isOnHold(shaped) };
+}
 
 export function phoenixDate(iso) {
   const t = Date.parse(iso);
@@ -78,7 +84,7 @@ export function hubspotPipelines(live) {
   const pipeIdByLabel = new Map(Object.entries(live?.pipes || {}).map(([id, label]) => [label, id]));
   const pipelines = new Map();
   for (const [sid, s] of Object.entries(live?.stages || {})) {
-    const label = String(s.pipe ?? 'Pipeline not recorded');
+    const label = String(s.pipe ?? NO_PIPELINE);
     if (!pipelines.has(label)) {
       const id = pipeIdByLabel.get(label) ?? label;
       pipelines.set(label, { id, label, kind: model.pipelineKind({ pipeline: id, pipelineLabel: label }) || 'unknown', stages: [] });
@@ -102,16 +108,17 @@ export function hubspotDeals(live, { owners, recordsDeals }) {
     const s = stages[p.dealstage];
     const pipeLabel = s?.pipe ?? pipes[p.pipeline] ?? null;
     const stageLabel = s ? String(s.label).trim() : null;
-    // Closed comes from the stage's isClosed metadata; hs_is_closed only when the stage is not in the catalog.
-    const closed = s ? s.closed === true : String(p.hs_is_closed).toLowerCase() === 'true';
+    // closedRule: the stage's isClosed metadata; hs_is_closed only when the stage is not in the catalog.
+    const closed = model.closedFromExport(s, p);
     const rec = recordsDeals.get(dealKey(d.id));
     const ownerName = owners[String(p.hubspot_owner_id ?? '')] ?? null;
-    const st = status(closed, stageLabel);
+    // The same shape gtm_metrics.deals_from_hubspot_export gives the Python rules.
+    const flags = bookFlags({ pipeline: str(p.pipeline), pipelineLabel: pipeLabel, stageLabel, closed });
     return {
-      id: dealKey(d.id), name: str(p.dealname) ?? 'Untitled deal', companyId: rec?.companyId ?? null,
-      pipelineId: str(p.pipeline) ?? pipeLabel, pipeline: pipeLabel ?? 'Pipeline not recorded',
-      stageId: str(p.dealstage), stage: stageLabel ?? 'Stage not in catalog', closed,
-      open: st !== 'closed', onHold: st === 'onHold',
+      id: dealKey(d.id), name: str(p.dealname) ?? DEF.fallbackNames.deal, companyId: rec?.companyId ?? null,
+      pipelineId: str(p.pipeline) ?? pipeLabel, pipeline: pipeLabel ?? NO_PIPELINE,
+      stageId: str(p.dealstage), stage: stageLabel ?? DEF.fallbackNames.stage, closed,
+      ...flags,
       amount: numText(p.amount),
       probability: model.probabilityFromScale(numText(p.hs_deal_stage_probability), 'fraction'),
       close: day(p.closedate), created: day(p.createdate),
@@ -126,12 +133,13 @@ export function hubspotDeals(live, { owners, recordsDeals }) {
 
 function recordsOnlyDeals(recordsDeals) {
   return [...recordsDeals.values()].map((d) => {
-    const st = status(d.closed, d.stageLabel);
+    // records.json has no pipeline, so no deal is in the new-business open book.
+    const flags = bookFlags({ stageLabel: d.stageLabel, closed: d.closed });
     return {
-      id: d.id, name: d.name ?? 'Untitled deal', companyId: d.companyId,
+      id: d.id, name: d.name ?? DEF.fallbackNames.deal, companyId: d.companyId,
       pipelineId: 'records', pipeline: 'All pipelines (pipeline not recorded in records.json)',
       stageId: d.stage, stage: d.stageLabel ?? 'Stage not labelled', closed: !!d.closed,
-      open: st !== 'closed', onHold: st === 'onHold',
+      ...flags,
       amount: d.amount,
       // records.json stores probability as 0–100 percent.
       probability: model.probabilityFromScale(d.probability, 'percent'),
@@ -147,23 +155,29 @@ function recordsOnlyPipelines(deals) {
   return [{ id: 'records', label: deals[0]?.pipeline ?? 'All pipelines', kind: 'unknown', stages: [...stages.values()] }];
 }
 
+const roundTotals = (t) => ({ ...t, openAmount: Math.round(t.openAmount * 100) / 100, weighted: Math.round(t.weighted * 100) / 100 });
+
 // Totals over open, non-On-Hold deals plus On Hold separately, per pipeline.
 // Weighted = amount × probability over deals with both; the rest are counted.
 export function pipelineFigures(pipelines, deals) {
-  const round = (t) => ({ ...t, openAmount: Math.round(t.openAmount * 100) / 100, weighted: Math.round(t.weighted * 100) / 100 });
   return pipelines.map((p) => {
     const inPipe = deals.filter((d) => d.pipeline === p.label && d.open);
     const active = inPipe.filter((d) => !d.onHold);
     const hold = inPipe.filter((d) => d.onHold);
-    return { id: p.id, label: p.label, kind: p.kind, active: round(model.openTotals(active)), onHold: round(model.openTotals(hold)) };
+    return { id: p.id, label: p.label, kind: p.kind, active: roundTotals(model.openTotals(active)), onHold: roundTotals(model.openTotals(hold)) };
   });
 }
 
-// The headline is the one pipeline of pipeline-def.json's headline kind (new business).
-function headline(figures) {
+// The headline is the one pipeline of the headline kind (new business). Its figures are the
+// open book itself (model.isOpenPipeline / isOnHold), the set gtm_metrics.is_open_pipeline gives.
+function headline(figures, deals) {
   const nb = figures.filter((f) => f.kind === HEADLINE_KIND);
   if (nb.length !== 1) return null;
-  return { pipeline: nb[0].label, ...nb[0] };
+  return {
+    pipeline: nb[0].label, id: nb[0].id, label: nb[0].label, kind: nb[0].kind,
+    active: roundTotals(model.openTotals(deals.filter((d) => d.openBook))),
+    onHold: roundTotals(model.openTotals(deals.filter((d) => d.onHoldBook))),
+  };
 }
 
 // --expect "count=<n>,amount=<n>,weighted=<n>,holdCount=<n>,holdAmount=<n>" (figures stay on the command line, never in the repo)
@@ -209,11 +223,11 @@ export function dataQuality({ sheetReview, deals, source }) {
     const d = byId.get(dealKey(s.id));
     if (!d) notInHubspot.push(sheetRow(s, null));
     else if (d.closed) closedButActive.push(sheetRow(s, d));
-    else if (d.onHold || model.pipelineKind({ pipelineLabel: d.pipeline }) !== HEADLINE_KIND && source === 'hubspot') otherDiffs.push(sheetRow(s, d));
+    else if (d.onHold || (source === 'hubspot' && !d.openBook)) otherDiffs.push(sheetRow(s, d));
   }
   // Only the HubSpot export knows each deal's pipeline, so only it can say which new-business deals are missing.
   const missingFromSheet = source === 'hubspot'
-    ? deals.filter((d) => d.open && !d.onHold && model.pipelineKind({ pipelineLabel: d.pipeline }) === HEADLINE_KIND && !sheetIds.has(d.id))
+    ? deals.filter((d) => d.openBook && !sheetIds.has(d.id))
       .map((d) => ({ id: d.id, name: d.name, hubspotStage: d.stage, amount: d.amount, owner: d.owner, close: d.close }))
     : null;
   return {
@@ -283,7 +297,7 @@ export function buildData(inp) {
   }
 
   const figures = pipelineFigures(pipelines, deals);
-  const head = headline(figures);
+  const head = headline(figures, deals);
   const expectCheck = checkExpect(head, expect);
   const quality = dataQuality({ sheetReview, deals, source });
   const recordsOpen = [...recordsDeals.values()].filter((d) => !d.closed).length;
