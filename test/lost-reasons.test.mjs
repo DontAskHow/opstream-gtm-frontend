@@ -262,8 +262,8 @@ test('shipped with the page and the deploy; the scheduled refresh never writes i
   assert.match(deploy, /up lost-reasons\.js vendor\/lost-reasons\.js "application\/javascript; charset=utf-8"/);
   // The Lambda's only S3 writes are data.js, refresh.json, workspace.json (the one-page workspace) and its state file.
   const puts = [...deploy.matchAll(/"Action":\[?[^\]}]*s3:PutObject[^\]}]*\]?,\s*"Resource":\[([^\]]*)\]/g)].map((m) => m[1]);
-  assert.equal(puts.length, 1);
-  assert.deepEqual(puts[0].split(',').map((x) => x.trim().replace(/^"arn:aws:s3:::\$PREVIEW_BUCKET\/|"$/g, '')), ['data.js', 'refresh.json', 'workspace.json', '_state/hubspot-live.json']);
+  const keys = puts.flatMap((r) => r.split(',').map((x) => x.trim().replace(/^"arn:aws:s3:::\$PREVIEW_BUCKET\/|"$/g, '')));
+  assert.deepEqual(keys.sort(), ['_state/hubspot-live.json', 'data.js', 'refresh.json', 'workspace.json']);
   for (const f of ['handler.mjs', 'compose.mjs', 'sources.mjs']) assert.doesNotMatch(read(`../workspace/refresh/${f}`), /lost-reasons/, f);
   assert.match(read('../workspace/src/index.html'), /<script src="vendor\/lost-reasons\.js"><\/script>\s*<script src="app\.js">/);
 });

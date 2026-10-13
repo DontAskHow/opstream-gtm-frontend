@@ -23,11 +23,12 @@ EventBridge Scheduler gtm-preview-refresh-15m (rate 15 min, no flex window, 0 re
 
 The sync job writes `workspace.json` (scripts/workspace-data.py) into each published run. Every run, `workspace-json.mjs`:
 
-- **checks** it: valid JSON, `schemaVersion` 1, `headline.open` present, `meta.generatedAt` present, ≤ 3 MB, and no scrub pattern (from the function's `WORKSPACE_SCRUB_PATTERNS`, set by `deploy.sh`; patterns are never logged or sent in alarms).
-- **copies** it to the preview bucket (`no-store`, `x-amz-meta-sha256`) only when the sha256 of its content without timestamps (the sync job's volatile keys) differs from the last copied one. Unchanged content uploads nothing; `refresh.json.workspace.stamps` carries the newer timestamps, which the page applies.
-- **keeps the last good copy** when the run has no `workspace.json` (`snapshot-has-no-workspace-json`), the file fails a check (`workspace-json-invalid`), or the function has no scrub patterns (`workspace-scrub-patterns-missing`). Each alarms once when it starts and once when it clears (no daily reminder), and the page shows "Showing the last good data: …".
+- **checks** it: the scrub patterns (from the function's `WORKSPACE_SCRUB_PATTERNS`, set by `deploy.sh`) on the raw text before parsing and on every decoded string after; valid JSON (the error never quotes the file); `schemaVersion` 1; every top-level section the page reads; and a trial render with the page's own code (`onepage/view.cjs`, `onepage/page.cjs`, packaged with the function). Patterns are never logged or sent in alarms, only their position.
+- **copies** it to the preview bucket (`no-store`, `x-amz-meta-sha256`) only when the sha256 of its content without timestamps (the sync job's volatile keys) differs from the live copy. Unchanged content uploads nothing; `refresh.json.workspace.stamps` carries the newer timestamps, keyed by `forTextSha256` to the live object's text, and the page applies them only to that exact file.
+- **keeps the last good copy** when the run has no `workspace.json` (`snapshot-has-no-workspace-json`), the file fails a check (`workspace-json-invalid`), or the function has no scrub patterns (`workspace-scrub-patterns-missing`).
+- **withholds** the live copy when a scrub pattern matches the latest snapshot and the live copy was never checked against the current pattern set (a newly added pattern): it PutObjects a small `{"withheld": true, …}` document over `workspace.json` (`workspace-withheld-scrub-match`), and the page shows a notice. The next clean snapshot is uploaded again.
 
-`refresh.json.workspace` holds `status` (`uploaded` / `unchanged` / `kept-last-good`), `problem`, `errors`, `sha256`, `publishedSha256`, `publishedGeneratedAt`, `publishedRunId`, `checkedAt` and `stamps`. The step runs before the `data.js` build, so a problem there never holds it back.
+Each problem alarms once when it starts and once when it clears (no daily reminder), and the page shows "Showing the last good data: …". `refresh.json.workspace` holds `status` (`uploaded` / `unchanged` / `kept-last-good` / `withheld`), `problem`, `errors`, `sha256`, `publishedSha256`, `publishedTextSha256`, `publishedGeneratedAt`, `publishedRunId`, `publishedPatternsSha256` (a hash of the pattern set, never the patterns), `withheld`, `checkedAt` and `stamps`. The step runs before the `data.js` build, so a problem there never holds it back.
 
 ## Change detection (why `data.js` isn't uploaded every run)
 
@@ -51,7 +52,8 @@ Distribution `EZQ1E2Y6O6NDG` has one behavior (the default, no additional behavi
 |---|---|
 | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/gtm-preview-refresh` only (the log group is created by `deploy.sh`, 14-day retention) |
 | `s3:ListBucket` (prefix `published/*`), `s3:GetObject` | `opstream-gtm-data-080403790510/published/*`, read-only |
-| `s3:GetObject`, `s3:PutObject` | `opstream-gtm-preview-db5553a4/data.js`, `/refresh.json`, `/workspace.json` and `/_state/hubspot-live.json` only |
+| `s3:GetObject`, `s3:PutObject` | `opstream-gtm-preview-db5553a4/data.js`, `/refresh.json` and `/_state/hubspot-live.json` only |
+| `s3:PutObject` | `opstream-gtm-preview-db5553a4/workspace.json` only (write-only; no delete) |
 | `s3:ListBucket` | the preview bucket, so a missing `refresh.json` reads as 404 rather than 403 |
 | `sns:Publish` | `opstream-gtm-refresh-failures` |
 

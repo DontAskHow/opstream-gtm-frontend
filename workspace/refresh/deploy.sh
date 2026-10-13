@@ -16,6 +16,9 @@
 #   workspace/refresh/deploy.sh --onepage DIR
 #                                          # static fallback: upload DIR/index.html (a page built with its data
 #                                          # inside by onepage/build.mjs --data); its data is fixed at build time.
+#   workspace/refresh/deploy.sh --restore-app
+#                                          # put the workspace app's index.html back even when the live page is
+#                                          # the one-page workspace (without it, a plain deploy leaves that page).
 #
 # Scrub patterns (people who must never appear) are never in the repo. Pass them as
 # WORKSPACE_SCRUB_PATTERNS (comma list) or WORKSPACE_SCRUB_PATTERNS_FILE; they go into the
@@ -31,7 +34,9 @@ export AWS_PROFILE="${AWS_PROFILE:-opstream-deploy}"
 export AWS_REGION=us-east-2 AWS_DEFAULT_REGION=us-east-2
 export AWS_PAGER=""
 
-ENABLE=0; DISABLE=0; APP=1; ONEPAGE=""; ONEPAGE_APP=0
+ENABLE=0; DISABLE=0; APP=1; ONEPAGE=""; ONEPAGE_APP=0; RESTORE_APP=0
+TMP=""; ONEPAGE_APP_DIR=""
+trap 'rm -rf "$TMP" "$ONEPAGE_APP_DIR"' EXIT
 while [ $# -gt 0 ]; do
   case "$1" in
     --enable) ENABLE=1 ;;
@@ -39,6 +44,7 @@ while [ $# -gt 0 ]; do
     --no-app) APP=0 ;;
     --onepage) ONEPAGE="${2:?--onepage needs a directory}"; shift ;;
     --onepage-app) ONEPAGE_APP=1 ;;
+    --restore-app) RESTORE_APP=1 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
   shift
@@ -51,7 +57,13 @@ if [ -n "$ONEPAGE" ]; then ONEPAGE_FILE=$(node "$ROOT/onepage/deploy-check.mjs" 
 SCRUB="${WORKSPACE_SCRUB_PATTERNS:-}"
 if [ -z "$SCRUB" ] && [ -n "${WORKSPACE_SCRUB_PATTERNS_FILE:-}" ]; then
   [ -r "$WORKSPACE_SCRUB_PATTERNS_FILE" ] || { echo "WORKSPACE_SCRUB_PATTERNS_FILE $WORKSPACE_SCRUB_PATTERNS_FILE is not readable" >&2; exit 1; }
-  SCRUB=$(grep -v '^[[:space:]]*#' "$WORKSPACE_SCRUB_PATTERNS_FILE" | tr '\n' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')
+  SCRUB=$(python3 - "$WORKSPACE_SCRUB_PATTERNS_FILE" <<'PY'
+import re, sys
+lines = [l.strip() for l in open(sys.argv[1], encoding="utf-8") if l.strip() and not l.strip().startswith("#")]
+print(",".join(p for p in (x.strip() for x in re.split(r"[,\n]", "\n".join(lines))) if p))
+PY
+)
+  [ -n "$SCRUB" ] || { echo "WORKSPACE_SCRUB_PATTERNS_FILE $WORKSPACE_SCRUB_PATTERNS_FILE has no patterns (only comments or blank lines)" >&2; exit 1; }
 fi
 if [ "$ONEPAGE_APP" = 1 ]; then
   [ -n "$SCRUB" ] || { echo "--onepage-app needs scrub patterns: set WORKSPACE_SCRUB_PATTERNS or WORKSPACE_SCRUB_PATTERNS_FILE" >&2; exit 1; }
@@ -73,7 +85,7 @@ TOPIC=arn:aws:sns:us-east-2:$ACCOUNT:opstream-gtm-refresh-failures
 FN_ARN=arn:aws:lambda:$AWS_REGION:$ACCOUNT:function:$FN
 
 [ "$(aws sts get-caller-identity --query Account --output text)" = "$ACCOUNT" ] || { echo "wrong AWS account" >&2; exit 1; }
-TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp -d)"
 
 # ---------- log group (14-day retention) ----------
 aws logs create-log-group --log-group-name "$LOG_GROUP" 2>/dev/null || true
@@ -96,8 +108,10 @@ cat > "$TMP/policy-lambda.json" <<EOF
  {"Sid":"SnapshotList","Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::$DATA_BUCKET",
   "Condition":{"StringLike":{"s3:prefix":["published/*"]}}},
  {"Sid":"SnapshotRead","Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::$DATA_BUCKET/published/*"},
- {"Sid":"PreviewDataJsRefreshJsonWorkspaceJson","Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],
-  "Resource":["arn:aws:s3:::$PREVIEW_BUCKET/data.js","arn:aws:s3:::$PREVIEW_BUCKET/refresh.json","arn:aws:s3:::$PREVIEW_BUCKET/workspace.json","arn:aws:s3:::$PREVIEW_BUCKET/_state/hubspot-live.json"]},
+ {"Sid":"PreviewDataJsAndRefreshJson","Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],
+  "Resource":["arn:aws:s3:::$PREVIEW_BUCKET/data.js","arn:aws:s3:::$PREVIEW_BUCKET/refresh.json","arn:aws:s3:::$PREVIEW_BUCKET/_state/hubspot-live.json"]},
+ {"Sid":"PreviewWorkspaceJsonWriteOnly","Effect":"Allow","Action":"s3:PutObject",
+  "Resource":["arn:aws:s3:::$PREVIEW_BUCKET/workspace.json"]},
  {"Sid":"PreviewListSoMissingIs404","Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::$PREVIEW_BUCKET"},
  {"Sid":"Alarm","Effect":"Allow","Action":"sns:Publish","Resource":"$TOPIC"}
 ]}
@@ -132,8 +146,10 @@ SCHED_ROLE_ARN=$(aws iam get-role --role-name "$SCHED_ROLE" --query Role.Arn --o
 ( cd "$ROOT" && python3 - "$TMP/fn.zip" <<'PY'
 import sys, zipfile
 # sources.mjs holds the LIVE_PULL code (and the Fathom matcher compose.mjs uses); it never runs with LIVE_PULL=0.
+# The page's view and render code (onepage/, workspace/src validators) let workspace-json.mjs trial-render each file.
 files = ["workspace/refresh/handler.mjs", "workspace/refresh/compose.mjs", "workspace/refresh/sources.mjs", "workspace/refresh/workspace-json.mjs",
-         "workspace/build.mjs", "workspace/lib/project.mjs", "workspace-model.cjs", "shared/open-pipeline.json"]
+         "workspace/build.mjs", "workspace/lib/project.mjs", "workspace-model.cjs", "shared/open-pipeline.json",
+         "onepage/view.cjs", "onepage/page.cjs", "workspace/src/lost-reasons.js", "workspace/src/insights.js"]
 with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
     for f in files:
         info = zipfile.ZipInfo(f, date_time=(2020, 1, 1, 0, 0, 0))
@@ -153,9 +169,10 @@ if [ -z "$SCRUB" ]; then
   [ "$ONEPAGE_APP" = 1 ] && { echo "--onepage-app needs scrub patterns: set WORKSPACE_SCRUB_PATTERNS or WORKSPACE_SCRUB_PATTERNS_FILE" >&2; exit 1; }
   echo "warning: no scrub patterns; the function will keep the last good workspace.json and alarm workspace-scrub-patterns-missing" >&2
 fi
-ENV_JSON=$(SCRUB="$SCRUB" python3 -c 'import json,os; v={"LIVE_PULL":"0"}; s=os.environ["SCRUB"]; v.update({"WORKSPACE_SCRUB_PATTERNS":s} if s else {}); print(json.dumps({"Variables":v}))')
+# Written to a private file and passed as file://, so the patterns never appear on a command line.
+( umask 077; SCRUB="$SCRUB" python3 -c 'import json,os; v={"LIVE_PULL":"0"}; s=os.environ["SCRUB"]; v.update({"WORKSPACE_SCRUB_PATTERNS":s} if s else {}); print(json.dumps({"Variables":v}))' > "$TMP/env.json" )
 FN_CONFIG=(--runtime nodejs20.x --handler workspace/refresh/handler.handler --role "$ROLE_ARN"
-  --memory-size 512 --timeout 120 --environment "$ENV_JSON"
+  --memory-size 512 --timeout 120 --environment "file://$TMP/env.json"
   --description "GTM preview refresh: published snapshot -> data.js when changed (no AI, no provider APIs)"
   --logging-config "LogFormat=Text,LogGroup=$LOG_GROUP")
 if aws lambda get-function --function-name "$FN" >/dev/null 2>&1; then
@@ -198,7 +215,12 @@ fi
 # ---------- page code (static files only; data.js is the function's job) ----------
 if [ "$APP" = 1 ]; then
   up() { aws s3 cp "$ROOT/workspace/src/$1" "s3://$PREVIEW_BUCKET/$2" --content-type "$3" --cache-control no-store --only-show-errors; }
-  up index.html index.html "text/html; charset=utf-8"
+  LIVE_PAGE=$(aws s3api head-object --bucket "$PREVIEW_BUCKET" --key index.html --query 'Metadata."gtm-page"' --output text 2>/dev/null || true)
+  if [ "$LIVE_PAGE" = "onepage-app" ] && [ "$RESTORE_APP" != 1 ]; then
+    echo "index.html is the one-page workspace: left as it is (pass --restore-app to put the workspace app back)" >&2
+  else
+    up index.html index.html "text/html; charset=utf-8"
+  fi
   up app.js app.js "application/javascript; charset=utf-8"
   up styles.css styles.css "text/css; charset=utf-8"
   up charts.js vendor/gtm-charts.js "application/javascript; charset=utf-8"
@@ -213,17 +235,38 @@ if [ -n "$ONEPAGE" ]; then
 fi
 # Live one-page workspace: run the updated function once so workspace.json is in place, then swap index.html.
 if [ "$ONEPAGE_APP" = 1 ]; then
+  # --cli-read-timeout above the function's 120 s timeout, so a slow run is not retried (run twice) by the CLI.
   for i in 1 2 3 4 5 6; do
-    aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out --payload '{}' "$TMP/invoke.json" >/dev/null 2>"$TMP/invoke.err" && break
+    aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out --cli-read-timeout 150 --payload '{}' \
+      "$TMP/invoke.json" >"$TMP/invoke-meta.json" 2>"$TMP/invoke.err" && break
     grep -q "TooManyRequests" "$TMP/invoke.err" && [ "$i" -lt 6 ] && { sleep 20; continue; }
     cat "$TMP/invoke.err" >&2; echo "the function did not run; index.html NOT uploaded (the live page is unchanged)" >&2; exit 1
   done
-  if ! aws s3api head-object --bucket "$PREVIEW_BUCKET" --key workspace.json >/dev/null 2>&1; then
-    echo "workspace.json is not in s3://$PREVIEW_BUCKET yet (does the latest snapshot run have one? see refresh.json .workspace);" >&2
-    echo "index.html NOT uploaded: the live page is unchanged" >&2; exit 1
+  # invoke exits 0 when the function itself fails: read FunctionError.
+  if ! python3 -c 'import json,sys; sys.exit(1 if json.load(open(sys.argv[1])).get("FunctionError") else 0)' "$TMP/invoke-meta.json"; then
+    echo "the function failed (FunctionError); index.html NOT uploaded (the live page is unchanged). Its output:" >&2
+    head -c 600 "$TMP/invoke.json" >&2; echo >&2; exit 1
   fi
-  aws s3 cp "$ONEPAGE_FILE" "s3://$PREVIEW_BUCKET/index.html" --content-type "text/html; charset=utf-8" --cache-control no-store --only-show-errors
-  echo "page      s3://$PREVIEW_BUCKET/index.html (one-page workspace, live: fetches workspace.json)"
+  # The run must have published or confirmed workspace.json, not kept an older copy or withheld it.
+  aws s3 cp "s3://$PREVIEW_BUCKET/refresh.json" "$TMP/refresh.json" --only-show-errors
+  if ! WS=$(python3 - "$TMP/refresh.json" <<'PY'
+import json, sys
+try:
+    w = (json.load(open(sys.argv[1])) or {}).get("workspace") or {}
+except (OSError, ValueError, AttributeError):
+    print("unreadable "); sys.exit(1)
+print("%s %s" % (w.get("status"), w.get("problem") or ""))
+sys.exit(0 if w.get("status") in ("uploaded", "unchanged") else 1)
+PY
+  ); then
+    echo "refresh.json .workspace is '$WS', not uploaded/unchanged; index.html NOT uploaded (the live page is unchanged)" >&2; exit 1
+  fi
+  if ! aws s3api head-object --bucket "$PREVIEW_BUCKET" --key workspace.json >/dev/null 2>&1; then
+    echo "workspace.json is not in s3://$PREVIEW_BUCKET; index.html NOT uploaded (the live page is unchanged)" >&2; exit 1
+  fi
+  aws s3 cp "$ONEPAGE_FILE" "s3://$PREVIEW_BUCKET/index.html" --content-type "text/html; charset=utf-8" --cache-control no-store \
+    --metadata gtm-page=onepage-app --only-show-errors
+  echo "page      s3://$PREVIEW_BUCKET/index.html (one-page workspace, live: fetches workspace.json; workspace.json $WS)"
 fi
 
 echo "function  $FN_ARN"

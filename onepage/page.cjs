@@ -166,6 +166,7 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     'snapshot-has-no-workspace-json': 'the latest snapshot has no workspace.json',
     'workspace-json-invalid': 'the latest workspace.json did not pass its checks',
     'workspace-scrub-patterns-missing': 'the refresh has no scrub patterns configured',
+    'workspace-withheld-scrub-match': 'the data is withheld (a name that must not appear was found)',
   };
 
   // "Updated <time> PT" from the data's own build time; amber once it is older than 45 minutes.
@@ -379,7 +380,7 @@ ${NAV}
     const xs = tag ? o.campaigns.filter((c) => c.tags.includes(tag)) : o.campaigns;
     const counts = {};
     for (const c of o.campaigns) for (const t of c.tags) counts[t] = (counts[t] || 0) + 1;
-    const chips = Object.keys(counts).map((t) => `<button type="button" class="chip chip-btn${tag === t ? ' on' : ''}" data-set="ot=${tag === t ? '' : t}" aria-pressed="${String(tag === t)}">${esc(o.tagLabels[t] || t)} <b class="num">${int(counts[t])}</b></button>`).join('');
+    const chips = Object.keys(counts).map((t) => `<button type="button" class="chip chip-btn${tag === t ? ' on' : ''}" data-set="ot=${esc(tag === t ? '' : t)}" aria-pressed="${String(tag === t)}">${esc(o.tagLabels[t] || t)} <b class="num">${int(counts[t])}</b></button>`).join('');
     const sends = xs.reduce((a, c) => a + (c.sent || 0), 0), replies = xs.reduce((a, c) => a + (c.replies || 0), 0);
     const rows = xs.map((c) => ({ cells: [esc(c.name) + c.flags.map((f) => ` <span class="tag tag-warn">${esc(f)}</span>`).join('') + (c.mostlyInvite ? ` <span class="tag tag-warn" title="${esc(`${int(c.inviteReplies)} of ${int(c.replies)} replies came on the LinkedIn invite step`)}">replies look automatic</span>` : ''),
       `<span class="small">${c.tags.map((t) => esc(o.tagLabels[t] || t)).join(', ')}</span>`, esc(c.status), int(c.sent), int(c.replies), pct(c.rate), '<span class="muted">not tracked</span>'] }));
@@ -576,7 +577,12 @@ ${NAV}
     return { header: header(v, opts), main: renderMain(v, s), drawer: renderDrawer(v, s) };
   }
 
-  const api = { renderPage, renderMain, renderDrawer, header, loadingHeader, errorView, STALE_MS, parseState, stateHash, applyChange, inPeriod, esc, usd, int, pct, dateTime, date, ymd };
+  function withheldView(doc) {
+    return `<section class="sec withheld" role="status"><h2>The workspace data is withheld</h2><p>${esc(doc.notice || '')}</p>
+<p class="muted small">Withheld ${esc(dateTime(doc.meta && doc.meta.generatedAt))}. The page checks again every few minutes.</p></section>`;
+  }
+
+  const api = { renderPage, renderMain, renderDrawer, header, loadingHeader, errorView, withheldView, STALE_MS, parseState, stateHash, applyChange, inPeriod, esc, usd, int, pct, dateTime, date, ymd };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.GtmPage = api;
 
@@ -624,6 +630,13 @@ ${NAV}
     render(opening);
     if (!DRAWERS.some((k) => state[k]) && lastFocus && document.contains(lastFocus)) { lastFocus.focus(); lastFocus = null; }
   }
+  // sha256 of the fetched text, to match refresh.json's timestamps to this exact file.
+  async function textSha256(text) {
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+      return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+    } catch { return null; } // no WebCrypto (non-secure context): the timestamps are not applied
+  }
   // Fetch mode: workspace.json (required) and refresh.json (optional: newer timestamps, last-good status).
   async function load(quiet) {
     try {
@@ -633,10 +646,28 @@ ${NAV}
       let refresh = null;
       try { const rr = await fetch(REFRESH_URL, { cache: 'no-store', credentials: 'same-origin' }); if (rr.ok) refresh = await rr.json(); } catch { /* optional */ }
       const data = JSON.parse(text);
+      if (data && data.withheld === true) {
+        V = null; dataText = text;
+        setHeader(loadingHeader('Data withheld'));
+        main.innerHTML = withheldView(data);
+        droot.innerHTML = '';
+        return;
+      }
       if (!data || !data.headline || !data.meta) throw new Error(`${DATA_URL} is not a workspace file.`);
-      if (quiet && text === dataText && V) { V.live = root.GtmView.buildView(data, refresh).live; setHeader(header(V, { now: Date.now() })); return; }
+      const sha = await textSha256(text);
+      if (quiet && text === dataText && V) {
+        // Same file: only the times and the status move (refresh.json). Update the header in place,
+        // so lists, scroll position and an open drawer stay as they are.
+        const next = root.GtmView.buildView(data, refresh, sha);
+        V.meta.generatedAt = next.meta.generatedAt;
+        V.meta.hubspot = next.meta.hubspot;
+        V.freshness = next.freshness;
+        V.live = next.live;
+        setHeader(header(V, { now: Date.now() }));
+        return;
+      }
       dataText = text;
-      V = root.GtmView.buildView(data, refresh);
+      V = root.GtmView.buildView(data, refresh, sha);
       index(V);
       render(!quiet && !!location.hash, true);
     } catch (e) {
@@ -647,6 +678,8 @@ ${NAV}
       droot.innerHTML = '';
     }
   }
+  // For tests and the console: run the periodic re-check now.
+  root.GtmRecheck = () => load(true);
   document.addEventListener('click', (e) => {
     const t = e.target.closest('[data-set],[data-toggle],[data-sort],[data-page],[data-dismiss],[data-jump],[data-retry]');
     if (!t || e.target.closest('a')) return;

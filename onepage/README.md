@@ -36,7 +36,7 @@ Explicit flags (`--lead-sources`, `--call-classification`, `--review-list`, `--p
 
 **Scrub patterns** (people who must never appear) are never in this repo. Every step reads them from `WORKSPACE_SCRUB_PATTERNS` (comma list) or `WORKSPACE_SCRUB_PATTERNS_FILE` (comma- or line-separated); the data step also reads `scrub-patterns.txt` in `--inputs-dir`. Owners matching a pattern become "Unassigned", every string is scrubbed, and the data step, `build.mjs`, `deploy-check.mjs` and the Lambda all refuse output that still contains a pattern, or run without patterns.
 
-**The page** (`node onepage/build.mjs --app --out DIR`) carries no data. On load it fetches `workspace.json` and `refresh.json` from its own origin with `cache: no-store`, builds the view with the same code a local build uses (`view.cjs`, `page.cjs`, the lost-reasons and Analysis validators), and re-checks every 5 minutes. The header shows "Updated <time> PT" from the data's `generatedAt` (or the newer time the Lambda recorded in `refresh.json` for unchanged content), amber once that is over 45 minutes old, plus per-source freshness chips. If the Lambda had to keep the last good copy, a red chip says why. If `workspace.json` can't be fetched or parsed, the page shows the error and a "Try again" button. Hash state and drill-downs work as in a built page.
+**The page** (`node onepage/build.mjs --app --out DIR`) carries no data. On load it fetches `workspace.json` and `refresh.json` from its own origin with `cache: no-store`, builds the view with the same code a local build uses (`view.cjs`, `page.cjs`, the lost-reasons and Analysis validators), and re-checks every 5 minutes: an unchanged file only updates the header in place (times from `refresh.json`, which apply only when their `forTextSha256` matches the sha256 of the fetched text). The header shows "Updated <time> PT" from the data's `generatedAt` (or the newer time the Lambda recorded in `refresh.json` for unchanged content), amber once that is over 45 minutes old, plus per-source freshness chips. If the Lambda had to keep the last good copy, a red chip says why. If `workspace.json` can't be fetched or parsed, the page shows the error and a "Try again" button. Hash state and drill-downs work as in a built page.
 
 For local audits, `node onepage/build.mjs --data workspace.json --out DIR` builds a page with the data inside (needs scrub patterns).
 
@@ -46,7 +46,7 @@ For local audits, `node onepage/build.mjs --data workspace.json --out DIR` build
 |---|---|
 | `scripts/workspace-data.py` | Data shaping: scope, lead attribution, meeting match, calls, freshness. |
 | `config/lead-rules.json` | The lead-source override layer (answers of Oct 13, 9:48 AM PT, and the r12 metric definitions). Rules only, no data; change a rule here, not in code. |
-| `shared/workspace-scope.json` | Scope rules (data-free): Sales Pipeline id, dropped pipelines, CS owner ids, the hidden owner (escaped), event lists that don't count on their own, form bucket → Source. |
+| `shared/workspace-scope.json` | Scope rules (data-free): Sales Pipeline id, dropped pipelines, CS owner ids, the "Unassigned" label for scrubbed people (the patterns themselves are never in the repo), event lists that don't count on their own, form bucket → Source. |
 | `onepage/page.cjs` | The components (tile, chip, table, expand row, list, drawer, bar) and the page. Runs in Node for the first paint and inlined in the page for hash state, expand rows, lists and drawers. |
 | `onepage/build.mjs` | View model (lost reasons via `workspace/src/lost-reasons.js`, Analysis via `workspace/src/insights.js`), HTML, and the scrub check. |
 | `onepage/styles.css` | Tokens (8 px spacing; 28/16/14/12 type; neutrals, one accent, one alert) and the components. Mobile: one column, fewer columns, full-screen drawer. |
@@ -60,7 +60,7 @@ For local audits, `node onepage/build.mjs --data workspace.json --out DIR` build
 - **Calls** use Strategy's per-call classification (`records.jsonl`, rules in its CLASSIFICATION.md): only `prospect` calls are counted and listed; customer, internal and partner/other calls are counted apart. The call drawer shows Strategy's call type, deal at call time, buyer roles, competitors, objections and next steps.
 - **Meetings** (HubSpot) use the call rule: a company is a customer at time *t* if it has a Renewal or Customer Success deal, or *t* is on/after its first Closed Won date, or it is a lifecycle customer with no won date. A meeting linked to a Renewal/CS deal, or with nothing linked and a title naming a customer company, is a customer meeting. CS owners' meetings and internal-only meetings are out. The same rule is the calls fallback.
 - **Lost reasons** cover new-business losses only: a loss created after its company's first win (an expansion at a customer) is listed apart, not categorized. `lost-reasons.json` decides the deals it lists; HubSpot's reason auto-maps the rest.
-- **The hidden owner** (pattern in `hiddenOwner`) is "Unassigned" in every owner, attribution, label, note and insight field: one recursive scrub over the whole output. `workspace-data.py`, `build.mjs` and `deploy-check.mjs` all fail if the pattern survives.
+- **Scrubbed people** (scrub patterns, see above) are "Unassigned" in every owner, attribution, label, note and insight field: one recursive scrub over the whole output. `workspace-data.py`, `build.mjs`, `deploy-check.mjs` and the refresh Lambda all fail if a pattern survives.
 - "This week", the Sheet→HubSpot "bridge" count and the `records.json` counts are gone: they explained a reconciliation, not a decision.
 
 ## Sections
@@ -98,7 +98,11 @@ Pass earlier HubSpot deal exports (`live_deals.json` shape) with `--prior`. The 
 WORKSPACE_SCRUB_PATTERNS_FILE=/path/outside/repo/scrub-patterns.txt workspace/refresh/deploy.sh --onepage-app
 ```
 
-builds the data-less page, checks it, updates the refresh Lambda (code, IAM for `workspace.json`, the scrub patterns in its environment), runs it once, and uploads `index.html` only when `workspace.json` is in the bucket; otherwise the live page is left as it is. `deploy.sh` with no option puts the older workspace app back. `deploy.sh --onepage DIR` still uploads a page with data inside (a static fallback).
+builds the data-less page and checks it (before any AWS call), updates the refresh Lambda (code, write-only IAM on `workspace.json`, the scrub patterns in its environment, passed as a private `file://` so they never appear on a command line), then runs the function once (`--cli-read-timeout 150`, longer than its 120 s timeout, so the CLI never runs it twice). It uploads `index.html` (marked `gtm-page=onepage-app`) only when the run did not fail (`FunctionError`), `refresh.json` `.workspace.status` is `uploaded` or `unchanged`, and `workspace.json` is in the bucket; otherwise the live page is left as it is.
+
+A plain `deploy.sh` (for example, to rotate the patterns or update the function) leaves a live one-page `index.html` alone; `--restore-app` puts the older workspace app back. `deploy.sh --onepage DIR` still uploads a page with data inside (a static fallback).
+
+When a newly added pattern matches the latest snapshot, the function replaces the live `workspace.json` with a small "withheld" document (by PutObject; it has no delete permission) and the page shows a notice instead of data until a clean snapshot arrives.
 
 ## Tests
 
@@ -107,7 +111,7 @@ npm test                                   # includes all of these
 node --test test/onepage-e2e.test.mjs      # synthetic brain (scripts/synthetic-data.cjs brainFixture) end to end, both paths
 node --test test/onepage-real.test.mjs     # real brain.db + Strategy / Pipeline files; skipped when absent
 node --test test/onepage-live.test.mjs     # the Lambda's copy / skip / keep-last-good / missing paths (fake S3) and the fetching page (browser if available)
-node --test test/onepage-deploy.test.mjs   # deploy-check and deploy.sh --onepage / --onepage-app (no AWS calls)
+node --test test/onepage-deploy.test.mjs   # deploy-check, refusals before AWS, and the invoke -> check -> upload sequence against a fake aws
 ```
 
 The real-data run reads `BRAIN_DB`, `GTM_INPUTS_DIR` (the inputs directory, including `scrub-patterns.txt`), `GTM_PRIOR_EXPORT`, `GTM_CURRENT_PAGE`, `GTM_REFRESH_JSON` and `GTM_LEMLIST_SNAPSHOT` (defaults under `/workspace`), builds into a temp dir, checks the headline against an independent SQL computation, checks the file passes the Lambda's checks and hashes the same across runs, and prints PASS/FAIL per audited figure. The synthetic tests use the made-up pattern from `scripts/synthetic-data.cjs` (`SYNTHETIC_SCRUB`).

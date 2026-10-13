@@ -13,8 +13,10 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { refresh } from '../workspace/refresh/handler.mjs';
-import { contentHash, validateWorkspace, stripVolatile, PROBLEMS, SCHEMA_VERSION } from '../workspace/refresh/workspace-json.mjs';
+import { contentHash, textHash, validateWorkspace, stripVolatile, PROBLEMS, SCHEMA_VERSION } from '../workspace/refresh/workspace-json.mjs';
 import { renderAppHtml } from '../onepage/build.mjs';
+import { withheldDocument } from '../workspace/refresh/workspace-json.mjs';
+const withheldDoc = () => withheldDocument('2026-10-13T17:00:00Z');
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -99,6 +101,30 @@ test('workspace.json: the synthetic data step output passes the checks', () => {
   assert.ok(!stripped.includes(JSON.parse(WS).meta.generatedAt), 'no build time survives the strip');
 });
 
+test('workspace.json checks: a file the page cannot render, a parse error, an escaped name', () => {
+  // The minimum the old check accepted: it does not render, so it is refused.
+  const bare = JSON.stringify({ schemaVersion: 1, meta: { generatedAt: '2026-10-13T16:00:00Z' }, headline: { open: { count: 1, amount: 1 } } });
+  const v = validateWorkspace(bare, [SYNTHETIC_SCRUB]);
+  assert.equal(v.ok, false);
+  assert.ok(v.errors.some((e) => /closed missing/.test(e)));
+  // Every key present but one section broken: the trial render catches it.
+  const broken = JSON.parse(WS); broken.leads.items = 'oops';
+  assert.match(validateWorkspace(JSON.stringify(broken), [SYNTHETIC_SCRUB]).errors.join(), /does not render \(TypeError\)/);
+  // A truncated file: no text from the file in the error (a parse message would quote it).
+  const cut = '{"owner": Jane Secret, "x": 1';
+  assert.deepEqual(validateWorkspace(cut, [SYNTHETIC_SCRUB]).errors, ['not valid JSON']);
+  // The scrub check runs on the raw text before parsing, and on decoded strings.
+  const rawHit = '{"owner": "' + SYNTHETIC_SCRUB + ' Example", "x": ';
+  const r1 = validateWorkspace(rawHit, [SYNTHETIC_SCRUB]);
+  assert.deepEqual([r1.scrubHit, r1.errors], [true, ['scrub check: pattern #1 appears']]);
+  const escaped = JSON.parse(WS); escaped.deals[0].owner = '__NAME__';
+  const escapedText = JSON.stringify(escaped).replace('__NAME__', [...SYNTHETIC_SCRUB].map((c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
+  assert.ok(!escapedText.toLowerCase().includes(SYNTHETIC_SCRUB));
+  const r2 = validateWorkspace(escapedText, [SYNTHETIC_SCRUB]);
+  assert.equal(r2.scrubHit, true);
+  assert.match(r2.errors[0], /escaped/);
+});
+
 test('Lambda: copies a new workspace.json, skips an unchanged one, stamps the newer times', async (t) => {
   const w = world();
   t.after(w.done);
@@ -115,8 +141,11 @@ test('Lambda: copies a new workspace.json, skips an unchanged one, stamps the ne
   const doc = w.refreshDoc();
   assert.equal(doc.workspace.stamps.generatedAt, '2026-10-13T16:30:00Z');
   assert.equal(doc.workspace.publishedGeneratedAt, '2026-10-13T16:00:00Z');
-  const view = buildView(JSON.parse(w.s3.get('preview/workspace.json')), doc);
+  const live = w.s3.get('preview/workspace.json');
+  assert.equal(doc.workspace.stamps.forTextSha256, textHash(live), 'stamps are keyed to the live file');
+  const view = buildView(JSON.parse(live), doc, textHash(live));
   assert.equal(view.meta.generatedAt, '2026-10-13T16:30:00Z', 'the page shows the newer time');
+  assert.equal(buildView(JSON.parse(live), doc, 'another-file').meta.generatedAt, '2026-10-13T16:00:00Z', 'not over another file');
   // Changed content: uploaded again.
   const changed = JSON.parse(WS); changed.headline.open.count += 1;
   w.publish(JSON.stringify(changed));
@@ -143,6 +172,7 @@ test('Lambda: an invalid workspace.json (scrub hit, schema) keeps the last good 
   const doc = w.refreshDoc();
   assert.equal(doc.workspace.problem, PROBLEMS.invalid);
   assert.equal(buildView(JSON.parse(good), doc).live.problem, PROBLEMS.invalid, 'the page says it shows the last good copy');
+  assert.equal(r.workspace.status, 'kept-last-good', 'same patterns as when the live copy was checked: keep it');
   const wrong = JSON.parse(WS); wrong.schemaVersion = 99;
   w.publish(JSON.stringify(wrong));
   assert.equal((await w.run()).workspace.problem, PROBLEMS.invalid);
@@ -181,6 +211,37 @@ test('Lambda: without scrub patterns nothing is copied', async (t) => {
   assert.equal(w.wsPuts(), 0);
 });
 
+test('Lambda: a newly matching scrub pattern replaces the live copy with a withheld notice (PutObject only)', async (t) => {
+  const w = world({ patterns: ['notpresent'] });
+  t.after(w.done);
+  const named = JSON.parse(WS); named.deals[0].owner = 'Ozzy Example';
+  w.publish(JSON.stringify(named));
+  await w.run();
+  assert.match(w.s3.get('preview/workspace.json'), /Ozzy Example/, 'clean under the old patterns');
+  // A pattern is added: the next snapshot (same data) now matches, and so does the live copy.
+  w.cfg.scrubPatterns = ['notpresent', 'ozzy'];
+  w.publish(JSON.stringify(named));
+  const r = await w.run();
+  assert.equal(r.workspace.status, 'withheld');
+  assert.equal(r.workspace.problem, PROBLEMS.withheld);
+  const live = w.s3.get('preview/workspace.json');
+  assert.ok(!/ozzy/i.test(live), 'the name is gone from the live object');
+  assert.equal(JSON.parse(live).withheld, true);
+  assert.ok(!JSON.stringify(w.refreshDoc()).toLowerCase().includes('ozzy'), 'refresh.json never names it');
+  assert.equal(w.notes.length, 1);
+  assert.ok(!w.notes[0].message.toLowerCase().includes('ozzy'));
+  const puts = w.wsPuts();
+  w.publish(JSON.stringify(named));
+  assert.equal((await w.run()).workspace.status, 'withheld', 'stays withheld while the snapshot still matches');
+  assert.equal(w.wsPuts(), puts, 'no re-upload');
+  // A clean snapshot brings the data back.
+  w.publish(WS);
+  const back = await w.run();
+  assert.equal(back.workspace.status, 'uploaded');
+  assert.equal(JSON.parse(w.s3.get('preview/workspace.json')).withheld, undefined);
+  assert.match(page.withheldView(JSON.parse(withheldDoc())), /withheld[\s\S]*next clean snapshot/);
+});
+
 test('page (no browser): stamps, the 45-minute amber, the last-good banner, the error view', () => {
   const data = JSON.parse(restamp(WS, '2026-10-13T16:00:00Z'));
   const now = Date.parse('2026-10-13T16:10:00Z');
@@ -191,10 +252,11 @@ test('page (no browser): stamps, the 45-minute amber, the last-good banner, the 
   assert.match(old, /chip-warn" data-updated=/);
   assert.match(old, /over 45 min ago/);
   // Stamps apply only when refresh.json says the current content is the published copy.
-  const stamped = { refreshedAt: '2026-10-13T17:00:00Z', workspace: { sha256: 'a', publishedSha256: 'a', stamps: { generatedAt: '2026-10-13T16:55:00Z', freshness: [] } } };
-  assert.match(page.header(buildView(data, stamped), { now: now + 50 * 60e3 }), /chip-ok" data-updated="2026-10-13T16:55:00Z"/);
-  const notPublished = { workspace: { sha256: 'b', publishedSha256: 'a', stamps: { generatedAt: '2026-10-13T16:55:00Z' } } };
-  assert.equal(buildView(data, notPublished).meta.generatedAt, '2026-10-13T16:00:00Z');
+  // Stamps apply only to the exact file they were recorded for (sha256 of its text).
+  const stamped = { refreshedAt: '2026-10-13T17:00:00Z', workspace: { stamps: { forTextSha256: 'abc', generatedAt: '2026-10-13T16:55:00Z', freshness: [] } } };
+  assert.match(page.header(buildView(data, stamped, 'abc'), { now: now + 50 * 60e3 }), /chip-ok" data-updated="2026-10-13T16:55:00Z"/);
+  assert.equal(buildView(data, stamped, 'other').meta.generatedAt, '2026-10-13T16:00:00Z');
+  assert.equal(buildView(data, stamped, null).meta.generatedAt, '2026-10-13T16:00:00Z');
   const lastGood = { refreshedAt: '2026-10-13T17:00:00Z', workspace: { status: 'kept-last-good', problem: PROBLEMS.missing, publishedSha256: 'a', stamps: null } };
   assert.match(page.header(buildView(data, lastGood), { now }), /Showing the last good data: the latest snapshot has no workspace\.json/);
   assert.match(page.errorView('workspace.json answered HTTP 404.'), /could not be loaded[\s\S]*HTTP 404[\s\S]*data-retry/);
@@ -207,7 +269,7 @@ test('page (no browser): stamps, the 45-minute amber, the last-good banner, the 
 const PY = process.env.PLAYWRIGHT_PYTHON || '/workspace/.venv-pw/bin/python';
 const hasBrowser = existsSync(PY) && (() => { try { execFileSync(PY, ['-c', 'import playwright'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
-test('page (browser): fetches workspace.json, renders, deep-links, ages to amber, shows errors', { skip: !hasBrowser && 'Python Playwright not available' }, async (t) => {
+test('page (browser): fetches workspace.json, renders, deep-links, re-checks in place, ages to amber, shows errors', { skip: !hasBrowser && 'Python Playwright not available', timeout: 900000 }, async (t) => {
   const files = { '/index.html': renderAppHtml(), '/workspace.json': restamp(WS, new Date().toISOString()), '/refresh.json': null };
   const server = createServer((req, res) => {
     const path = req.url.split('?')[0] === '/' ? '/index.html' : req.url.split('?')[0];
@@ -221,67 +283,90 @@ test('page (browser): fetches workspace.json, renders, deep-links, ages to amber
   const url = `http://127.0.0.1:${server.address().port}/`;
   const view = buildView(JSON.parse(files['/workspace.json']), null);
   const leadId = view.leads.items.find((l) => l.company === 'Orchid Retail').id;
+  // One browser session driven step by step over stdin/stdout; every wait is bounded, the child is always killed.
   const script = `
 import json, sys
 from playwright.sync_api import sync_playwright
 url, lead = sys.argv[1], sys.argv[2]
-out = {}
+T = 240000
+def say(o):
+    print(json.dumps(o)); sys.stdout.flush()
 with sync_playwright() as p:
-    b = p.chromium.launch(); pg = b.new_page()
+    b = p.chromium.launch(); pg = b.new_page(); pg.set_default_timeout(T)
     errors = []; pg.on('pageerror', lambda e: errors.append(str(e)))
     pg.goto(url + '#src=Paid&lead=' + lead); pg.wait_for_selector('#pipeline'); pg.wait_for_selector('.drawer')
-    out['open'] = pg.inner_text('[data-fig="open-count"] .tile-v'); out['drawer'] = pg.inner_text('.drawer h2')
-    out['updatedClass'] = pg.get_attribute('[data-updated]', 'class'); out['hash'] = pg.evaluate('location.hash')
-    pg.keyboard.press('Escape'); out['closed'] = pg.locator('.drawer').count()
-    print(json.dumps(out)); sys.stdout.flush()
-    sys.stdin.readline()  # the test swaps the files
-    pg.goto(url); pg.wait_for_selector('#pipeline'); out2 = {'updatedClass': pg.get_attribute('[data-updated]', 'class'), 'banner': pg.locator('.chip-alert').all_inner_texts()}
-    print(json.dumps(out2)); sys.stdout.flush()
-    sys.stdin.readline()
-    pg.goto(url); pg.wait_for_selector('.sec.error'); out3 = {'error': pg.inner_text('.sec.error')}
-    print(json.dumps(out3)); sys.stdout.flush()
-    sys.stdin.readline()
-    pg.click('[data-retry]'); pg.wait_for_selector('#pipeline'); out3b = {'retried': True, 'errors': errors}
-    print(json.dumps(out3b)); sys.stdout.flush()
+    o = {'open': pg.inner_text('[data-fig="open-count"] .tile-v'), 'drawer': pg.inner_text('.drawer h2'),
+         'updatedClass': pg.get_attribute('[data-updated]', 'class'), 'hash': pg.evaluate('location.hash')}
+    pg.keyboard.press('Escape'); o['closed'] = pg.locator('.drawer').count(); say(o)
+    for cmd in sys.stdin:
+        cmd = cmd.strip()
+        if cmd == 'recheck':
+            pg.evaluate('location.hash = "#mo=*"'); pg.wait_for_selector('#meetings .ltable')
+            pg.evaluate('GtmRecheck()'); pg.wait_for_timeout(500)
+            say({'updated': pg.get_attribute('[data-updated]', 'data-updated'), 'updatedClass': pg.get_attribute('[data-updated]', 'class'),
+                 'listStill': pg.locator('#meetings .ltable').count(), 'hash': pg.evaluate('location.hash')})
+        elif cmd == 'reload':
+            pg.goto(url); pg.wait_for_selector('#pipeline')
+            say({'updatedClass': pg.get_attribute('[data-updated]', 'class'), 'banner': pg.locator('.chip-alert').all_inner_texts()})
+        elif cmd == 'error':
+            pg.goto(url); pg.wait_for_selector('.sec.error'); say({'error': pg.inner_text('.sec.error')})
+        elif cmd == 'retry':
+            pg.click('[data-retry]'); pg.wait_for_selector('#pipeline'); say({'retried': True})
+        elif cmd == 'withheld':
+            pg.goto(url); pg.wait_for_selector('.sec.withheld'); say({'withheld': pg.inner_text('.sec.withheld')})
+        elif cmd == 'done':
+            say({'errors': errors}); break
     b.close()
 `;
   const dir = mkdtempSync(join(tmpdir(), 'onepage-browser-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, 'check.py'), script);
   const child = spawn(PY, [join(dir, 'check.py'), url, leadId], { stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } rmSync(dir, { recursive: true, force: true }); });
   let buf = '';
+  let err = '';
   const lines = [];
   const waiters = [];
   child.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (waiters.length) waiters.shift()(l); else lines.push(l); } });
-  let err = ''; child.stderr.on('data', (d) => { err += d; });
-  const next = () => new Promise((resolve, reject) => {
-    if (lines.length) return resolve(JSON.parse(lines.shift()));
-    const to = setTimeout(() => reject(new Error('browser check timed out: ' + err.slice(-500))), 120000);
-    waiters.push((l) => { clearTimeout(to); resolve(JSON.parse(l)); });
-  });
+  child.stderr.on('data', (d) => { err += d; });
+  const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+  const next = (cmd) => {
+    if (cmd) child.stdin.write(cmd + '\n');
+    return new Promise((resolve, reject) => {
+      if (lines.length) return resolve(JSON.parse(lines.shift()));
+      const to = setTimeout(() => reject(new Error(`browser step ${cmd || 'start'} timed out: ${err.slice(-500)}`)), 300000);
+      exited.then((code) => { clearTimeout(to); reject(new Error(`browser exited (${code}): ${err.slice(-500)}`)); });
+      waiters.push((l) => { clearTimeout(to); resolve(JSON.parse(l)); });
+    });
+  };
   const a = await next();
   assert.equal(a.open, '4');
   assert.equal(a.drawer, 'Orchid Retail');
   assert.match(a.updatedClass, /chip-ok/);
   assert.match(a.hash, /lead=/);
   assert.equal(a.closed, 0);
+  // Same file, newer times in refresh.json (keyed to this file's sha256): the open tab updates in place.
+  const fresh = new Date(Date.now() + 60e3).toISOString();
+  files['/refresh.json'] = JSON.stringify({ refreshedAt: fresh, workspace: { status: 'unchanged', stamps: { forTextSha256: textHash(files['/workspace.json']), generatedAt: fresh, freshness: [] } } });
+  const r = await next('recheck');
+  assert.equal(r.updated, fresh);
+  assert.match(r.updatedClass, /chip-ok/);
+  assert.equal(r.listStill, 1, 'the open list stays');
+  assert.equal(r.hash, '#mo=*');
   // Old data and a refresh.json that says the latest snapshot had none: amber + last-good banner.
   files['/workspace.json'] = restamp(WS, '2026-01-01T00:00:00Z');
   files['/refresh.json'] = JSON.stringify({ refreshedAt: new Date().toISOString(), workspace: { status: 'kept-last-good', problem: PROBLEMS.missing } });
-  child.stdin.write('\n');
-  const b = await next();
+  const b = await next('reload');
   assert.match(b.updatedClass, /chip-warn/);
   assert.ok(b.banner.some((x) => /last good data/.test(x)));
   // workspace.json missing: a clear error, then recovery on retry.
   delete files['/workspace.json'];
-  child.stdin.write('\n');
-  const c = await next();
+  const c = await next('error');
   assert.match(c.error, /could not be loaded/);
   assert.match(c.error, /HTTP 404/);
   files['/workspace.json'] = WS;
-  child.stdin.write('\n');
-  const d = await next();
-  assert.equal(d.retried, true);
-  assert.deepEqual(d.errors, []);
-  child.stdin.end();
+  assert.equal((await next('retry')).retried, true);
+  // A withheld document: a notice, no data.
+  files['/workspace.json'] = withheldDoc();
+  assert.match((await next('withheld')).withheld, /withheld/);
+  assert.deepEqual((await next('done')).errors, []);
 });

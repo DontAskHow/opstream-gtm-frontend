@@ -41,12 +41,14 @@
   }
 
   // refresh.json (written by the preview refresh Lambda every run) carries the newest
-  // timestamps of a workspace.json whose content is unchanged, so the page's "Updated"
-  // time stays current without re-uploading the file (workspace/refresh/workspace-json.mjs).
-  function applyStamps(data, refresh) {
+  // timestamps of a workspace.json whose content is unchanged, so the page's "Updated" time
+  // stays current without re-uploading the file (workspace/refresh/workspace-json.mjs). They
+  // apply only to the exact file they were recorded for: textSha256 is the sha256 of the text
+  // the page fetched, and must equal stamps.forTextSha256.
+  function applyStamps(data, refresh, textSha256) {
     const w = refresh && refresh.workspace;
-    if (!w || !w.stamps || w.sha256 !== w.publishedSha256) return data;
-    const s = w.stamps;
+    const s = w && w.stamps;
+    if (!s || !s.forTextSha256 || !textSha256 || s.forTextSha256 !== textSha256) return data;
     if (s.generatedAt) data.meta.generatedAt = s.generatedAt;
     if (s.hubspotFetchedAt) data.meta.hubspot = { ...(data.meta.hubspot || {}), fetchedAt: s.hubspotFetchedAt };
     if (Array.isArray(s.freshness) && Array.isArray(data.freshness)) {
@@ -57,9 +59,9 @@
   }
 
   // The view model the page renders.
-  function buildView(data, refresh) {
+  function buildView(data, refresh, textSha256) {
     const { lost, insights } = libs();
-    const v = applyStamps(structuredClone(data), refresh);
+    const v = applyStamps(structuredClone(data), refresh, textSha256);
     v.meta.asOf = v.meta.asOf || v.meta.generatedAt;
     v.closed.reasons = v.closed.lost.length ? lostView(v.closed, lost) : null;
     const cat = {};

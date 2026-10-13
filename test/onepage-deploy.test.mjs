@@ -4,7 +4,7 @@
 // call (a fake `aws` on PATH fails the test if it is ever invoked).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, chmodSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,4 +92,108 @@ test('deploy.sh --onepage-app builds and checks the data-less page, then needs A
   assert.notEqual(r.status, 0);
   assert.equal(r.called, true, 'got as far as the account check');
   assert.ok(!/not deployable|needs scrub patterns/.test(r.stderr), r.stderr);
+});
+
+// A fake `aws` for the whole --onepage-app run: logs every call's arguments and answers the
+// queries deploy.sh makes. FAKE_FUNCTION_ERROR, FAKE_REFRESH, FAKE_NO_WORKSPACE and
+// FAKE_INDEX_META steer the invoke -> check -> upload sequence.
+const FAKE_AWS = `#!/bin/bash
+echo "$*" >> "$FAKE_LOG"
+case "$1 $2" in
+  "sts get-caller-identity") echo 080403790510 ;;
+  "iam get-role") [[ "$*" == *--query* ]] && echo arn:aws:iam::080403790510:role/fake ;;
+  "lambda get-function-configuration") echo "\${FAKE_CURRENT_PATTERNS:-None}" ;;
+  "lambda invoke")
+    out="\${@: -1}"; echo '{"ok":true}' > "$out"
+    if [ -n "$FAKE_FUNCTION_ERROR" ]; then echo '{"StatusCode":200,"FunctionError":"Unhandled"}'; else echo '{"StatusCode":200}'; fi ;;
+  "scheduler get-schedule") echo ENABLED ;;
+  "s3api head-object")
+    if [[ "$*" == *workspace.json* ]]; then [ -n "$FAKE_NO_WORKSPACE" ] && exit 254; exit 0; fi
+    if [[ "$*" == *index.html* ]]; then echo "\${FAKE_INDEX_META:-None}"; fi ;;
+  "s3 cp")
+    if [[ "$3" == s3://*refresh.json ]]; then printf '%s' "$FAKE_REFRESH" > "$4"; fi ;;
+esac
+exit 0
+`;
+
+function deployRun(args, env = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'onepage-deploy-seq-'));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'aws'), FAKE_AWS);
+  chmodSync(join(bin, 'aws'), 0o755);
+  const log = join(dir, 'aws.log');
+  writeFileSync(log, '');
+  const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('WORKSPACE_SCRUB') && !k.startsWith('FAKE_')));
+  const r = spawnSync('bash', [join(ROOT, 'workspace', 'refresh', 'deploy.sh'), ...args],
+    { env: { ...clean, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, ...env }, encoding: 'utf8', timeout: 300000 });
+  const calls = readFileSync(log, 'utf8').trim().split('\n').filter(Boolean);
+  rmSync(dir, { recursive: true, force: true });
+  return { ...r, calls };
+}
+const ok = JSON.stringify({ workspace: { status: 'uploaded', problem: null } });
+const uploadsIndex = (calls) => calls.some((c) => /^s3 cp .*index\.html s3:\/\/[^ ]+\/index\.html/.test(c));
+
+test('deploy.sh --onepage-app: invoke (150 s read timeout) -> FunctionError -> refresh.json status -> head -> upload', () => {
+  const r = deployRun(['--onepage-app'], { WORKSPACE_SCRUB_PATTERNS: SYNTHETIC_SCRUB, FAKE_REFRESH: ok });
+  assert.equal(r.status, 0, r.stderr);
+  const i = r.calls.findIndex((c) => c.startsWith('lambda invoke'));
+  assert.ok(i >= 0 && /--cli-read-timeout 150/.test(r.calls[i]));
+  const order = ['lambda invoke', 's3 cp s3://opstream-gtm-preview-db5553a4/refresh.json', 's3api head-object --bucket opstream-gtm-preview-db5553a4 --key workspace.json', 's3 cp '];
+  let at = -1;
+  for (const step of order) { const j = r.calls.findIndex((c, k) => k > at && c.startsWith(step)); assert.ok(j > at, `${step} in order`); at = j; }
+  assert.ok(uploadsIndex(r.calls));
+  assert.ok(r.calls.some((c) => /index\.html .*--metadata gtm-page=onepage-app/.test(c)));
+  // Patterns go to the function through a private file, never on a command line.
+  assert.ok(!r.calls.join('\n').toLowerCase().includes(SYNTHETIC_SCRUB));
+  assert.ok(r.calls.some((c) => /update-function-configuration .*--environment file:\/\//.test(c)));
+  // workspace.json: write-only for the function.
+  const policy = readFileSync(join(ROOT, 'workspace', 'refresh', 'deploy.sh'), 'utf8');
+  assert.match(policy, /"Action":"s3:PutObject",\s*"Resource":\["arn:aws:s3:::\$PREVIEW_BUCKET\/workspace\.json"\]/);
+  assert.ok(!/s3:GetObject[^}]*workspace\.json/.test(policy));
+});
+
+test('deploy.sh --onepage-app keeps the live page on a failed run, a kept or withheld copy, or no workspace.json', () => {
+  const env = { WORKSPACE_SCRUB_PATTERNS: SYNTHETIC_SCRUB, FAKE_REFRESH: ok };
+  const failed = deployRun(['--onepage-app'], { ...env, FAKE_FUNCTION_ERROR: '1' });
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /FunctionError/);
+  assert.ok(!uploadsIndex(failed.calls));
+  for (const status of ['kept-last-good', 'withheld']) {
+    const r = deployRun(['--onepage-app'], { ...env, FAKE_REFRESH: JSON.stringify({ workspace: { status, problem: 'x' } }) });
+    assert.equal(r.status, 1, status);
+    assert.match(r.stderr, new RegExp(`'${status} x'`));
+    assert.ok(!uploadsIndex(r.calls), status);
+  }
+  const garbled = deployRun(['--onepage-app'], { ...env, FAKE_REFRESH: '{"workspace": ' });
+  assert.equal(garbled.status, 1);
+  assert.match(garbled.stderr, /'unreadable '/);
+  assert.ok(!/Traceback/.test(garbled.stderr));
+  assert.ok(!uploadsIndex(garbled.calls));
+  const none = deployRun(['--onepage-app'], { ...env, FAKE_NO_WORKSPACE: '1' });
+  assert.equal(none.status, 1);
+  assert.ok(!uploadsIndex(none.calls));
+});
+
+test('a plain deploy leaves a live one-page index.html unless --restore-app', () => {
+  const env = { FAKE_CURRENT_PATTERNS: SYNTHETIC_SCRUB, FAKE_INDEX_META: 'onepage-app' };
+  const kept = deployRun([], env);
+  assert.equal(kept.status, 0, kept.stderr);
+  assert.match(kept.stderr, /index\.html is the one-page workspace: left as it is/);
+  assert.ok(!kept.calls.some((c) => /src\/index\.html s3:/.test(c)));
+  assert.ok(kept.calls.some((c) => /src\/app\.js s3:/.test(c)), 'the other app files still go up');
+  const restored = deployRun(['--restore-app'], env);
+  assert.equal(restored.status, 0, restored.stderr);
+  assert.ok(restored.calls.some((c) => /src\/index\.html s3:/.test(c)));
+});
+
+test('deploy.sh: a patterns file with only comments stops with a message', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'onepage-deploy-pat-'));
+  try {
+    writeFileSync(join(dir, 'p.txt'), '# nothing here\n\n');
+    const r = deployRun(['--onepage-app'], { WORKSPACE_SCRUB_PATTERNS_FILE: join(dir, 'p.txt') });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /has no patterns/);
+    assert.equal(r.calls.length, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
