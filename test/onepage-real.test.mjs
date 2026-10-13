@@ -254,3 +254,63 @@ print(json.dumps({'open': [o[0], round(o[1]), round(o[2])], 'onHold': [h[0], rou
   check('same data, new run: same content hash (no spurious publish)', contentHash(a) === contentHash(b), true);
   console.log(report.join('\n'));
 });
+
+// The Oct 13 2026 reporting rules against the figures their owners expect on real data. The expected figures live
+// outside this public repo: GTM_RULES_EXPECTED names a JSON file (forms, meetings, adLeads, tolerance). Figures that
+// need fields only the new sync writes (dealstage history, hs_analytics_first_url) are checked once those are in
+// brain.db; until then the test says so and checks what bounds them.
+const EXPECTED = process.env.GTM_RULES_EXPECTED;
+test('real data: Oct 13 reporting rules match the expected figures', { skip: (!present && `real inputs not present (${DB})`) || (!(EXPECTED && existsSync(EXPECTED)) && 'GTM_RULES_EXPECTED not set') }, (t) => {
+  const exp = JSON.parse(readFileSync(EXPECTED, 'utf8'));
+  const dir = mkdtempSync(join(tmpdir(), 'onepage-real-rules-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const out = join(dir, 'workspace.json');
+  execFileSync('python3', [join(ROOT, 'scripts', 'workspace-data.py'), '--db', DB, '--inputs-dir', INPUTS, '--portal-id', '12345', '--out', out, '--quiet'],
+    { env: { ...process.env, WORKSPACE_SCRUB_PATTERNS: '', WORKSPACE_SCRUB_PATTERNS_FILE: PATTERNS_FILE, CALL_CLASSIFICATION: '', LEAD_SOURCE_REVIEW: '', PAID_EXPORT: '' } });
+  const d = JSON.parse(readFileSync(out, 'utf8'));
+  const report = [];
+  const near = (name, got, want) => {
+    const ok = Math.abs(got - want) <= Math.max(exp.tolerance.abs, (want * exp.tolerance.pct) / 100);
+    report.push(`${ok ? 'PASS' : 'FAIL'}  ${name}: ${got} (expected ${want}, ${got - want >= 0 ? '+' : ''}${got - want})`);
+    assert.ok(ok, `${name}: ${got}, expected ${want}`);
+  };
+  const later = (name, why) => { report.push(`AFTER-SYNC  ${name}: ${why}`); t.diagnostic(`${name}: verifiable after the next sync (${why})`); };
+
+  // Forms: submissions of every lead-sources.json form, customers out (the stage the expected figures describe);
+  // careers forms, free-mail and internal addresses come out after that, and the breakdown accounts for the gap.
+  const f = d.forms;
+  assert.equal(f.available, true);
+  for (const [k, want] of Object.entries(exp.forms)) if (k !== 'stage') near(`forms ${k} (${exp.forms.stage})`, f.waterfall[exp.forms.stage][k] || 0, want);
+  const sum = (o) => Object.values(o).reduce((a, x) => a + x, 0);
+  assert.equal(sum(f.waterfall.afterCustomers) - sum(f.waterfall.counted), (f.excluded.careers || 0) + (f.excluded.freeMail || 0) + (f.excluded.internal || 0));
+  assert.equal(sum(f.waterfall.all) - sum(f.waterfall.afterCustomers), f.excluded.customer || 0);
+  report.push(`INFO  forms shown (customers, careers, free-mail, internal out): ${JSON.stringify(f.waterfall.counted)}; first conversion: ${JSON.stringify(f.firstConversion.afterCustomers)}`);
+
+  // Meeting-link bookings.
+  const b = d.meetings.bookings;
+  const y = b.byYear['2026'] || {};
+  near('bookings before the rules', b.total, exp.meetings.before);
+  near('bookings 2026 before the rules', y.total || 0, exp.meetings.before2026);
+  near('bookings excluded as customer', b.customer, exp.meetings.customer);
+  if (b.stageHistorySynced) {
+    near('bookings excluded as past-Discovery opportunities', b.opportunity, exp.meetings.opportunity);
+    near('bookings after the rules', b.afterRules, exp.meetings.after);
+    near('bookings 2026 after the rules', y.afterRules || 0, exp.meetings.after2026);
+  } else {
+    // Without stage history only customers are out, so the count is the expected one plus at most the opportunities.
+    assert.equal(b.opportunity, 0);
+    assert.ok(b.afterRules >= exp.meetings.after - exp.tolerance.abs && b.afterRules <= exp.meetings.after + exp.meetings.opportunity + exp.tolerance.abs, 'customers-only count bounds the final one');
+    later('bookings after the rules', `dealstage history not in brain.db; customers out only: ${b.afterRules} (2026: ${y.afterRules})`);
+  }
+
+  // Ad platforms: HubSpot-sourced leads; organic ChatGPT referrals apart; platform figures are events, not leads.
+  const a = d.adLeads;
+  near('ChatGPT organic AI-referral leads', a.aiReferral.leads, exp.adLeads.chatgptOrganic);
+  const oa = a.platforms.find((p) => p.key === 'openai');
+  if (a.firstUrlSynced) {
+    report.push(`${oa.leads >= exp.adLeads.openaiPaidMin && oa.leads <= exp.adLeads.openaiPaidMax ? 'PASS' : 'FAIL'}  OpenAI paid leads: ${oa.leads}`);
+    assert.ok(oa.leads >= exp.adLeads.openaiPaidMin && oa.leads <= exp.adLeads.openaiPaidMax, `OpenAI paid leads ${oa.leads}`);
+  } else later('OpenAI paid leads', `hs_analytics_first_url not in brain.db; ${oa.leads} today`);
+  for (const x of d.ads.filter((x) => x.connected)) assert.equal(x.figureLabel, 'platform-reported events, not leads');
+  console.log(report.join('\n'));
+});
