@@ -341,7 +341,8 @@ def renewal_book(deals, today):
 # scripts/workspace-data.py: both read these two files.
 _SHARED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "shared")
 with open(os.path.join(_SHARED, "workspace-scope.json"), encoding="utf-8") as _fh:
-    SALES_PIPELINE_ID = json.load(_fh)["salesPipelineId"]
+    _SCOPE = json.load(_fh)
+SALES_PIPELINE_ID = _SCOPE["salesPipelineId"]
 with open(os.path.join(_SHARED, "open-pipeline.json"), encoding="utf-8") as _fh:
     PIPELINE_DEF = json.load(_fh)
 
@@ -414,6 +415,97 @@ def on_hold_book(deals):
 def hubspot_only_book(deals, today):
     rows = [d for d in (deals or []) if is_hubspot_only_open(d, today)]
     return {"count": len(rows), "amount": _money_sum(rows), "deals": rows}
+
+
+# Read-only views of the same rule, for checks that compare this module with
+# workspace-model.cjs (test/open-pipeline-e2e.test.mjs). The open book above
+# does not use them.
+_PIPELINE_KINDS = [(k["kind"], re.compile(k["labelPattern"], re.I)) for k in PIPELINE_DEF["pipelineKinds"]]
+
+
+def pipeline_label(deal):
+    for key in PIPELINE_DEF["fields"]["pipelineLabel"]:
+        if (deal or {}).get(key):
+            return str(deal[key]).strip()
+    return ""
+
+
+def pipeline_kind(deal):
+    """The headline kind for the Sales Pipeline id; otherwise the kind its label names, 'other', or '' with no pipeline."""
+    pid = pipeline_id(deal)
+    if pid == SALES_PIPELINE_ID:
+        return PIPELINE_DEF["headlineKind"]
+    label = _SCOPE["excludedPipelines"].get(pid) or pipeline_label(deal)
+    for kind, pattern in _PIPELINE_KINDS:
+        if pattern.search(label):
+            return kind
+    return "other" if (pid or label) else ""
+
+
+def pipeline_status(deal):
+    """'closed' (HubSpot isClosed), 'onHold' (an On Hold stage) or 'open', in any pipeline."""
+    if hubspot_closed(deal):
+        return "closed"
+    return "onHold" if _letters(hubspot_stage_label(deal)) in _ON_HOLD_KEYS else "open"
+
+
+def open_totals(deals):
+    """Count, amount and weighted over deals already known to be open (no book rule applied)."""
+    amount = weighted = no_prob_amount = 0.0
+    no_prob = no_amount = 0
+    for deal in deals or []:
+        try:
+            amt = float((deal or {}).get("amount"))
+        except (TypeError, ValueError):
+            amt = None
+        if amt is not None and not math.isfinite(amt):
+            amt = None
+        if amt is None:
+            no_amount += 1
+        else:
+            amount += amt
+        frac = probability_fraction((deal or {}).get("probability"))
+        if frac is None:
+            no_prob += 1
+            no_prob_amount += amt or 0.0
+        elif amt is not None:
+            weighted += amt * frac
+    return {"count": len(deals or []), "openAmount": amount, "weighted": weighted,
+            "noProbabilityCount": no_prob, "noProbabilityAmount": no_prob_amount, "noAmountCount": no_amount}
+
+
+def deals_from_hubspot_export(live):
+    """live_deals.json deals ({pipes, stages, deals}) shaped for the open-book rules.
+
+    The catalog stage's isClosed decides closed; the deal's hs_is_closed only when
+    the stage is not in the catalog. workspace/lib/project.mjs reads the same file.
+    """
+    rule = PIPELINE_DEF["closedRule"]
+    stages = (live or {}).get("stages") or {}
+    pipes = (live or {}).get("pipes") or {}
+    out = []
+    for deal in (live or {}).get("deals") or []:
+        props = deal.get("properties") or {}
+        stage = stages.get(props.get("dealstage"))
+        if stage:
+            closed = stage.get(rule["stageMetadataKey"]) is True
+        else:
+            closed = str(props.get(rule["fallbackDealProperty"])).lower() == "true"
+        try:
+            amount = float(props.get("amount"))
+        except (TypeError, ValueError):
+            amount = None
+        out.append({
+            "id": "deal-" + str(deal.get("id")).replace("deal-", ""),
+            "dealName": props.get("dealname") or PIPELINE_DEF["fallbackNames"]["deal"],
+            "pipeline": str(props.get("pipeline") or ""),
+            "pipelineLabel": (stage.get("pipe") if stage else pipes.get(props.get("pipeline"))) or "",
+            "stageLabel": str(stage.get("label")).strip() if stage else None,
+            "closed": closed,
+            "amount": amount if amount is not None and math.isfinite(amount) else None,
+            "probability": probability_fraction(props.get("hs_deal_stage_probability")),
+        })
+    return out
 
 
 def exclusion_reason(deal, today):
@@ -972,6 +1064,9 @@ def apply_sheet_deal(deal, overrides):
             diffs.append("close")
     if ov.get("stage"):
         current = str(nxt.get("stageLabel") or nxt.get("stage") or "")
+        # The open book reads HubSpot's stage, so keep it before the Sheet's replaces it.
+        if nxt.get("hubspotStageLabel") is None and current:
+            nxt["hubspotStageLabel"] = current
         if ov["stage"].lower() not in current.lower():
             nxt["hubspotStage"] = current or ov.get("hubspotStage")
             diffs.append("stage")

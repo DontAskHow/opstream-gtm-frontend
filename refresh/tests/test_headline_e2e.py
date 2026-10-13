@@ -8,6 +8,11 @@ this repo; its headline is gtm_metrics.snapshot_metrics(verified, records,
 today, sheet_review), which the stand-in calls on brain-data.py's output.
 sheet-review.py is stood in by a fixed sheet-review.json. All data is synthetic.
 
+The same run also checks what the one-page workspace shows from that
+workspace.json: internal sync steps (backfills) get no freshness chip of their
+own while they are ok, and lead -> MQL stays hidden while config/lead-rules.json
+says mql.show is false, though its inputs are there and it is computed.
+
     python3 -m unittest discover -s refresh/tests -v
 """
 
@@ -17,9 +22,11 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -62,6 +69,49 @@ SHEET_REVIEW = {
 }
 
 
+ROOT = TESTS.parents[1]
+LEAD_RULES = json.loads((ROOT / "config" / "lead-rules.json").read_text())
+# Sync steps that run under a user-facing source. ok, so none of them is a chip.
+INTERNAL_OK = ("hubspot_contact_backfill", "hubspot_meeting_backfill", "hubspot_forms", "fathom_backfill",
+               "unlisted_backfill")
+
+
+def seed_page_inputs(path):
+    """Sync outcomes with internal rows, and what lead -> MQL needs: a book-a-demo booking and a form fill."""
+    con = sqlite3.connect(str(path))
+    for source in ("fathom",) + INTERNAL_OK:
+        con.execute("INSERT INTO sync_outcomes VALUES(?, ?, 1, NULL, 200, 'test', ?)", (source, FETCHED, FETCHED))
+    recent = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    mql = LEAD_RULES["mql"]
+    contacts = {"8001": "booker@buyer.example", "8002": "filler@buyer.example"}
+    for cid, email in contacts.items():
+        con.execute("INSERT INTO hubspot_objects VALUES('contacts', ?, ?, ?)",
+                    (cid, json.dumps({"hs_object_id": cid, "email": email, "createdate": recent}), FETCHED))
+    con.execute("INSERT INTO hubspot_objects VALUES('meetings', '8101', ?, ?)", (json.dumps({
+        "hs_object_id": "8101", mql["meetingSourceProperty"]: mql["meetingSourceValue"],
+        mql["bookingLinkProperty"]: str(mql["bookingLinkIds"][0]), "hs_createdate": recent,
+        "hs_meeting_start_time": recent}), FETCHED))
+    con.execute("INSERT INTO hubspot_associations VALUES('meetings', '8101', 'contacts', '8001')")
+    con.execute("CREATE TABLE hubspot_form_submissions(form_id TEXT, submitted_at TEXT, contact_email TEXT, "
+                "page_url TEXT, page_title TEXT, values_json TEXT)")
+    con.execute("INSERT INTO hubspot_form_submissions VALUES('f-test', ?, ?, '', '', '{}')", (recent, contacts["8002"]))
+    con.commit()
+    con.close()
+
+
+# The page's freshness chips and lead -> MQL tile, from workspace.json, by the deployed view code.
+PAGE_JS = r"""
+const fs = require('fs');
+const { buildView } = require('./onepage/view.cjs');
+const page = require('./onepage/page.cjs');
+const d = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const v = buildView(d, null);
+const header = page.header(v, { now: Date.parse(d.meta.generatedAt) });
+const main = page.renderPage(v, {}).main;
+console.log(JSON.stringify({ chips: v.freshness.map((c) => [c.source, c.label, c.level]), header, main }));
+"""
+
+
 def seed(path):
     seed_brain(path)
     con = sqlite3.connect(str(path))
@@ -102,6 +152,7 @@ class HeadlineE2E(unittest.TestCase):
         self.store = run.FsStore(self.tmp / "store")
         brain = self.tmp / "seed.db"
         seed(brain)
+        seed_page_inputs(brain)
         self.store.put_file("data/brain/brain.db", brain)
         prefix = "published/%s/" % PREVIOUS_RUN
         self.store.put_bytes(prefix + "verified.json", b'{"snapshotId": "test-snap"}')
@@ -131,7 +182,7 @@ class HeadlineE2E(unittest.TestCase):
                 today=gtm_metrics.date_only(records["generatedAt"]), sheet_review=SHEET_REVIEW)
             (out / "hollie.json").write_text(json.dumps({"runId": "test-run"}))
 
-    def test_hubspot_only_and_companyless_deals_count_in_both(self):
+    def publish(self):
         buf = io.StringIO()
         with mock.patch.dict(os.environ, self.env, clear=True), mock.patch.object(run, "run_step", self.run_step), \
                 contextlib.redirect_stdout(buf):
@@ -140,6 +191,10 @@ class HeadlineE2E(unittest.TestCase):
         self.assertEqual(code, 0, log)
         prefix = json.loads(self.store.get_bytes("published/LATEST.json"))["prefix"]
         self.assertNotIn(PREVIOUS_RUN, prefix, "nothing was published\n" + log)
+        return prefix
+
+    def test_hubspot_only_and_companyless_deals_count_in_both(self):
+        prefix = self.publish()
         verified = json.loads(self.store.get_bytes(prefix + "verified.json"))
         self.assertEqual({o["id"]: o["companyId"] for o in verified["opportunities"]}["deal-9004"], "company:unknown")
 
@@ -158,6 +213,33 @@ class HeadlineE2E(unittest.TestCase):
         self.assertEqual(reasons["deal-9006"], "On Hold")
         self.assertEqual(reasons["deal-9007"], "renewal")
         self.assertEqual(reasons["deal-9999"], "On the Sheet, not in HubSpot")
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_page_backfill_rows_are_not_chips_and_mql_stays_hidden(self):
+        prefix = self.publish()
+        target = self.tmp / "workspace.json"
+        target.write_bytes(self.store.get_bytes(prefix + run.WORKSPACE_JSON))
+        doc = json.loads(target.read_text())
+
+        # workspace.json keeps every sync row; the page rolls the internal ones up into their parent.
+        rows = {f["source"]: f for f in doc["freshness"]}
+        for source in INTERNAL_OK:
+            self.assertTrue(rows[source]["ok"], source)
+        proc = subprocess.run(["node", "-e", PAGE_JS, str(target)], cwd=str(ROOT), capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = json.loads(proc.stdout)
+        self.assertEqual([c[0] for c in out["chips"]], ["hubspot", "fathom"])
+        self.assertTrue(all(level == "ok" for _source, _label, level in out["chips"]), out["chips"])
+        self.assertNotRegex(out["header"], r"(?i)backfill|hubspot_forms|unlisted")
+
+        # lead -> MQL: computed (one booker via the book-a-demo page, one form filler), not shown.
+        self.assertIs(LEAD_RULES["mql"]["show"], False)
+        funnel = doc["mqlFunnel"]
+        self.assertFalse(funnel["available"])
+        self.assertEqual(funnel["reason"], LEAD_RULES["mql"]["hiddenBecause"])
+        self.assertEqual((funnel["computed"]["numerator"], funnel["computed"]["denominator"]), (1, 2))
+        self.assertNotIn("lead-mql-90", out["main"])
+        self.assertNotIn(LEAD_RULES["mql"]["label"], out["main"] + out["header"])
 
 
 if __name__ == "__main__":

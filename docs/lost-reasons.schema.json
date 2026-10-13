@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DontAskHow/opstream-gtm-frontend/docs/lost-reasons.schema.json",
+  "title": "GTM workspace lost-reason categories (lost-reasons.json)",
+  "description": "Written by the Strategy seat and published with workspace/refresh/publish-lost-reasons.mjs. Each entry puts one closed-lost deal in a category; deals not listed are auto-mapped from HubSpot's reason. workspace/src/lost-reasons.js is the enforcing validator (it also rejects duplicate deal ids and files over 2 MiB); this schema mirrors it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["generated_at", "deals"],
+  "properties": {
+    "generated_at": {
+      "description": "ISO 8601 date-time with seconds and an explicit offset (Z or ±hh:mm).",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "deals": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deal_id", "category", "inferred", "basis"],
+        "properties": {
+          "deal_id": {
+            "description": "The HubSpot deal id, without (or with) the page's \"deal-\" prefix. Unique within the file.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "category": { "enum": ["went_dark", "competitor", "not_a_fit", "no_budget_timing", "status_quo", "unknown"] },
+          "competitor": {
+            "description": "Optional competitor name; only with category competitor. Absent or null shows as unnamed.",
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "\\S"
+          },
+          "inferred": { "type": "boolean" },
+          "basis": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" }
+        },
+        "if": { "properties": { "category": { "const": "competitor" } } },
+        "else": { "properties": { "competitor": { "type": "null" } } }
+      }
+    },
+    "competitors": {
+      "description": "Optional. Names the fallback rules recognize in HubSpot's reason for deals not listed in deals.",
+      "type": "array",
+      "maxItems": 50,
+      "items": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "\\S" }
+    }
+  }
+}

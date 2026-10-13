@@ -4,4 +4,11 @@ out/
 *.db
 *.sqlite*
 preview-check.png
+
+# GTM builds: generated output and local data snapshots (never commit)
+gtm-onepage-out/
+gtm-data/
+gtm-brand/
+onepage/out/
+workspace/out/
 __pycache__/

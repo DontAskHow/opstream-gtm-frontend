@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="connect-src 'self'; form-action 'none'; object-src 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<title>GTM workspace · Opstream</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#/overview" aria-label="Overview"><img src="logo.svg" alt="Opstream" width="119" height="31"></a>
+    <nav class="nav" aria-label="Main">
+      <a href="#/overview" data-nav="overview">Overview</a>
+      <a href="#/pipeline" data-nav="pipeline">Pipeline</a>
+      <a href="#/campaigns" data-nav="campaigns">Campaigns</a>
+      <a href="#/prep" data-nav="prep">Meeting prep</a>
+    </nav>
+    <div id="refreshed" class="refreshed" aria-live="polite"><span class="refreshed-main">Last refreshed —</span><span class="refreshed-sub"></span></div>
+    <div class="search" role="search">
+      <input id="search" type="search" placeholder="Search accounts and deals" autocomplete="off"
+             aria-label="Search accounts and deals" aria-controls="search-results" aria-expanded="false">
+      <div id="search-results" class="search-results" role="listbox" hidden></div>
+    </div>
+  </div>
+</header>
+<main id="main" tabindex="-1"></main>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<noscript><p class="empty">This workspace needs JavaScript.</p></noscript>
+<script src="data.js"></script>
+<script src="vendor/gtm-charts.js"></script>
+<script src="vendor/insights.js"></script>
+<script src="vendor/lost-reasons.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
