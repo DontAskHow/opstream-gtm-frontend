@@ -171,6 +171,7 @@ class HubSpotFake:
         self.forms_status = 200           # the forms list answers this status
         self.lists_shape = None           # "no-lists": no lists array; "empty": an empty catalog
         self.members_status = {}          # listId -> status its memberships answer
+        self.submissions_error = {}       # formId -> (status, body) its submissions answer
         self.fail_backfill_after = None   # contacts keyset search with this GT value answers 500
         self.fail_meeting_backfill_after = None
         self.once_429 = set()             # route keys that answer 429 once
@@ -243,6 +244,8 @@ class HubSpotFake:
             hit = self._maybe_429("submissions:" + fid)
             if hit:
                 return hit
+            if fid in self.submissions_error:
+                return self.submissions_error[fid]
             if fid not in self.submissions:
                 return 404, {"status": "error", "message": "form not found"}
             return self._paged(self.submissions[fid], q.get("after"), min(int(q.get("limit") or 20), 50))

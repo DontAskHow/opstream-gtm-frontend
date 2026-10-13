@@ -746,6 +746,20 @@ SYNC_ONLY_SOURCES = ("sheets", "hubspot", "fathom", "ga4", "lemlist")
 # run ids, fetch times, and the per-source "last checked" times in marketing.json.
 VOLATILE_KEYS = frozenset(("generatedAt", "runId", "collectedAt", "publishedAt", "carriedFrom",
                            "at", "lastOkAt", "fetchedAt", "channelsFetchedAt", "capturedAt"))
+# The one-page workspace's data (scripts/workspace-data.py). Its inputs are data
+# files kept out of the repo, under state/gtm-inputs/. Each is optional except
+# the scrub patterns (scrub-patterns.txt, or WORKSPACE_SCRUB_PATTERNS on the task).
+WORKSPACE_JSON = "workspace.json"
+GTM_INPUTS = ("lead-sources.json", "lead-source-review.csv", "paid-deals.json", "records.jsonl",
+              "lead-insights.json", "lost-reasons.json", "insights.json", "scrub-patterns.txt")
+WORKSPACE_TIMEOUT_S = int(os.environ.get("WORKSPACE_TIMEOUT_S") or 120)
+# Parts of a file left out of the content hash. workspace.json's "what changed"
+# note compares with the published run's live_deals.json and names that
+# export's fetch time, so it differs on every run. A deal change it reports
+# also changes live_deals.json and the rest of workspace.json, so the hash
+# still sees it. Without this every run would publish, and the note would read
+# "no change" 15 minutes after a change.
+HASH_IGNORED = {WORKSPACE_JSON: (("headline", "change"),)}
 LOCK_KEY = "locks/sync-only.json"
 PHOENIX = timezone(timedelta(hours=-7))  # America/Phoenix has no DST.
 EXIT_SYNC_FAILED = 4
@@ -762,11 +776,19 @@ def _strip_volatile(value):
     return value
 
 
+def _drop_path(doc, path):
+    for key in path[:-1]:
+        doc = doc.get(key) if isinstance(doc, dict) else None
+    if isinstance(doc, dict):
+        doc.pop(path[-1], None)
+
+
 def content_hash(files):
     """sha256 over {relpath: bytes}, ignoring build timestamps and run ids.
 
     Facts-only stand-ins for the AI files are left out: align-run derives them
     from the other files plus the clock, so they never signal a data change.
+    So are the HASH_IGNORED parts.
     """
     h = hashlib.sha256()
     for rel in sorted(files):
@@ -781,6 +803,8 @@ def content_hash(files):
             if doc is not None:
                 if rel in AI_OUTPUTS and isinstance(doc, dict) and doc.get("model") == "facts":
                     continue
+                for path in HASH_IGNORED.get(rel, ()):
+                    _drop_path(doc, path)
                 data = json.dumps(_strip_volatile(doc), sort_keys=True, separators=(",", ":")).encode("utf-8")
         h.update(rel.encode("utf-8") + b"\0" + hashlib.sha256(data).digest())
     return h.hexdigest()
@@ -885,6 +909,56 @@ def main_sync_only(cfg, store):
         store.delete(LOCK_KEY)
 
 
+def build_workspace(store, state_prefix, work, out, db_path, previous, env):
+    """Write out/workspace.json. Never raises and never blocks the publish.
+
+    On a failure (or a timeout) it logs a WARNING and removes any partial file;
+    the snapshot publishes without workspace.json and the preview Lambda keeps
+    the last good one. previous is the published run's live_deals.json, for the
+    "what changed" note.
+    """
+    target = Path(out) / WORKSPACE_JSON
+    t0 = datetime.now(timezone.utc)
+    try:
+        inputs = Path(work) / "gtm-inputs"
+        inputs.mkdir(parents=True, exist_ok=True)
+        prefix = state_prefix + "gtm-inputs/"
+        got = []
+        for key in store.list_keys(prefix):
+            name = key[len(prefix):]
+            if not name or "/" in name or name.startswith("."):
+                continue
+            store.get_file(key, inputs / name)
+            got.append(name)
+        missing = [n for n in GTM_INPUTS if n not in got]
+        log("workspace: gtm-inputs " + (", ".join(sorted(got)) or "none")
+            + ("; missing (that part of the page degrades): " + ", ".join(missing) if missing else ""))
+        cmd = [sys.executable, str(ROOT / "scripts" / "workspace-data.py"), "--db", str(db_path),
+               "--inputs-dir", str(inputs), "--portal-id", HUBSPOT_PORTAL_ID, "--out", str(target), "--quiet"]
+        if previous is not None:
+            prior = Path(work) / "prior-live_deals.json"
+            prior.write_text(json.dumps(previous), encoding="utf-8")
+            cmd += ["--prior", str(prior)]
+        proc = subprocess.run(cmd, env=env, cwd=str(ROOT), capture_output=True, text=True,
+                              timeout=WORKSPACE_TIMEOUT_S)
+        if proc.returncode != 0:
+            raise RuntimeError("exit %d: %s" % (proc.returncode, (proc.stderr or "").strip()[-400:]))
+        if not target.is_file():
+            raise RuntimeError("exited 0 without writing it")
+        for line in (proc.stderr or "").splitlines()[-20:]:
+            log("workspace: " + line)
+        log("workspace: wrote %s (%d KB) in %.1fs" % (WORKSPACE_JSON, target.stat().st_size // 1024,
+                                                       (datetime.now(timezone.utc) - t0).total_seconds()))
+        return True
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        why = ("timed out after %ss" % WORKSPACE_TIMEOUT_S if isinstance(exc, subprocess.TimeoutExpired)
+               else str(exc)[-400:])
+        log("WARNING: %s not built (%s: %s). The snapshot publishes without it." % (
+            WORKSPACE_JSON, type(exc).__name__, why))
+        return False
+
+
 def _sync_only(store, published, state_prefix, brain_key):
     t0 = datetime.now(timezone.utc)
     work = Path(os.environ.get("REFRESH_WORK") or "/tmp/gtm-refresh")
@@ -961,6 +1035,7 @@ def _sync_only(store, published, state_prefix, brain_key):
         except (FileNotFoundError, ValueError):
             previous = None
         exported = safe_write_live_deals(db_path, out, fallback=previous)
+        build_workspace(store, state_prefix, work, out, db_path, previous, env)
         finish_build(env)
     except SystemExit as exc:
         log("step failed. Publishing nothing.")

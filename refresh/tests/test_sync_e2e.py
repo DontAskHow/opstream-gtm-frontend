@@ -128,6 +128,7 @@ class SyncE2E(unittest.TestCase):
         finally:
             self.db, hub.forms, hub.submissions, hub.members, lem.activities = saved
             hub.forms_status, hub.lists_shape, hub.members_status = 200, None, {}
+            hub.submissions_error = {}
             hub.meeting_properties_status, hub.fail_meeting_backfill_after = 200, None
 
     def assert_hubspot_read_only(self, reqs):
@@ -407,6 +408,85 @@ class SyncE2E(unittest.TestCase):
                              ["/crm/v3/lists/12/memberships"])
             self.assertEqual(self.outcome("hubspot_lists")[0], 1)
             self.assertGreater(json.loads(self.state("hubspot_lists"))["refreshed"]["12"], before["12"])
+
+    def test_hubspot_forms_not_exportable(self):
+        """A form whose submissions can't be exported is marked and skipped, not a failure; re-checked weekly."""
+        hub = self.world.hubspot
+        route = "GET /form-integrations/v1/submissions/forms/{formGuid}"
+        refusal = (400, {"status": "error", "message": "Submissions can't be exported for this form.",
+                         "errorType": "FORM_TYPE_NOT_SUPPORTED", "correlationId": "test"})
+        with self.fresh_db("not-exportable.db") as db:
+            forms = [f["id"] for f in hub.forms]
+            f1, f2, f3, archived = forms
+            # hubspot_forms as older code created it, without submissions_exportable.
+            con = sqlite3.connect(str(db))
+            con.execute("CREATE TABLE hubspot_forms(form_id TEXT PRIMARY KEY, name TEXT, form_type TEXT, "
+                        "created_at TEXT, updated_at TEXT, archived INTEGER, raw_json TEXT, fetched_at TEXT)")
+            con.execute("INSERT INTO hubspot_forms(form_id, name) VALUES(?, 'Stored form')", (f1,))
+            con.commit()
+            con.close()
+
+            def exportable():
+                return dict(self.q("SELECT form_id, submissions_exportable FROM hubspot_forms"))
+
+            def not_exportable():
+                return json.loads(self.state("hubspot_forms_progress")).get("notExportable", {})
+
+            def checked_days_ago(days):
+                progress = json.loads(self.state("hubspot_forms_progress"))
+                progress["notExportable"][f2] = fakes.iso(self.world.now - timedelta(days=days)).replace(
+                    ".000Z", "+00:00")
+                con = sqlite3.connect(str(db))
+                con.execute("UPDATE sync_state SET watermark=? WHERE source='hubspot_forms_progress'",
+                            (json.dumps(progress),))
+                con.commit()
+                con.close()
+
+            # Run 1: f2's submissions can't be exported. The pull still succeeds.
+            hub.submissions_error = {f2: refusal}
+            reqs, out = self.run_sync("hubspot_sync.py")
+            ok, _route, _http, detail = self.outcome("hubspot_forms")
+            self.assertEqual(ok, 1, detail)
+            self.assertIn("1 forms' submissions can't be exported (skipped)", detail)
+            self.assertNotIn("EXTRA_PULL_FAILED hubspot_forms", out)
+            self.assertEqual(exportable(), {f1: 1, f2: 0, f3: 1, archived: 1})
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", f2)[0][0], 0)
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", f1)[0][0],
+                             len(hub.submissions[f1]))
+            self.assertEqual(list(not_exportable()), [f2])
+            self.assertNotIn(f2, json.loads(self.state("hubspot_forms")))
+            first_check = not_exportable()[f2]
+
+            # Run 2: f2 is not asked again. Another 400 (not about the form type) still fails the pull.
+            hub.submissions_error = {f2: refusal, f3: (400, {"status": "error", "message": "Bad request"})}
+            reqs, out = self.run_sync("hubspot_sync.py")
+            self.assertFalse([r for r in reqs if r.path.endswith(f2)])
+            self.assertEqual(sum(1 for r in reqs if r.path.endswith(f3)), 1)
+            self.assertEqual(self.outcome("hubspot_forms")[:3], (0, route, 400))
+            self.assertIn("EXTRA_PULL_FAILED hubspot_forms %s 400" % route, out)
+            self.assertEqual(exportable(), {f1: 1, f2: 0, f3: 1, archived: 1})
+            self.assertEqual(not_exportable(), {f2: first_check})
+
+            # Run 3: a week later f2 is asked once more; still refused, still skipped, check time moves.
+            hub.submissions_error = {f2: refusal}
+            checked_days_ago(8)
+            reqs, out = self.run_sync("hubspot_sync.py")
+            self.assertEqual(sum(1 for r in reqs if r.path.endswith(f2)), 1)
+            self.assertEqual(self.outcome("hubspot_forms")[0], 1)
+            self.assertEqual(exportable()[f2], 0)
+            self.assertGreater(not_exportable()[f2], fakes.iso(self.world.now - timedelta(days=1)))
+
+            # Run 4: a week on, HubSpot exports f2: its submissions land and the mark goes.
+            hub.submissions_error = {}
+            checked_days_ago(8)
+            reqs, out = self.run_sync("hubspot_sync.py")
+            self.assertEqual(self.outcome("hubspot_forms")[0], 1)
+            self.assertEqual(exportable()[f2], 1)
+            self.assertEqual(not_exportable(), {})
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", f2)[0][0],
+                             len(hub.submissions[f2]))
+            self.assertEqual(json.loads(self.state("hubspot_forms"))[f2], hub.submissions[f2][0]["submittedAt"])
+            self.assertNotIn("can't be exported", self.outcome("hubspot_forms")[3])
 
     def test_hubspot_meeting_backfill(self):
         """HUBSPOT_MEETING_BACKFILL=1 re-reads every meeting once: merged, page-capped, resumable."""

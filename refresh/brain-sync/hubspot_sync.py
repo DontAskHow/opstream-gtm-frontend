@@ -32,7 +32,10 @@ row and a failure in one (a missing scope, say) does not fail the sync or
 stop the others:
   hubspot_forms             forms (archived too) and their submissions; first
                             pulls share FORM_SUBMISSION_MAX_CALLS pages a run
-                            (default 200) and resume next run
+                            (default 200) and resume next run. A form whose
+                            submissions HubSpot cannot export (HTTP 400, form
+                            type) is marked submissions_exportable=0, skipped,
+                            and re-checked every NOT_EXPORTABLE_RECHECK_DAYS (7)
   hubspot_lists             list catalog; each contact list's memberships at
                             most every LIST_MIN_INTERVAL_MIN minutes (default
                             360), LIST_MEMBERSHIP_MAX_CALLS pages a run
@@ -506,6 +509,10 @@ LIST_MIN_INTERVAL_MIN = float(os.environ.get("LIST_MIN_INTERVAL_MIN") or 360)
 # Per-run page caps, so a first pull fits the 15-minute cadence; both resume next run.
 LIST_MEMBERSHIP_MAX_CALLS = int(os.environ.get("LIST_MEMBERSHIP_MAX_CALLS") or 400)
 FORM_SUBMISSION_MAX_CALLS = int(os.environ.get("FORM_SUBMISSION_MAX_CALLS") or 200)
+# HubSpot answers 400 for forms whose type has no exportable submissions:
+# {"message": "Submissions can't be exported for this form.", "errorType": "FORM_TYPE_..."}.
+NOT_EXPORTABLE_MESSAGE = re.compile(r"\bcan(?:'|\u2019)?t be exported|\bcannot be exported", re.I)
+NOT_EXPORTABLE_RECHECK_DAYS = 7
 BACKFILL_PAGE = 200  # CRM search maximum
 # Searches per backfill per run; the backfill resumes next run.
 BACKFILL_MAX_PAGES = int(os.environ.get("HUBSPOT_BACKFILL_MAX_PAGES") or 150)
@@ -514,7 +521,8 @@ BACKFILL_MAX_PAGES = int(os.environ.get("HUBSPOT_BACKFILL_MAX_PAGES") or 150)
 # Created before the first call, so readers find the tables even when a pull fails.
 EXTRA_TABLES = (
     "CREATE TABLE IF NOT EXISTS hubspot_forms(form_id TEXT PRIMARY KEY, name TEXT, form_type TEXT, "
-    "created_at TEXT, updated_at TEXT, archived INTEGER, raw_json TEXT, fetched_at TEXT)",
+    "created_at TEXT, updated_at TEXT, archived INTEGER, raw_json TEXT, fetched_at TEXT, "
+    "submissions_exportable INTEGER)",
     "CREATE TABLE IF NOT EXISTS hubspot_form_submissions(form_id TEXT, conversion_id TEXT, submitted_at TEXT, "
     "contact_email TEXT, page_url TEXT, page_title TEXT, values_json TEXT, fetched_at TEXT, "
     "PRIMARY KEY(form_id, conversion_id))",
@@ -537,7 +545,9 @@ def hs_call(client, method, url, route, body=None, search=False):
     except SourceRefused as e:
         raise SourceRefused(HOST, route, e.status, "missing scope or credential rejected") from None
     if status != 200 or not isinstance(payload, dict):
-        raise SourceError(HOST, route, status, str(payload)[:200])
+        err = SourceError(HOST, route, status, str(payload)[:200])
+        err.payload = payload
+        raise err
     return payload
 
 
@@ -613,6 +623,22 @@ def discover_meeting_props(client, log):
         "booking link properties", log)
 
 
+def submissions_not_exportable(err):
+    """True for HubSpot's 400 on a form type whose submissions cannot be exported."""
+    body = getattr(err, "payload", None)
+    if err.status != 400 or not isinstance(body, dict):
+        return False
+    return (str(body.get("errorType") or "").upper().startswith("FORM_TYPE")
+            or bool(NOT_EXPORTABLE_MESSAGE.search(str(body.get("message") or ""))))
+
+
+def _days_since(iso):
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds() / 86400.0
+    except (TypeError, ValueError):
+        return None
+
+
 def sync_forms(client, log):
     """Forms (active and archived) and their submissions.
 
@@ -622,6 +648,11 @@ def sync_forms(client, log):
     pages a run, and one cut short resumes from its saved paging cursor. An
     archived form is read once more after it is archived, then no longer. A
     failing form keeps its watermark and is counted; the others go on.
+
+    A form whose submissions HubSpot will not export (submissions_not_exportable)
+    is not a failure: hubspot_forms.submissions_exportable is set to 0 and the
+    form is skipped until NOT_EXPORTABLE_RECHECK_DAYS have passed. A form read
+    without that error gets 1; NULL means not asked yet.
     """
     forms = {}
     for archived in (False, True):
@@ -641,14 +672,18 @@ def sync_forms(client, log):
     marks = _json_state("hubspot_forms")
     # cursors: first pulls cut short by FORM_SUBMISSION_MAX_CALLS, {formId: {after, newest}}.
     # archivedRead: archived forms read since they were archived.
+    # notExportable: {formId: when HubSpot last said its submissions can't be exported}.
     progress = _json_state("hubspot_forms_progress")
     cursors = progress.get("cursors") if isinstance(progress.get("cursors"), dict) else {}
     archived_read = {str(x) for x in progress.get("archivedRead") or [] if x}
+    not_exportable = progress.get("notExportable") if isinstance(progress.get("notExportable"), dict) else {}
 
     def save_progress():
         set_sync_state("hubspot_forms_progress", json.dumps(
-            {"cursors": cursors, "archivedRead": sorted(archived_read)}, sort_keys=True),
-            "first-pull paging cursors; archived forms read since archiving")
+            {"cursors": cursors, "archivedRead": sorted(archived_read), "notExportable": not_exportable},
+            sort_keys=True),
+            "first-pull paging cursors; archived forms read since archiving; forms whose submissions "
+            "can't be exported, with when that was last checked")
 
     con = db_connect()
     new_total = 0
@@ -668,6 +703,9 @@ def sync_forms(client, log):
         for fid in sorted(forms, key=lambda x: _ms(marks.get(x)) is None):
             f = forms[fid]
             if f["archived"] and fid in archived_read:
+                continue
+            age = _days_since(not_exportable.get(fid))
+            if age is not None and 0 <= age < NOT_EXPORTABLE_RECHECK_DAYS:
                 continue
             mark = _ms(marks.get(fid))
             cur = cursors.get(fid) if mark is None and isinstance(cursors.get(fid), dict) else None
@@ -724,6 +762,17 @@ def sync_forms(client, log):
                 raise  # the forms scope is missing: every form would answer the same
             except SourceError as e:
                 con.rollback()
+                if submissions_not_exportable(e):
+                    con.execute("UPDATE hubspot_forms SET submissions_exportable=0 WHERE form_id=?", (fid,))
+                    con.commit()
+                    not_exportable[fid] = fetched_at
+                    cursors.pop(fid, None)
+                    if f["archived"]:
+                        archived_read.add(fid)
+                    save_progress()
+                    log.info("form %s (%s): submissions can't be exported; skipped, re-checked in %d days",
+                             fid, f.get("formType"), NOT_EXPORTABLE_RECHECK_DAYS)
+                    continue
                 if f["archived"] and e.status == 404:
                     marks[fid] = 0
                     set_sync_state("hubspot_forms", json.dumps(marks, sort_keys=True),
@@ -737,8 +786,11 @@ def sync_forms(client, log):
                 log.warning("form %s submissions: %s", fid, e)
                 failed.append(e)
                 continue
+            con.execute("UPDATE hubspot_forms SET submissions_exportable=1 WHERE form_id=?", (fid,))
             con.commit()
             new_total += new
+            if not_exportable.pop(fid, None) is not None:
+                save_progress()
             if not done:
                 if after:
                     cursors[fid] = {"after": after, "newest": newest}
@@ -754,9 +806,12 @@ def sync_forms(client, log):
                 save_progress()
     finally:
         con.close()
-    pending = sum(1 for fid, f in forms.items() if _ms(marks.get(fid)) is None)
+    pending = sum(1 for fid in forms if _ms(marks.get(fid)) is None and fid not in not_exportable)
     detail = "%d forms (%d archived), %d new submissions" % (
         len(forms), sum(1 for f in forms.values() if f["archived"]), new_total)
+    skipped = sum(1 for fid in forms if fid in not_exportable)
+    if skipped:
+        detail += "; %d forms' submissions can't be exported (skipped)" % skipped
     if first_calls >= FORM_SUBMISSION_MAX_CALLS and pending:
         detail += "; FORM_SUBMISSION_MAX_CALLS reached, %d forms resume next run" % pending
     if failed:
@@ -1057,6 +1112,9 @@ def main_sync(log):
     try:
         for ddl in EXTRA_TABLES:
             con.execute(ddl)
+        # hubspot_forms written before this column existed.
+        if "submissions_exportable" not in {r[1] for r in con.execute("PRAGMA table_info(hubspot_forms)")}:
+            con.execute("ALTER TABLE hubspot_forms ADD COLUMN submissions_exportable INTEGER")
         con.commit()
     finally:
         con.close()

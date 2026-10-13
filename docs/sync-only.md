@@ -22,7 +22,8 @@ between the 6-hourly full refresh runs without calling OpenAI.
    and the renderer, with `GTM_FACTS_ONLY=1`. It never runs `agent-brief.py`
    or `heartbeat.py`, never reads `opstream-gtm/openai-api-key`, never builds
    per-user briefs, and writes nothing under `state/`. The state files are
-   restored as read-only inputs.
+   restored as read-only inputs. Before `term_scrub.py` it writes
+   `live_deals.json` and `workspace.json` (both below).
 7. Carries the AI narrative forward from the LATEST run:
    `agent-brief.json`, `heartbeat.json`, and `heartbeat-fixes.json`, the
    three files `agent-brief.py` and `heartbeat.py` write. Their `runId` is set
@@ -33,7 +34,8 @@ between the 6-hourly full refresh runs without calling OpenAI.
 8. Hashes the output tree with volatile fields removed: `generatedAt`,
    `runId`, `collectedAt`, `fetchedAt`, `capturedAt`, per-source `at` and
    `lastOkAt`, and the per-run counters in a successful source's `detail`.
-   Facts-only AI files are skipped. If the hash matches LATEST
+   Facts-only AI files are skipped, and so is `workspace.json`'s
+   `headline.change` (see below). If the hash matches LATEST
    (`contentHash` when a sync-only run published it, otherwise the hash of
    the published files), the run logs `no change` and publishes nothing.
 9. Otherwise it publishes `published/<runId>/` the same way the full run
@@ -47,7 +49,7 @@ between the 6-hourly full refresh runs without calling OpenAI.
     4 when a source sync failed or was skipped (needs a connection, secret
     missing), when `live_deals.json` could not be written, or when
     `sheet-review.json` has no `leadTracker` rollup. The run still publishes
-    the rest. Any
+    the rest. A missing `workspace.json` does not change the exit code. Any
     other non-zero code means a build step failed and nothing was published.
 
 ## HubSpot deal export (`live_deals.json`)
@@ -93,6 +95,33 @@ Older sync code (the 6-hourly job) rewrites `hubspot_pipelines` and
 export uses the previous snapshot's stages. With no previous export either,
 no file is written and the run exits 4. Deals archived in HubSpot are not
 tracked, so a deal stays until the sync sees it change.
+
+## One-page workspace data (`workspace.json`)
+
+Sync-only runs also write `workspace.json`, the data the one-page workspace
+fetches, with `scripts/workspace-data.py` (rules in
+`shared/workspace-scope.json`, `shared/open-pipeline.json` and
+`config/lead-rules.json`). It reads brain.db and the data files under
+`state/gtm-inputs/`, all downloaded each run: `lead-sources.json`,
+`lead-source-review.csv`, `paid-deals.json`, `records.jsonl`,
+`lead-insights.json`, `lost-reasons.json`, `insights.json`, and
+`scrub-patterns.txt`. Each is optional, and a missing one is logged and that
+part of the page degrades. The scrub patterns are the exception. Without
+them (or `WORKSPACE_SCRUB_PATTERNS` on the task) the script refuses to run.
+`--prior` is the LATEST run's `live_deals.json`, for the "what changed" note.
+
+The step never stops a publish. If it fails, or runs past
+`WORKSPACE_TIMEOUT_S` (default 120), the run logs `WARNING: workspace.json
+not built (...)`, removes any partial file, and publishes without it. The
+preview Lambda keeps the last good copy. On 0.25 vCPU it takes about 20 to
+25 s against a 650 MB brain.db. It needs `s3:ListBucket` on `state/` and
+`s3:GetObject` on `state/gtm-inputs/*`, which the task role already has.
+
+`headline.change` is left out of the content hash. It compares with the
+LATEST run's export and names that export's fetch time, so it differs on
+every run. A deal change it reports also changes `live_deals.json` and the
+rest of `workspace.json`. The published note therefore stays on the last real
+change instead of turning into "no change" one run later.
 
 ## HubSpot attribution, forms, lists, and imports
 
@@ -168,6 +197,16 @@ submission with a missing or non-numeric `submittedAt` is stored with
 `email` field value. Field values, `page_url`, and `page_title` are cut at
 8000 characters, like other raw fields.
 
+Some form types have no exportable submissions. HubSpot answers HTTP 400 with
+`"Submissions can't be exported for this form."` and an `errorType` starting
+with `FORM_TYPE`. That is not a failure. The form gets
+`hubspot_forms.submissions_exportable` = 0 and its check time goes into
+`hubspot_forms_progress` (`notExportable`). It is skipped until
+`NOT_EXPORTABLE_RECHECK_DAYS` (7) have passed, then asked again. A form read
+without that error gets 1, and NULL means not asked yet. The `hubspot_forms`
+detail counts the skipped forms. Any other 400, or any other error status,
+still fails `hubspot_forms` as before.
+
 The list catalog is mirrored only from a complete answer. A page without a
 `lists` array, a `hasMore` without a later offset, or an empty catalog while
 lists are stored (or `total` > 0) fails `hubspot_lists` and leaves the stored
@@ -240,6 +279,8 @@ watermarks, and `sync_outcomes` across repeated runs. They cover paging,
 429s, archived forms (including one archived after its watermark), a missing
 scope (403 on imports and on forms), list answers without a `lists` array or
 with no lists, a list whose memberships fail, a non-numeric `submittedAt`,
+a form whose submissions can't be exported (marked, skipped, re-checked a
+week later) next to a plain 400 that still fails,
 the per-run caps on submissions, memberships and activities (including one
 window larger than the budget) resuming, the leads interval, a one-time
 backfill restart, the meeting source and booking link properties (and a 403
@@ -249,8 +290,18 @@ read-only POSTs were sent.
 
     python3 -m unittest discover -s refresh/tests -v
 
-They need Python 3 with boto3 and the `openssl` CLI, and take about 2.5
-to 4 minutes, mostly the scripts' own pacing. Nothing leaves the machine.
+They need Python 3 with boto3 and the `openssl` CLI, and take about 3 to 5
+minutes, mostly the scripts' own pacing. Nothing leaves the machine.
+
+`refresh/tests/test_run_workspace.py` runs `main_sync_only` against a
+filesystem store with a synthetic brain.db, `state/gtm-inputs/` and a
+published run. The real `workspace-data.py`, content hash and publish run;
+only the build steps that are not in this repo are stubbed. It checks that
+`workspace.json` is published and built from the inputs and the prior. It
+checks that a no-change HubSpot sync publishes nothing and that a deal change
+publishes. It also checks that a refused step (no scrub patterns, with a
+partial file left behind), a timeout, and a failing inputs listing all still
+publish, without `workspace.json`.
 
 ## GA4
 
