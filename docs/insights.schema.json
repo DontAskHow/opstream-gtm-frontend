@@ -55,6 +55,23 @@
         { "type": "string", "minLength": 1, "maxLength": 2000 },
         { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 2000 } }
       ]
+    },
+    "goals": {
+      "description": "Optional. Targets for page metrics, shown in the Analysis panel next to each metric's current value. metric is one of the keys in workspace/src/insights.js METRICS.",
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["metric", "target", "label"],
+        "properties": {
+          "metric": { "enum": ["open_count", "open_amount", "weighted", "on_hold_count", "on_hold_amount", "closed_lost_count", "closed_won_count", "closed_won_amount", "meetings_this_month", "meetings_upcoming"] },
+          "target": { "type": "number", "minimum": 0 },
+          "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "by": { "description": "Calendar date YYYY-MM-DD.", "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "note": { "type": "string", "minLength": 1, "maxLength": 400 }
+        }
+      }
     }
   }
 }

@@ -1110,14 +1110,165 @@
   }
 
   // ---------- Analysis (insights.json from the Strategy seat) ----------
-  // Every string is set with textContent: nothing from the file is parsed as HTML.
+  // Every string from the file is set with textContent: nothing is parsed as HTML.
+  // Deals, accounts, stages, pipelines, headline metrics and overview panels the
+  // text names are matched against GTM_DATA at runtime (GtmInsights.findRefs):
+  // entities become links to their pages, metrics and panels scroll into view
+  // and pulse. Goals sit beside the metric's current value, and the headline
+  // tile they track gets a "Goal" line (added here, after the overview renders).
+  const GI = window.GtmInsights;
   let analysis = { state: 'loading' };
+  let refIdx = null;
+  const refIndex = () => refIdx || (refIdx = GI.refIndex(D, { money: [money, moneyFull] }));
   function el(tag, cls, txt) {
     const n = document.createElement(tag);
     if (cls) n.className = cls;
     if (txt != null) n.textContent = txt;
     return n;
   }
+
+  // Where a reference leads: a route for entities, an element on the overview for metrics and panels.
+  function refHref(ref) {
+    if (ref.kind === 'deal') return dealById.has(ref.id) ? `#/deal/${encodeURIComponent(ref.id)}` : null;
+    if (ref.kind === 'account') return companyById.has(ref.id) ? `#/account/${encodeURIComponent(ref.id)}` : null;
+    if (ref.kind === 'stage') return `#/pipeline${qs({ pipe: defaultPipe, stage: ref.stage })}`;
+    if (ref.kind === 'pipeline') return pipelineByLabel.has(ref.pipe) ? `#/pipeline${qs({ pipe: ref.pipe })}` : null;
+    return null;
+  }
+  const panelEl = (key) => {
+    const p = GI.PANELS[key];
+    return p ? [...document.querySelectorAll('#main .panel')].find((s) => { const h = s.querySelector('.panel-head h2'); return h && p.title.test(h.textContent); }) || null : null;
+  };
+  const tileEl = (key) => {
+    const m = GI.METRICS[key];
+    const hp = m && m.tile && panelEl('headline');
+    return (hp && [...hp.querySelectorAll('.tile')].find((t) => { const l = t.querySelector('.label'); return l && l.textContent === m.tile; })) || null;
+  };
+  function citeEl(ref) {
+    if (ref.kind === 'panel') return panelEl(ref.key);
+    if (ref.kind !== 'metric') return null;
+    const m = GI.METRICS[ref.key];
+    return tileEl(ref.key) || (m && m.panel ? panelEl(m.panel) : null);
+  }
+  const reducedMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const pulseTimers = new WeakMap();
+  function pulse(t) {
+    if (!t) return;
+    t.scrollIntoView({ block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth' });
+    t.classList.remove('cite-pulse');
+    void t.offsetWidth; // restart the animation
+    t.classList.add('cite-pulse');
+    clearTimeout(pulseTimers.get(t));
+    pulseTimers.set(t, setTimeout(() => t.classList.remove('cite-pulse'), 1600));
+  }
+  // Hovering or focusing a source outlines what it cites.
+  function citeHover(node, refs) {
+    const set = (on) => refs().forEach((r) => { const t = citeEl(r); if (t) t.classList.toggle('cite-hl', on); });
+    node.addEventListener('mouseenter', () => set(true));
+    node.addEventListener('mouseleave', () => set(false));
+    node.addEventListener('focusin', () => set(true));
+    node.addEventListener('focusout', () => set(false));
+  }
+  function refNode(ref, label) {
+    const href = refHref(ref);
+    if (href) { const a = el('a', 'ref', label); a.href = href; return a; }
+    if (!citeEl(ref)) return null;
+    const b = el('button', 'ref', label);
+    b.type = 'button';
+    b.title = 'Show on the overview';
+    b.addEventListener('click', () => pulse(citeEl(ref)));
+    return b;
+  }
+  // Text with its references linked (first mention of each per field); refs collects them.
+  function withRefs(str, refs) {
+    const frag = document.createDocumentFragment();
+    const seen = new Set();
+    let at = 0;
+    for (const m of GI.findRefs(str, refIndex())) {
+      const k = GI.refKey(m.ref);
+      if (seen.has(k)) continue;
+      const node = refNode(m.ref, m.text);
+      if (!node) continue;
+      seen.add(k);
+      refs.set(k, m.ref);
+      frag.append(str.slice(at, m.start), node);
+      at = m.end;
+    }
+    frag.append(str.slice(at));
+    return frag;
+  }
+
+  const goalValue = (key, v) => (GI.METRICS[key].format === 'money' ? moneyFull(v) : int(v));
+  const goalTarget = (g) => `${GI.METRICS[g.metric].better === 'down' ? 'at most ' : ''}${goalValue(g.metric, g.target)}`;
+  function goalTile(g, values) {
+    const m = GI.METRICS[g.metric];
+    const p = GI.goalProgress(g, values[g.metric]);
+    const t = el('div', 'tile goal');
+    t.append(el('div', 'label', g.label));
+    const v = el('div', 'value', p.value == null ? DASH : goalValue(g.metric, p.value));
+    v.append(el('span', 'goal-of', `${m.better === 'down' ? 'limit' : 'of'} ${goalValue(g.metric, g.target)}`));
+    t.append(v);
+    const bar = el('div', `goal-bar${p.over ? ' over' : ''}`);
+    bar.setAttribute('role', 'img');
+    bar.setAttribute('aria-label', p.value == null ? 'Current value unknown' : `${Math.round(p.ratio * 100)}% of ${m.better === 'down' ? 'the limit' : 'the goal'}${p.met ? ', met' : ''}`);
+    const fill = el('span');
+    fill.style.width = `${(p.ratio * 100).toFixed(1)}%`;
+    bar.append(fill);
+    t.append(bar);
+    const foot = el('div', 'foot');
+    const ref = { kind: 'metric', key: g.metric };
+    foot.append(refNode(ref, m.label) || el('span', null, m.label));
+    if (g.by) {
+      foot.append(` · by ${fmtDay(g.by)}`);
+      if (g.by < todayYmd() && p.met === false) foot.append(' ', el('span', 'flag', 'passed'));
+    }
+    if (p.met) foot.append(' ', el('span', 'pill green', 'met'));
+    t.append(foot);
+    if (g.note) t.append(el('div', 'foot muted', g.note));
+    citeHover(t, () => [ref]);
+    return t;
+  }
+  // The "Goal" line under a headline tile; cleared first, so repeated fills don't stack.
+  function markTiles(goals) {
+    document.querySelectorAll('#main .tile-goal').forEach((n) => n.remove());
+    for (const g of goals) {
+      const t = tileEl(g.metric);
+      if (!t) continue;
+      const line = el('div', 'foot tile-goal', `Goal: ${goalTarget(g)}${g.by ? ` by ${fmtDay(g.by)}` : ''}`);
+      line.title = g.label;
+      t.append(line);
+    }
+  }
+
+  function insightItem(it) {
+    const refs = new Map();
+    const li = el('li', 'insight');
+    const head = el('div', 'insight-head');
+    const h = el('h3');
+    h.append(withRefs(it.title, refs));
+    const meta = el('span', 'insight-meta');
+    meta.append(el('span', null, it.owner), el('span', `pill${it.confidence === 'high' ? ' green' : it.confidence === 'low' ? ' warn' : ''}`, `${it.confidence} confidence`));
+    head.append(h, meta);
+    const play = el('p', 'insight-play');
+    play.append(el('span', 'kind', 'Play'), withRefs(it.recommended_play, refs));
+    const more = el('details', 'insight-more');
+    const cites = Array.isArray(it.citations) ? it.citations : [];
+    more.append(el('summary', 'source-tag', `Evidence and why${cites.length ? ` · ${plural(cites.length, 'source')}` : ''}`));
+    for (const [lbl, val] of [['Evidence', it.evidence], ['Why it matters', it.why_it_matters]]) {
+      const p = el('p');
+      p.append(el('span', 'kind', lbl), withRefs(val, refs));
+      more.append(p);
+    }
+    if (cites.length) {
+      const ul = el('ul');
+      for (const c of cites) { const x = el('li'); x.append(withRefs(c, refs)); ul.append(x); }
+      more.append(ul);
+    }
+    li.append(head, play, more);
+    citeHover(li, () => [...refs.values()]);
+    return li;
+  }
+
   function fillAnalysis() {
     const box = document.getElementById('analysis');
     if (!box) return;
@@ -1130,55 +1281,57 @@
     head.append(left, right);
     box.append(head);
     if (analysis.state !== 'ok') {
+      markTiles([]);
       const e = el('div', 'empty');
       e.append(el('strong', null, analysis.state === 'loading' ? 'Loading analysis…' : 'No insights published yet'));
-      if (analysis.state === 'invalid') e.append(document.createTextNode('A file was published but it does not match the expected format, so it is not shown.'));
-      if (analysis.state === 'unreachable') e.append(document.createTextNode('The analysis file could not be loaded.'));
+      if (analysis.state === 'invalid') e.append('A file was published but it does not match the expected format, so it is not shown.');
+      if (analysis.state === 'unreachable') e.append('The analysis file could not be loaded.');
       box.append(e);
       return;
     }
     const doc = analysis.doc;
-    box.append(el('p', 'analysis-head', doc.headline));
-    const list = el('ol', 'analysis-list');
-    for (const it of doc.insights) {
-      const li = el('li', 'analysis-item');
-      const h = el('h3');
-      h.append(el('span', null, it.title), el('span', `pill ${it.confidence === 'high' ? 'green' : it.confidence === 'low' ? 'warn' : ''}`, `${it.confidence} confidence`));
-      li.append(h);
-      for (const [lbl, val] of [['Evidence', it.evidence], ['Why it matters', it.why_it_matters], ['Recommended play', it.recommended_play], ['Owner', it.owner]]) {
-        const p = el('p');
-        p.append(el('span', 'lbl', lbl), document.createTextNode(val));
-        li.append(p);
-      }
-      if (Array.isArray(it.citations) && it.citations.length) {
-        const d = el('details');
-        d.append(el('summary', null, `${it.citations.length} citation${it.citations.length === 1 ? '' : 's'}`));
-        const ul = el('ul');
-        for (const c of it.citations) ul.append(el('li', null, c));
-        d.append(ul);
-        li.append(d);
-      }
-      list.append(li);
-    }
-    box.append(list);
-    // Data-quality flags fold into one line; open it to read them.
+    const lead = el('p', 'analysis-lead');
+    lead.append(withRefs(doc.headline, new Map()));
+    box.append(lead);
+    const goals = doc.goals || [];
+    const list = el('ol', `brief analysis-list${goals.length ? '' : ' cols'}`);
+    for (const it of doc.insights) list.append(insightItem(it));
+    if (goals.length) {
+      const values = GI.metricValues(D);
+      const grid = el('div', 'grid analysis-grid');
+      const main = el('div', 'span-8');
+      main.append(list);
+      const side = el('div', 'side span-4');
+      side.append(el('h4', null, 'Goals'));
+      const gl = el('div', 'goal-list');
+      for (const g of goals) gl.append(goalTile(g, values));
+      side.append(gl);
+      grid.append(main, side);
+      box.append(grid);
+    } else box.append(list);
+    markTiles(goals);
+    // Changes and data caveats: one muted line each; the caveats open on click.
+    const ch = [].concat(doc.changed_since_last);
+    const foot = el('div', 'analysis-foot');
+    if (ch.length) foot.append(el('p', null, `Since the last version: ${ch.join(' · ')}`));
     if (doc.data_quality_flags.length) {
-      const d = el('details', 'analysis-extra');
-      d.append(el('summary', null, `${doc.data_quality_flags.length} data caveat${doc.data_quality_flags.length === 1 ? '' : 's'}`));
-      const fu = el('ul');
-      for (const f of doc.data_quality_flags) fu.append(el('li', null, window.GtmInsights.flagText(f)));
-      d.append(fu);
-      box.append(d);
+      const d = el('details');
+      d.append(el('summary', 'source-tag', plural(doc.data_quality_flags.length, 'data caveat')));
+      const ul = el('ul');
+      for (const f of doc.data_quality_flags) ul.append(el('li', null, GI.flagText(f)));
+      d.append(ul);
+      foot.append(d);
     }
+    if (foot.childElementCount) box.append(foot);
   }
   function loadAnalysis() {
-    if (!window.fetch || !window.GtmInsights) { analysis = { state: 'unreachable' }; fillAnalysis(); return; }
+    if (!window.fetch || !GI) { analysis = { state: 'unreachable' }; fillAnalysis(); return; }
     fetch('insights.json', { cache: 'no-store' })
       .then((r) => {
         // S3 behind CloudFront answers 403 for a key that doesn't exist.
         if (r.status === 404 || r.status === 403) return { state: 'missing' };
         if (!r.ok) return { state: 'unreachable' };
-        return r.text().then((t) => { const v = window.GtmInsights.parse(t); return v.ok ? { state: 'ok', doc: v.doc } : { state: 'invalid' }; });
+        return r.text().then((t) => { const v = GI.parse(t); return v.ok ? { state: 'ok', doc: v.doc } : { state: 'invalid' }; });
       })
       .catch(() => ({ state: 'unreachable' }))
       .then((a) => { analysis = a; fillAnalysis(); });

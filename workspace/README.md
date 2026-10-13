@@ -29,7 +29,7 @@ The build prints the pipeline figures it computed, per pipeline, plus the expect
 | `transcripts/<recording-id>.js` | Per-recording transcripts. Each loads on demand when you click "Show transcript". |
 | `fonts/`, `logo.svg` | Poppins (from `source/assets/fonts`) and the brand `logo-main.svg` |
 
-The page's CSP sets `connect-src 'self'`. The app makes only two same-origin reads, both `no-store` and both optional: `refresh.json` (the "Last refreshed" time written by the scheduled refresh, `refresh/README.md`) and `insights.json` (the Analysis panel, `docs/insights-schema.md`). Under `file://` they fail, so the header shows the time from `data.js` and the Analysis panel says no insights are published. The app has no ask box and no send actions. Links inside recording summaries and the Analysis text render as plain text.
+The page's CSP sets `connect-src 'self'`. The app makes only two same-origin reads, both `no-store` and both optional: `refresh.json` (the "Last refreshed" time written by the scheduled refresh, `refresh/README.md`) and `insights.json` (the Analysis panel, `docs/insights-schema.md`). Under `file://` they fail, so the header shows the time from `data.js` and the Analysis panel says no insights are published. The app has no ask box and no send actions. Links inside recording summaries render as plain text. The Analysis text has no links of its own; names the page recognizes from its data (deals, accounts, stages, headline metrics, overview panels) become in-page links (`docs/insights-schema.md`).
 
 ## Inputs
 

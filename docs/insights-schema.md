@@ -1,6 +1,6 @@
 # Analysis file (`insights.json`)
 
-The GTM workspace's **Analysis** panel (overview page) shows one JSON file, `/insights.json`, written by the Strategy seat. The page reads it with `fetch('insights.json', {cache: 'no-store'})`, validates it, and renders every string as plain text with `textContent`. Nothing in the file is parsed as HTML or turned into a link. If the file is missing (S3 behind CloudFront answers 403 or 404), the panel shows **"No insights published yet"**. If the file is there but invalid, the panel shows the same title and says the file doesn't match the format. A partial file is never shown.
+The GTM workspace's **Analysis** panel (overview page) shows one JSON file, `/insights.json`, written by the Strategy seat. The page reads it with `fetch('insights.json', {cache: 'no-store'})`, validates it, and renders every string as plain text with `textContent`. Nothing in the file is parsed as HTML, and the file carries no links. Instead, the page matches the text against its own data when it renders (see [References](#references)). If the file is missing (S3 behind CloudFront answers 403 or 404), the panel shows **"No insights published yet"**. If the file is there but invalid, the panel shows the same title and says the file doesn't match the format. A partial file is never shown.
 
 - Enforcing validator: `workspace/src/insights.js`. The page and the publish script both use it.
 - JSON Schema (mirrors the validator): `docs/insights.schema.json`.
@@ -23,7 +23,10 @@ The GTM workspace's **Analysis** panel (overview page) shows one JSON file, `/in
     }
   ],
   "data_quality_flags": ["A plain-text flag", {"deal": "Example", "issue": "amount missing"}],
-  "changed_since_last": "What changed since the previous file (a string, or an array of strings)."
+  "changed_since_last": "What changed since the previous file (a string, or an array of strings).",
+  "goals": [
+    {"metric": "open_amount", "target": 500000, "label": "Grow the open book", "by": "2026-12-31", "note": "Optional context."}
+  ]
 }
 ```
 
@@ -40,9 +43,43 @@ The GTM workspace's **Analysis** panel (overview page) shows one JSON file, `/in
 | `insights[].owner` | Required, ≤ 300 characters. |
 | `insights[].confidence` | Required: `low`, `medium` or `high`. |
 | `data_quality_flags` | Required array (may be empty) of ≤ 50 entries. Each entry is a string, or an object whose values are strings, numbers, booleans or null. An object is shown as `key: value · key: value`. |
-| `changed_since_last` | Required. A string, or an array of ≤ 50 strings. |
+| `changed_since_last` | Required. A string, or an array of ≤ 50 strings. Shown as one muted line under the insights. |
+| `goals` | Optional array of ≤ 12 goals. Files without it are valid. |
+| `goals[].metric` | Required. One of the metric keys below. |
+| `goals[].target` | Required number ≥ 0, in the metric's unit (dollars or a count). |
+| `goals[].label` | Required, ≤ 200 characters. |
+| `goals[].by` | Optional calendar date, `YYYY-MM-DD`. Shown as "by …"; flagged "passed" when the date is past and the goal isn't met. |
+| `goals[].note` | Optional, ≤ 400 characters. |
+
+### Goal metrics
+
+Each goal's current value is computed in the page from the same data the overview shows (`metricValues` in `workspace/src/insights.js`). A goal is met at or above its target, except the "at most" metrics, which are met at or below it. If the metric has a headline tile, the tile gets a "Goal: …" line.
+
+| `metric` | Current value | Met when | Headline tile |
+|---|---|---|---|
+| `open_count` | Open deals in the headline pipeline, On Hold excluded | ≥ target | Open deals |
+| `open_amount` | Their open amount | ≥ target | Open amount |
+| `weighted` | Their weighted amount (amount × stage probability) | ≥ target | Weighted |
+| `on_hold_count` | On Hold deals in the headline pipeline | ≤ target | On Hold |
+| `on_hold_amount` | Their amount | ≤ target | On Hold |
+| `closed_lost_count` | Closed-lost deals (closed and not won) in the headline pipeline | ≤ target | Closed lost |
+| `closed_won_count` | Closed-won deals in the headline pipeline in the HubSpot export (all time) | ≥ target | — |
+| `closed_won_amount` | Their amount | ≥ target | — |
+| `meetings_this_month` | CRM meetings starting this calendar month (PT), past and upcoming | ≥ target | — |
+| `meetings_upcoming` | CRM meetings starting from now on | ≥ target | — |
 
 Every string must be non-empty. Unknown fields at any level are rejected, so a typo such as `why_it_maters` fails loudly instead of disappearing. The whole file must be ≤ 256 KB.
+
+## References
+
+When the page renders a file, it looks for things the text names that the page also shows, using `findRefs` in `workspace/src/insights.js`. The matching runs against the current data, so no names are written into the code:
+
+- **Deals and accounts** by name (an account's legal suffix such as "Inc." is optional). These link to `#/deal/<id>` and `#/account/<id>`.
+- **Stages** of the headline pipeline. Open stages link to the pipeline view filtered to that stage. On Hold, lost and won stages cite the matching metric.
+- **Pipelines** by name. The headline pipeline points at its panel, and the others link to their pipeline view.
+- **Headline metrics**, by phrase ("open amount", "weighted pipeline", "open deals", "closed lost", …), by their data path (`headline.active.openAmount`), or by the figure exactly as the page formats it. **Overview panels** are matched by name ("lost reasons", "close date", "meetings over time", …). Clicking a metric or panel reference scrolls to it and outlines it briefly. Hovering an insight outlines everything it cites.
+
+A one-word name or stage only matches with the same capitalization. Longer names match in any case. A name that two different things share is never linked. Text that matches nothing stays plain.
 
 ## Publishing
 
