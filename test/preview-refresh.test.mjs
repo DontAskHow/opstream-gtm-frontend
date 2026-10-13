@@ -425,9 +425,9 @@ test('lemlist and Fathom projections match the refresh job', () => {
   assert.deepEqual(out.statsResponses, { 200: 1, 403: 1 });
   assert.equal(out.campaignStats[0].opened, 1);
   assert.deepEqual(out.names, ['A']);
-  const rec = recordingFromFathom({ recording_id: 7, title: 'example corp sync', recorded_by: { name: 'maya graff' }, recording_start_time: '2026-01-01T10:00:00Z', recording_end_time: '2026-01-01T10:45:30Z' });
+  const rec = recordingFromFathom({ recording_id: 7, title: 'example corp sync', recorded_by: { name: 'robin vale' }, recording_start_time: '2026-01-01T10:00:00Z', recording_end_time: '2026-01-01T10:45:30Z' });
   assert.equal(rec.minutes, 45);
-  assert.equal(rec.recordedBy, 'Maya Graff');
+  assert.equal(rec.recordedBy, 'Robin Vale');
   assert.equal(matchRecording(rec, [{ id: 'c1', name: 'Example Corp', domain: null }]), 'c1');
   assert.equal(tokenFromSecret('{"api_key":" k "}', 'x'), 'k');
   assert.equal(tokenFromSecret(' plain ', 'x'), 'plain');
