@@ -26,8 +26,11 @@ HEADERS_FN_ARN=arn:aws:cloudfront::$ACCOUNT:function/gtm-preview-headers-db5553a
 
 [ "$(aws sts get-caller-identity --query Account --output text)" = "$ACCOUNT" ] || { echo "wrong AWS account" >&2; exit 1; }
 # Never leave the preview without a viewer-request gate: the Basic function must still be live.
-[ "$(aws cloudfront describe-function --name "$AUTH_FN" --stage LIVE --query FunctionSummary.Status --output text 2>/dev/null)" = DEPLOYED ] \
-  || { echo "$AUTH_FN is not deployed (LIVE); refusing to remove the Lambda gate" >&2; exit 1; }
+# A published but detached function reports UNASSOCIATED; both states mean a LIVE stage exists.
+case "$(aws cloudfront describe-function --name "$AUTH_FN" --stage LIVE --query FunctionSummary.Status --output text 2>/dev/null)" in
+  DEPLOYED|UNASSOCIATED) ;; *) echo "$AUTH_FN has no LIVE stage; refusing to remove the Lambda gate" >&2; exit 1;; esac
+aws cloudfront describe-function --name gtm-preview-headers-db5553a4 --stage LIVE >/dev/null 2>&1 \
+  || { echo "gtm-preview-headers-db5553a4 has no LIVE stage; refusing" >&2; exit 1; }
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 aws cloudfront get-distribution-config --id "$DIST" > "$TMP/dist.json"
