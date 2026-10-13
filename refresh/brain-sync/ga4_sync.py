@@ -3,7 +3,8 @@
 
 Re-runs the 30-day sessions/users/pageviews report for property 304508954
 (opstream.ai), plus 90-day channel and landing-page reports for
-www.opstream.ai only, and upserts each into ga4_reports.
+www.opstream.ai only, and the same three split by hostName (all hosts), and
+upserts each into ga4_reports.
 
 Read-only against the Google Analytics Data API v1beta. The Bearer token
 is the same user refresh token as Sheets
@@ -65,6 +66,30 @@ REPORTS = {
         "dimensionFilter": WWW_ONLY,
         "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}],
         "limit": 10,
+    },
+    # The same views split by hostName with no host filter, so tables can be
+    # filtered to www.opstream.ai or app.opstream.ai. The reports above stay
+    # www-only and remain the default views.
+    "sessions_by_host_30d": {
+        "dateRanges": [{"startDate": "30daysAgo", "endDate": "today"}],
+        "dimensions": [{"name": "hostName"}],
+        "metrics": [{"name": "sessions"}, {"name": "totalUsers"}, {"name": "screenPageViews"}],
+        "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}],
+        "limit": 25,
+    },
+    "channels_by_host_90d": {
+        "dateRanges": [{"startDate": "90daysAgo", "endDate": "today"}],
+        "dimensions": [{"name": "sessionDefaultChannelGroup"}, {"name": "hostName"}],
+        "metrics": ENGAGEMENT,
+        "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}],
+        "limit": 100,
+    },
+    "landing_by_host_90d": {
+        "dateRanges": [{"startDate": "90daysAgo", "endDate": "today"}],
+        "dimensions": [{"name": "landingPage"}, {"name": "hostName"}],
+        "metrics": ENGAGEMENT,
+        "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}],
+        "limit": 50,
     },
 }
 
