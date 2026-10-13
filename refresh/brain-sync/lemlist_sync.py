@@ -10,15 +10,32 @@ so stats use that header first. The key is the secret opstream-gtm/lemlist-token
 and is sent only to api.lemlist.com. A stats refusal is recorded per campaign
 (route and HTTP status only) and does not stop the campaign refresh.
 A missing secret exits 3 and does not move the watermark.
+
+Two extra pulls follow the campaigns. Each records its own sync_outcomes row,
+and a failure in one does not fail the sync or stop the other:
+  lemlist_activities  GET /api/activities?version=v2 for ACTIVITY_TYPES, all
+                      campaigns at once, in minDate/maxDate windows paged by
+                      offset. sync_state 'lemlist_activities' holds the end of
+                      the last complete window per type, so a first pull that
+                      runs out of LEMLIST_ACTIVITY_MAX_CALLS (default 300)
+                      resumes there next run. Later runs re-read the last hour.
+  lemlist_leads       one row per lead per campaign from the v2 leads export
+                      (JSON), or the paged campaign leads route when the export
+                      is refused. contacted/opened/clicked/replied/meeting
+                      times are the first matching activity. raw_json keeps the
+                      export row; reply activities keep their full raw_json so
+                      later code can tell auto-replies.
 """
 
 import base64
 import json
+import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from urllib.parse import quote
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from common import (
     NeedsConnection,
@@ -27,6 +44,8 @@ from common import (
     SourceRefused,
     access_token_for,
     db_connect,
+    get_sync_state,
+    record_outcome,
     run_main,
     set_sync_state,
     truncate_value,
@@ -36,7 +55,23 @@ from common import (
 
 SOURCE = "lemlist"
 HOST = "api.lemlist.com"
+# lemlist allows 20 requests per 2 seconds per key.
 pace = RateLimiter(0.5)
+RETRY_429 = (2, 4, 8, 16)
+LEADS_ROUTE = "GET /api/v2/campaigns/{campaignId}/export/leads"
+LEADS_PAGED_ROUTE = "GET /api/campaigns/{campaignId}/leads"
+ACTIVITIES_ROUTE = "GET /api/activities"
+# Replies and meetings first: when a first pull runs out of calls, they are
+# the types the dashboard needs most.
+REPLY_TYPES = ("emailsReplied", "linkedinReplied")
+ACTIVITY_TYPES = REPLY_TYPES + ("meetingBooked", "emailsSent", "emailsClicked", "emailsOpened")
+ACTIVITY_PAGE = 100  # API maximum
+ACTIVITY_WINDOW = timedelta(days=30)
+ACTIVITY_OVERLAP = timedelta(hours=1)
+ACTIVITY_MAX_CALLS = int(os.environ.get("LEMLIST_ACTIVITY_MAX_CALLS") or 300)
+LEAD_TIMES = (("contacted_at", ("emailsSent",)), ("opened_at", ("emailsOpened",)),
+              ("clicked_at", ("emailsClicked",)), ("replied_at", REPLY_TYPES),
+              ("meeting_booked_at", ("meetingBooked",)))
 
 
 def _authed_url(path: str) -> str:
@@ -49,12 +84,22 @@ def _authed_url(path: str) -> str:
 
 
 def _fetch(req):
-    pace.wait()
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", errors="replace")
+    """(status, parsed JSON or text). A 429 is retried after Retry-After or a back-off."""
+    for delay in RETRY_429 + (None,):
+        pace.wait()
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                status, text = resp.status, resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and delay is not None:
+                after = str(e.headers.get("Retry-After") or "")
+                time.sleep(min(int(after), 30) if after.isdigit() else delay)
+                continue
+            return e.code, e.read().decode("utf-8", errors="replace")
+        try:
+            return status, json.loads(text or "{}")
+        except ValueError:
+            return status, text
 
 
 def _get(path: str):
@@ -71,6 +116,39 @@ def _get_basic(path: str):
     auth = base64.b64encode((":" + token).encode("utf-8")).decode("ascii")
     return _fetch(urllib.request.Request(f"https://{HOST}{path}",
                                          headers={"Accept": "application/json", "Authorization": "Basic " + auth}))
+
+
+# Auth style tried first by _get_any_auth; the one that works moves to the front.
+_AUTH_ORDER = ["basic", "query"]
+
+
+def _get_any_auth(path, route, want=dict):
+    """GET with Basic auth, then ?access_token= (or the reverse once that worked).
+
+    Returns (status, payload, attempts). Attempts hold the route template and
+    HTTP status only.
+    """
+    attempts = []
+    status, payload = None, None
+    for how in list(_AUTH_ORDER):
+        try:
+            if how == "basic":
+                status, payload = _get_basic(path)
+            else:
+                status, payload = _fetch(urllib.request.Request(_authed_url(path), headers={"Accept": "application/json"}))
+        except NeedsConnection:
+            raise
+        except Exception as e:
+            attempts.append({"route": route, "auth": how, "error": type(e).__name__})
+            continue
+        attempts.append({"route": route, "auth": how, "http": status})
+        if status == 200 and isinstance(payload, want):
+            if _AUTH_ORDER[0] != how:
+                _AUTH_ORDER.reverse()
+            return status, payload, attempts
+        if status not in (401, 403):
+            break  # the other auth style will not change a 404 or a 500
+    return status, payload, attempts
 
 
 def _stats(cid, start, end):
@@ -91,6 +169,211 @@ def _stats(cid, start, end):
         if status == 200 and isinstance(payload, dict):
             return payload, attempts
     return None, attempts
+
+
+def _items(payload):
+    """Rows from a list response, or from a {data|leads|activities: [...]} wrapper."""
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("data", "leads", "activities", "results"):
+            if isinstance(payload.get(key), list):
+                return payload[key]
+    return None
+
+
+def _raise_for(route, status, payload):
+    if status in (401, 403):
+        raise SourceRefused(HOST, route, status, "credential rejected")
+    raise SourceError(HOST, route, status, str(payload)[:200])
+
+
+def _iso(dt):
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _parse(ts):
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_state(source):
+    raw, _run, _note = get_sync_state(source)
+    try:
+        state = json.loads(raw) if raw else {}
+    except ValueError:
+        state = {}
+    return state if isinstance(state, dict) else {}
+
+
+def run_part(name, fn, log):
+    """Run one extra pull and record its outcome. Returns True on success; never raises."""
+    try:
+        detail = fn()
+    except Exception as e:
+        log.warning("%s failed (the rest of the sync continues): %s", name, e)
+        record_outcome(name, False, getattr(e, "route", None), getattr(e, "status", None),
+                       "%s: %s" % (type(e).__name__, str(e)[:200]))
+        return False
+    log.info("%s: %s", name, detail)
+    record_outcome(name, True, None, None, detail)
+    return True
+
+
+def sync_activities(campaigns, log):
+    """Activities of ACTIVITY_TYPES across all campaigns, windowed by date (see module doc)."""
+    state = _load_state("lemlist_activities")
+    now = datetime.now(timezone.utc)
+    starts = [t for t in (_parse(c.get("createdAt")) for c in campaigns) if t]
+    earliest = min(starts) if starts else now - timedelta(days=365)
+    calls = stored = 0
+    out_of_calls = False
+    con = db_connect()
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS lemlist_activities(activity_id TEXT PRIMARY KEY, campaign_id TEXT, "
+                    "lead_id TEXT, lead_email TEXT, type TEXT, created_at TEXT, is_first INTEGER, bot INTEGER, "
+                    "raw_json TEXT, fetched_at TEXT)")
+        con.execute("CREATE INDEX IF NOT EXISTS lemlist_activities_lead ON lemlist_activities"
+                    "(campaign_id, lead_id, type, created_at)")
+        for typ in ACTIVITY_TYPES:
+            mark = _parse(state.get(typ))
+            start = mark - ACTIVITY_OVERLAP if mark else earliest
+            while start < now and not out_of_calls:
+                end = min(start + ACTIVITY_WINDOW, now)
+                offset = 0
+                fetched_at = now_iso()
+                while True:
+                    if calls >= ACTIVITY_MAX_CALLS:
+                        out_of_calls = True
+                        break
+                    q = urllib.parse.urlencode({"version": "v2", "type": typ, "minDate": _iso(start),
+                                                "maxDate": _iso(end), "limit": ACTIVITY_PAGE, "offset": offset})
+                    status, payload, attempts = _get_any_auth("/api/activities?" + q, ACTIVITIES_ROUTE, want=(list, dict))
+                    calls += len(attempts)
+                    rows = _items(payload) if status == 200 else None
+                    if rows is None:
+                        _raise_for(ACTIVITIES_ROUTE, status, payload)
+                    for a in rows:
+                        aid = (a.get("_id") or a.get("id")) if isinstance(a, dict) else None
+                        if not aid:
+                            continue
+                        raw = {k: truncate_value(v) for k, v in a.items()
+                               if typ in REPLY_TYPES or k != "lead"}  # the lead is in lemlist_leads
+                        con.execute(
+                            "INSERT INTO lemlist_activities(activity_id, campaign_id, lead_id, lead_email, type, "
+                            "created_at, is_first, bot, raw_json, fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?) "
+                            "ON CONFLICT(activity_id) DO UPDATE SET raw_json=excluded.raw_json, "
+                            "fetched_at=excluded.fetched_at",
+                            (str(aid), a.get("campaignId"), a.get("leadId"), a.get("leadEmail"), a.get("type") or typ,
+                             a.get("createdAt"), None if a.get("isFirst") is None else int(bool(a.get("isFirst"))),
+                             None if a.get("bot") is None else int(bool(a.get("bot"))),
+                             json.dumps(raw, ensure_ascii=False), fetched_at))
+                        stored += 1
+                    if len(rows) < ACTIVITY_PAGE:
+                        break
+                    offset += len(rows)
+                con.commit()
+                if out_of_calls:
+                    break
+                state[typ] = _iso(end)
+                set_sync_state("lemlist_activities", json.dumps(state, sort_keys=True), "per-type end of last window")
+                start = end
+    finally:
+        con.close()
+    pending = [t for t in ACTIVITY_TYPES if not _parse(state.get(t)) or _parse(state[t]) < now - ACTIVITY_WINDOW]
+    detail = "%d activities stored in %d calls" % (stored, calls)
+    if out_of_calls:
+        detail += "; LEMLIST_ACTIVITY_MAX_CALLS reached, resuming next run (%s behind)" % ", ".join(pending)
+    return detail
+
+
+def _campaign_leads(cid):
+    """Leads of one campaign: the v2 JSON export, else the paged leads route."""
+    status, payload, _attempts = _get_any_auth(
+        f"/api/v2/campaigns/{quote(str(cid))}/export/leads?state=all&format=json", LEADS_ROUTE, want=list)
+    if status == 200 and isinstance(payload, list):
+        return payload
+    leads = []
+    offset, cursor = 0, None
+    for _page in range(500):
+        q = {"state": "all", "limit": 100, "offset": offset}
+        if cursor:
+            q = {"state": "all", "limit": 100, "cursor": cursor}
+        status, payload, _attempts = _get_any_auth(
+            f"/api/campaigns/{quote(str(cid))}/leads/?" + urllib.parse.urlencode(q), LEADS_PAGED_ROUTE, want=(list, dict))
+        rows = _items(payload) if status == 200 else None
+        if rows is None:
+            _raise_for(LEADS_PAGED_ROUTE, status, payload)
+        leads.extend(rows)
+        nxt = (payload.get("next") or payload.get("nextCursor")) if isinstance(payload, dict) else None
+        if nxt and nxt != cursor:
+            cursor = nxt
+        elif isinstance(payload, list) and len(rows) == 100:
+            offset += len(rows)
+        else:
+            break
+    return leads
+
+
+def sync_leads(campaigns, log):
+    """Replace each campaign's leads, then set the first-activity times (see module doc)."""
+    fetched_at = now_iso()
+    total = 0
+    failed = []
+    con = db_connect()
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS lemlist_leads(campaign_id TEXT, lead_id TEXT, email TEXT, "
+                    "company_domain TEXT, state TEXT, status TEXT, email_status TEXT, contacted_at TEXT, "
+                    "replied_at TEXT, opened_at TEXT, clicked_at TEXT, meeting_booked_at TEXT, raw_json TEXT, "
+                    "fetched_at TEXT, PRIMARY KEY(campaign_id, lead_id))")
+        for c in campaigns:
+            cid = str(c.get("_id") or c.get("id") or "")
+            if not cid:
+                continue
+            try:
+                leads = _campaign_leads(cid)
+            except NeedsConnection:
+                raise
+            except SourceError as e:
+                log.warning("campaign %s leads: %s", cid, e)
+                failed.append(e)
+                continue
+            rows = {}
+            for lead in leads:
+                if not isinstance(lead, dict):
+                    continue
+                email = lead.get("email")
+                lead_id = lead.get("_id") or lead.get("leadId") or lead.get("id") or (
+                    "email:" + str(email).lower() if email else None)
+                if not lead_id:
+                    continue
+                rows[str(lead_id)] = (cid, str(lead_id), email, lead.get("companyDomain"),
+                                      lead.get("lastState") or lead.get("state"), lead.get("status"),
+                                      lead.get("emailStatus"),
+                                      json.dumps({k: truncate_value(v) for k, v in lead.items()}, ensure_ascii=False),
+                                      fetched_at)
+            con.execute("DELETE FROM lemlist_leads WHERE campaign_id=?", (cid,))
+            con.executemany("INSERT INTO lemlist_leads(campaign_id, lead_id, email, company_domain, state, status, "
+                            "email_status, raw_json, fetched_at) VALUES(?,?,?,?,?,?,?,?,?)", list(rows.values()))
+            con.commit()
+            total += len(rows)
+        have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "lemlist_activities" in have:
+            sets = ", ".join(
+                "%s=(SELECT MIN(a.created_at) FROM lemlist_activities a WHERE a.campaign_id=lemlist_leads.campaign_id "
+                "AND a.lead_id=lemlist_leads.lead_id AND a.type IN (%s))" % (col, ",".join("'%s'" % t for t in types))
+                for col, types in LEAD_TIMES)
+            con.execute("UPDATE lemlist_leads SET " + sets)
+            con.commit()
+    finally:
+        con.close()
+    detail = "%d leads across %d campaigns" % (total, len(campaigns) - len(failed))
+    if failed:
+        raise SourceError(HOST, failed[-1].route, failed[-1].status,
+                          "%s; leads failed for %d campaigns" % (detail, len(failed)))
+    return detail
 
 
 def main_sync(log):
@@ -134,7 +417,13 @@ def main_sync(log):
     note = (f"{len(payload)} campaigns refreshed; stats filled for {stats_filled} "
             f"(null where the API does not expose them)")
     set_sync_state(SOURCE, fetched_at, note)
-    return note
+
+    campaigns = [c for c in payload if isinstance(c, dict)]
+    # Activities first, so the lead times below include this run's activities.
+    failed = [name for name, fn in (("lemlist_activities", lambda: sync_activities(campaigns, log)),
+                                    ("lemlist_leads", lambda: sync_leads(campaigns, log)))
+              if not run_part(name, fn, log)]
+    return note + ("; failed: " + ", ".join(failed) if failed else "")
 
 
 if __name__ == "__main__":
