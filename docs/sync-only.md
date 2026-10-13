@@ -89,9 +89,11 @@ How `hubspot_sync.py` collects these, paced under the limits above:
 - Company order and owner history go in `hubspot_deal_extras`. They come from
   two read-only batch endpoints: v4 deal→company associations (100 a call;
   label type 5 = primary) and v3 deals batch read with
-  `propertiesWithHistory=hubspot_owner_id` (50 a call). Changed deals are read
-  every run (about 2 calls), all deals every `HUBSPOT_EXTRAS_FULL_HOURS`
-  (default 6, about 12 calls for 578 deals). The read-only guard in
+  `propertiesWithHistory=hubspot_owner_id,dealstage` (50 a call). The dealstage
+  history (`stage_history`, newest first) says which stage a deal was in when a
+  meeting was booked. Changed deals, and deals stored before `stage_history`
+  existed, are read every run (about 2 calls), all deals every
+  `HUBSPOT_EXTRAS_FULL_HOURS` (default 6, about 12 calls for 578 deals). The read-only guard in
   `common.py` allows only these `…/batch/read` POSTs, CRM search, and
   `POST /crm/v3/lists/search` (a read); every other non-GET is refused.
 
@@ -106,7 +108,11 @@ tracked, so a deal stays until the sync sees it change.
 Sync-only runs also write `workspace.json`, the data the one-page workspace
 fetches, with `scripts/workspace-data.py` (rules in
 `shared/workspace-scope.json`, `shared/open-pipeline.json` and
-`config/lead-rules.json`). It reads brain.db and the data files under
+`config/lead-rules.json`, whose `reporting` block holds the Oct 13 2026
+reporting rules: customers, free-mail and internal addresses and careers forms
+out of the form counts, meeting-link bookings, ad-platform leads and a separate
+lead → MQL figure, applied once in the script's scope step and written to added
+fields only, so existing `workspace.json` fields keep their meaning). It reads brain.db and the data files under
 `state/gtm-inputs/`, all downloaded each run: `lead-sources.json`,
 `lead-source-review.csv`, `paid-deals.json`, `records.jsonl`,
 `lead-insights.json`, `lost-reasons.json`, `insights.json`, and
@@ -132,7 +138,10 @@ change instead of turning into "no change" one run later.
 
 Contacts carry source attribution (`hs_analytics_source*`,
 `hs_latest_source*`), first and recent conversion, `hs_object_source*`,
-`hs_google_click_id`, and the lead, MQL, SQL, and customer lifecycle dates.
+`hs_google_click_id`, the first-touch URL and referrer
+(`hs_analytics_first_url`, `hs_analytics_first_referrer`), and the lead, MQL,
+SQL, and customer lifecycle dates. Contacts stored before the first-touch
+fields were added get them from a new `HUBSPOT_CONTACT_BACKFILL=restart:<n>`.
 Custom `paid_touch_campaign` and `utm_*` properties are added when
 `GET /crm/v3/properties/contacts` lists them; when they are absent, or the call
 fails, the sync goes on without them. The incremental search reads these

@@ -142,5 +142,132 @@
   },
   "reviewList": {
     "about": "The page shows the review list file (lead-source-review.csv, data-side) as is. Columns used: row, company, sheet_source, hubspot_sources, evidence, action."
+  },
+  "reporting": {
+    "about": "Oct 13 2026 reporting rules (lead-sources.json reporting_rules, approved Oct 13 2026). Rules only, no data. scripts/workspace-data.py applies them once, in its scope step (ReportingScope); form counts (forms), meeting bookings (meetings.bookings), ad-platform leads (adLeads, ads[].hubspotLeads) and lead -> MQL (mqlFunnel.computed.afterReportingRules) all read that scope. These are added workspace.json fields; existing fields keep their meaning.",
+    "approvedAt": "2026-10-13",
+    "customers": {
+      "about": "A contact is a customer when it, or a company it is associated with, has lifecyclestage customer or is owned by a customer-success owner. Deals in these pipelines are dropped.",
+      "lifecycleStages": [
+        "customer"
+      ],
+      "ownerIds": [
+        "76564046",
+        "82316863"
+      ],
+      "dealPipelines": [
+        "855205465",
+        "686463412",
+        "686100770"
+      ]
+    },
+    "contacts": {
+      "about": "Also out of every count: free-mail addresses, internal addresses (these domains) and careers forms (names starting with these prefixes, besides the forms lead-sources.json marks not a lead source).",
+      "freeMailDomains": [
+        "gmail.com",
+        "googlemail.com",
+        "yahoo.com",
+        "hotmail.com",
+        "outlook.com",
+        "live.com",
+        "icloud.com",
+        "aol.com",
+        "proton.me",
+        "protonmail.com",
+        "me.com",
+        "msn.com"
+      ],
+      "internalDomains": [
+        "opstream.ai"
+      ],
+      "excludedFormNamePrefixes": [
+        "Open Position"
+      ]
+    },
+    "meetings": {
+      "about": "Bookings are meetings with hs_meeting_source MEETINGS_PUBLIC, dated by hs_createdate. A booking is a customer booking when any associated contact is a customer; it is dropped as an opportunity when, at hs_createdate, an associated Sales (default) pipeline deal was already in a past-Discovery stage (dealstage history, propertiesWithHistory=dealstage). No deal, SQL or Discovery/RFP received count; On Hold is not past Discovery. A booking whose associated contacts are all free-mail or internal is dropped too.",
+      "sourceProperty": "hs_meeting_source",
+      "sourceValue": "MEETINGS_PUBLIC",
+      "timeProperty": "hs_createdate",
+      "dealPipeline": "default",
+      "pastDiscoveryStages": [
+        "15879262",
+        "34538004",
+        "27052677",
+        "contractsent",
+        "closedwon",
+        "closedlost",
+        "1270127483"
+      ],
+      "countedStages": [
+        "943743501",
+        "decisionmakerboughtin"
+      ],
+      "notPastStages": [
+        "207126699"
+      ],
+      "notPastNote": "On Hold is not past Discovery (uncertain in the rules; confirm)"
+    },
+    "forms": {
+      "about": "The count of record is every submission (GET /form-integrations/v1/submissions/forms/{guid}, hubspot_form_submissions) of every form in lead-sources.json, joined to contacts by email. Per contact, first_conversion_event_name maps to a form by its ': <form name>' suffix, longest name first. recent_conversion_* is never used alone: a meeting booking overwrites it. Opportunity contacts' form fills count.",
+      "contactProperties": [
+        "first_conversion_event_name",
+        "first_conversion_date",
+        "recent_conversion_event_name",
+        "recent_conversion_date",
+        "num_conversion_events"
+      ],
+      "eventNameSeparator": ": "
+    },
+    "adLeads": {
+      "about": "Per ad platform, HubSpot-sourced leads: contacts whose first touch (hs_analytics_first_url query: utm_*, hsa_net, click ids; contact utm_* fields; hs_analytics_source PAID_*) carries a paid signal, after the exclusions above, and verified against the contact's conversions: a lead form submission, a conversion event that is not a careers form, or a meeting-link booking. Careers-only and unconverted contacts are not leads. AI-referral traffic (hs_analytics_source AI_REFERRALS, or a ChatGPT referrer / utm_source with no paid signal) is organic and counted apart. Platform conversion counts are platform-reported events, not leads.",
+      "contactProperties": [
+        "hs_analytics_first_url",
+        "hs_analytics_first_referrer",
+        "hs_analytics_source",
+        "hs_analytics_source_data_1",
+        "hs_analytics_source_data_2"
+      ],
+      "paidAnalyticsSources": [
+        "PAID_SEARCH",
+        "PAID_SOCIAL"
+      ],
+      "paidMediums": [
+        "cpc",
+        "paid",
+        "ppc",
+        "paid_social",
+        "paidsocial",
+        "paid_search"
+      ],
+      "clickIds": {
+        "gclid": "google",
+        "gbraid": "google",
+        "wbraid": "google",
+        "li_fat_id": "linkedin",
+        "rdt_cid": "reddit",
+        "msclkid": null
+      },
+      "hsaNetworks": {
+        "adwords": "google",
+        "linkedin": "linkedin"
+      },
+      "aiReferral": {
+        "label": "ChatGPT (organic AI referral)",
+        "analyticsSources": [
+          "AI_REFERRALS"
+        ],
+        "referrerDomains": [
+          "chatgpt.com",
+          "chat.openai.com"
+        ],
+        "utmSources": [
+          "chatgpt.com",
+          "chatgpt",
+          "openai"
+        ]
+      },
+      "platformFigureLabel": "platform-reported events, not leads"
+    }
   }
 }

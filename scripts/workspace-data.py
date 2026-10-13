@@ -7,7 +7,11 @@
 
 onepage/build.mjs renders the JSON. All scope rules are applied here, once:
 Sales Pipeline only, CS owners and customer companies out of meetings and calls,
-the hidden owner rendered as "Unassigned" (shared/workspace-scope.json). Lead
+the hidden owner rendered as "Unassigned" (shared/workspace-scope.json), and the
+Oct 13 2026 reporting rules (config/lead-rules.json "reporting", ReportingScope):
+customers, free-mail and internal addresses and careers forms out of the form
+counts, meeting bookings, ad-platform leads and a separate lead -> MQL figure,
+all in added fields (existing fields keep their meaning). Lead
 sources are mapped from lead-sources.json only, so a mapping change edits that
 file. Tables the sync has not written yet (forms, lists, imports, Lemlist leads,
 contact source fields) are used when present and listed as "not yet synced"
@@ -19,6 +23,8 @@ import os
 import re
 import sqlite3
 import sys
+import urllib.parse
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -43,6 +49,9 @@ NEW_SOURCES = [
 CONTACT_SOURCE_PROPS = ['hs_analytics_source', 'hs_analytics_source_data_1', 'hs_analytics_source_data_2',
                         'first_conversion_event_name', 'first_conversion_date', 'hs_object_source',
                         'hs_object_source_label', 'hs_object_source_detail_1', 'hs_google_click_id', 'paid_touch_campaign']
+# Read for the Oct 13 reporting rules; listed apart (meta.reportingContactFields), so meta.contactSourceFields keeps its meaning.
+REPORTING_CONTACT_PROPS = ['recent_conversion_event_name', 'recent_conversion_date', 'num_conversion_events',
+                           'hs_analytics_first_url', 'hs_analytics_first_referrer']
 SOURCE_LABELS = {'hubspot': 'HubSpot', 'hubspot_extras': 'HubSpot deal history', 'sheets': 'Sheets', 'fathom': 'Fathom',
                  'lemlist': 'Lemlist', 'ga4': 'GA4', 'otterly': 'Otterly'}
 
@@ -311,18 +320,27 @@ def totals(deals):
 
 
 def load_deals(brain, stages, owners, assoc):
-    extras = {}
+    extras, history = {}, {}
     for did, cids in brain.q('SELECT deal_id, company_ids FROM hubspot_deal_extras'):
         try:
             extras[str(did)] = set(json.loads(cids or '[]'))
         except ValueError:
             pass
+    # dealstage history (newest first), written by hubspot_sync.py; absent until that sync has run.
+    if 'stage_history' in brain.cols('hubspot_deal_extras'):
+        for did, raw in brain.q('SELECT deal_id, stage_history FROM hubspot_deal_extras WHERE stage_history IS NOT NULL'):
+            try:
+                history[str(did)] = [h for h in json.loads(raw) if isinstance(h, dict)]
+            except (TypeError, ValueError):
+                pass
     deals = []
     for hs_id, pj in brain.q("SELECT hs_id, properties_json FROM hubspot_objects WHERE object_type='deals'"):
         p = json.loads(pj or '{}')
         meta = stages.get((str(p.get('pipeline')), str(p.get('dealstage'))))
         cids = assoc.get('deals', str(hs_id), 'companies') or sorted(extras.get(str(hs_id), set()))
-        deals.append(shape_deal(hs_id, p, meta, owners, cids))
+        d = shape_deal(hs_id, p, meta, owners, cids)
+        d['stageHistory'] = history.get(d['id'])
+        deals.append(d)
     return deals
 
 
@@ -335,8 +353,13 @@ def headline(sales, stages):
     for o, sid, label in order:
         xs = [d for d in sales if d['open'] and d['stageId'] == sid]
         t = totals(xs)
-        t.update({'id': sid, 'label': label, 'onHold': letters(label) in ON_HOLD,
-                  'probability': stages[(SCOPE['salesPipelineId'], sid)]['prob']})
+        default = stages[(SCOPE['salesPipelineId'], sid)]['prob']
+        # Blended: the stage's weighted ÷ its amount, so per-deal probabilities that differ from the stage default
+        # show; mixed says some do.
+        t.update({'id': sid, 'label': label, 'onHold': letters(label) in ON_HOLD, 'probability': default,
+                  'blendedProbability': (t['weighted'] / t['amount']) if t['amount'] else None,
+                  'probabilityMixed': any(d['probability'] is not None and default is not None
+                                          and abs(d['probability'] - default) > 1e-9 for d in xs)})
         rows.append(t)
     return {'open': totals(open_), 'onHold': totals(hold), 'stages': rows}
 
@@ -437,7 +460,7 @@ def load_companies(brain, owners):
     comps = {}
     for cid, name, domain, life, owner in brain.objects('companies', ['name', 'domain', 'lifecyclestage', 'hubspot_owner_id']):
         comps[str(cid)] = {'id': str(cid), 'name': name or '', 'domain': domain_of(domain), 'lifecycle': life or '',
-                           'owner': owners.get(str(owner or ''), {}).get('name') or UNASSIGNED,
+                           'owner': owners.get(str(owner or ''), {}).get('name') or UNASSIGNED, 'ownerId': str(owner or ''),
                            'deals': [], 'firstWon': None, 'csDeal': False, 'salesDeal': False}
     return comps
 
@@ -486,17 +509,18 @@ def deal_ref(d):
 
 # ---------- contacts ----------
 def load_contacts(brain, owners, assoc):
-    present = [p for p in CONTACT_SOURCE_PROPS + discover_utm_props(brain)
+    present = [p for p in CONTACT_SOURCE_PROPS + discover_utm_props(brain) + REPORTING_CONTACT_PROPS
                if brain.q("SELECT 1 FROM hubspot_objects WHERE object_type='contacts' AND json_type(properties_json, '$.%s') IS NOT NULL LIMIT 1" % p)]
     fields = ['email', 'firstname', 'lastname', 'jobtitle', 'lifecyclestage', 'hubspot_owner_id', 'createdate'] + present
     contacts, by_email = {}, {}
     for row in brain.objects('contacts', fields):
         cid, rest = str(row[0]), dict(zip(fields, row[1:]))
         email = (rest.pop('email') or '').strip().lower()
+        owner_id = str(rest.pop('hubspot_owner_id') or '')
         c = {'id': cid, 'email': email,
              'name': ' '.join(x for x in [rest.pop('firstname'), rest.pop('lastname')] if x).strip() or None,
              'title': rest.pop('jobtitle'), 'lifecycle': rest.pop('lifecyclestage') or '',
-             'owner': owners.get(str(rest.pop('hubspot_owner_id') or ''), {}).get('name') or UNASSIGNED,
+             'owner': owners.get(owner_id, {}).get('name') or UNASSIGNED, 'ownerId': owner_id,
              'created': rest.pop('createdate'), 'props': {k: v for k, v in rest.items() if v not in (None, '')},
              'companies': assoc.get('contacts', cid, 'companies')}
         contacts[cid] = c
@@ -764,6 +788,7 @@ def tracker_rows(brain, lead_sources):
 
 
 RULES = json.load(open(os.path.join(ROOT, 'config', 'lead-rules.json'), encoding='utf-8'))
+REPORTING = RULES['reporting']
 
 
 def campaign_tags(bucket, name):
@@ -800,6 +825,9 @@ class LeadSources:
             tags, flags = campaign_tags(c.get('bucket'), c.get('name'))
             self.campaigns[str(c.get('id'))] = {**c, 'tags': tags, 'flags': flags}
         self.campaigns_by_name = {norm(c.get('name')): c for c in self.campaigns.values()}
+        # Forms by name, longest first, for conversion event names ('<page title>: <form name>').
+        self.event_forms = sorted(((str(f.get('name') or '').strip().casefold(), f) for f in self.doc.get('forms') or []
+                                   if str(f.get('name') or '').strip()), key=lambda x: -len(x[0]))
         ads = self.doc.get('ads') or {}
         pre = RULES['ads']['checksKeyPrefix']
         self.checks = {}
@@ -816,6 +844,15 @@ class LeadSources:
 
     def form_is_lead(self, form):
         return not form or form.get('bucket') not in RULES['forms']['notLeadBuckets']
+
+    def form_for_event(self, event):
+        """The lead-sources.json form a conversion event names: the event is '<page title>: <form name>' (or the bare
+        name). Longest form name first, so a form whose name ends another form's name is not taken for it."""
+        e = str(event or '').strip().casefold()
+        if not e:
+            return None
+        sep = REPORTING['forms']['eventNameSeparator'].casefold()
+        return next((f for n, f in self.event_forms if e == n or e.endswith(sep + n)), None)
 
     def form_source(self, form):
         m = re.search(r'Sheet source:\s*([A-Za-z]+)', str(form.get('detail') or ''))
@@ -1395,6 +1432,9 @@ def mql_funnel(brain, ctx, as_of):
     free = {d.lower() for d in cfg.get('freeMailDomains') or []}
     internal = (set(ctx['internal_domains']) - free) if cfg.get('excludeInternalContacts') else set()
     external = lambda c: bool(c) and domain_of(c['email']) not in internal
+    # The Oct 13 reporting rules on top (customers, free-mail and internal addresses out; ReportingScope) go in
+    # 'afterReportingRules', a separate figure, so the existing ones keep their meaning.
+    in_scope = lambda c: external(c) and ctx['scope'].contact(c['id']) is None
     ids = {str(i) for i in cfg['bookingLinkIds']}
     booked, public, no_source = set(), 0, 0
     fields = [src_prop, link_prop, 'hs_createdate', 'hs_meeting_start_time']
@@ -1416,10 +1456,15 @@ def mql_funnel(brain, ctx, as_of):
         c = ctx['contact_by_email'].get(email)
         if external(c) and any(in_window(parse_time(x['at'])) and ls.form_is_lead(ls.forms.get(x['formId'])) for x in subs):
             filled.add(c['id'])
-    leads = filled | booked if cfg.get('denominatorIncludesBookers') else filled
-    computed = {'numerator': len(booked), 'denominator': len(leads), 'rate': (len(booked) / len(leads)) if leads else None,
-                'formFillers': len(filled), 'bookersWithoutForm': len(booked - filled), 'schedulingPageBookings': public,
-                'meetingsWithoutSource': no_source, 'windowDays': cfg['windowDays']}  # no window start: it moves every run and would change the content hash
+
+    def rate(booked, filled):
+        leads = filled | booked if cfg.get('denominatorIncludesBookers') else filled
+        return leads, {'numerator': len(booked), 'denominator': len(leads), 'rate': (len(booked) / len(leads)) if leads else None,
+                       'formFillers': len(filled), 'bookersWithoutForm': len(booked - filled)}
+    leads, computed = rate(booked, filled)
+    computed.update({'schedulingPageBookings': public, 'meetingsWithoutSource': no_source, 'windowDays': cfg['windowDays'],  # no window start: it moves every run and would change the content hash
+                     'afterReportingRules': rate({i for i in booked if in_scope(ctx['contacts'].get(i))},
+                                                 {i for i in filled if in_scope(ctx['contacts'].get(i))})[1]})
     if not leads:
         return {'available': False, 'reason': 'no form-filling or booking contacts in the window', 'computed': computed}
     if not booked and public:
@@ -1429,6 +1474,303 @@ def mql_funnel(brain, ctx, as_of):
         return {'available': False, 'reason': cfg.get('hiddenBecause') or 'hidden by config', 'computed': computed}
     return {'available': True, **computed, 'label': cfg['label'], 'definition': cfg['definition'],
             'formBasis': 'hubspot_form_submissions'}
+
+
+# ---------- Oct 13 2026 reporting rules (config/lead-rules.json "reporting") ----------
+class ReportingScope:
+    """The scope step: the reporting rules applied once. contact(id) says why a contact is out of every count
+    ('customer' / 'internal' / 'freeMail', reason) or None; form_excluded(form) for careers forms; dropped_deals for
+    the excluded pipelines. Form counts, bookings, ad-platform leads, lead -> MQL and the meetings list read it."""
+
+    def __init__(self, contacts, comps, deals):
+        cu, co = REPORTING['customers'], REPORTING['contacts']
+        self.cs_owners = {str(x) for x in cu['ownerIds']}
+        self.customer_stages = {str(x).lower() for x in cu['lifecycleStages']}
+        self.pipelines = {str(x) for x in cu['dealPipelines']}
+        self.free = {d.lower() for d in co['freeMailDomains']}
+        self.internal = {d.lower() for d in co['internalDomains']} - self.free
+        self.form_prefixes = [str(x).strip().casefold() for x in co['excludedFormNamePrefixes']]
+        self.dropped_deals = {d['id'] for d in deals if d['pipeline'] in self.pipelines}
+        self.companies = {i: self._customer(c['lifecycle'], c.get('ownerId'), 'company') for i, c in comps.items()}
+        self.contacts = {}
+        for i, c in contacts.items():
+            why = self._customer(c['lifecycle'], c.get('ownerId'), 'contact') or next(
+                (self.companies[x] for x in c['companies'] if self.companies.get(x)), None)
+            self.contacts[i] = ('customer', why) if why else self.address(c['email'])
+
+    def _customer(self, lifecycle, owner_id, what):
+        if str(lifecycle or '').lower() in self.customer_stages:
+            return '%s lifecycle stage is customer' % what
+        if str(owner_id or '') in self.cs_owners:
+            return '%s owned by customer success' % what
+        return None
+
+    def address(self, email):
+        dom = domain_of(email) if email else ''
+        if dom in self.internal:
+            return ('internal', 'internal address')
+        if dom in self.free:
+            return ('freeMail', 'free-mail address')
+        return None
+
+    def contact(self, cid):
+        return self.contacts.get(str(cid))
+
+    def customer(self, cid):
+        why = self.contacts.get(str(cid))
+        return why[1] if why and why[0] == 'customer' else None
+
+    def form_excluded(self, form):
+        name = str((form or {}).get('name') or '').strip().casefold()
+        return any(name.startswith(p) for p in self.form_prefixes)
+
+    def careers_event(self, event):
+        e = str(event or '').strip().casefold()
+        return any(e.startswith(p) or (': ' + p) in e for p in self.form_prefixes)
+
+
+def form_counts(brain, ctx):
+    """Forms: every submission of every lead-sources.json form (the count of record), joined to contacts by email,
+    as a waterfall (all -> customers out -> careers forms, free-mail and internal addresses out); per contact, the
+    form its first_conversion_event_name names (recent_conversion_* is never used alone)."""
+    ls, scope = ctx['ls'], ctx['scope']
+    if not brain.has('hubspot_form_submissions'):
+        return {'available': False, 'reason': 'form submissions not yet synced'}
+    order = []
+    for f in ls.forms.values():
+        if f.get('bucket') not in order:
+            order.append(f.get('bucket'))
+    lead_buckets = [b for b in order if b not in RULES['forms']['notLeadBuckets']]
+    stages = {k: Counter() for k in ('all', 'afterCustomers', 'counted')}
+    excluded, people = Counter(), {}
+    no_contact = 0
+    for fid, conv, email in brain.q('SELECT form_id, conversion_id, contact_email FROM hubspot_form_submissions'):
+        f = ls.forms.get(str(fid))
+        if not f:
+            continue
+        b = f.get('bucket')
+        stages['all'][b] += 1
+        email = (email or '').strip().lower()
+        c = ctx['contact_by_email'].get(email) if email else None
+        why = scope.contact(c['id']) if c else scope.address(email)
+        if why and why[0] == 'customer':
+            excluded['customer'] += 1
+            continue
+        stages['afterCustomers'][b] += 1
+        if scope.form_excluded(f) or not ls.form_is_lead(f):
+            excluded['careers'] += 1
+            continue
+        if why:
+            excluded[why[0]] += 1
+            continue
+        stages['counted'][b] += 1
+        no_contact += 0 if c else 1
+        people.setdefault(b, set()).add(c['id'] if c else (email or 'conversion:' + str(conv)))
+    first = {'afterCustomers': Counter(), 'counted': Counter()}
+    other_events = 0
+    for c in ctx['contacts'].values():
+        event = c['props'].get('first_conversion_event_name')
+        if not event:
+            continue
+        f = ls.form_for_event(event)
+        if not f:
+            other_events += 1
+            continue
+        why = scope.contact(c['id'])
+        if why and why[0] == 'customer':
+            continue
+        first['afterCustomers'][f.get('bucket')] += 1
+        if not why and ls.form_is_lead(f) and not scope.form_excluded(f):
+            first['counted'][f.get('bucket')] += 1
+    exportable = {}
+    if 'submissions_exportable' in brain.cols('hubspot_forms'):
+        exportable = {str(i): x for i, x in brain.q('SELECT form_id, submissions_exportable FROM hubspot_forms')}
+    not_read = sorted(i for i in ls.forms if exportable.get(i) != 1) if exportable else []
+    return {
+        'available': True, 'definition': REPORTING['forms']['about'],
+        'buckets': [{'bucket': b, 'submissions': stages['counted'][b], 'contacts': len(people.get(b, ())),
+                     'firstConversion': first['counted'][b]} for b in lead_buckets],
+        'total': sum(stages['counted'].values()),
+        'waterfall': {k: dict(sorted(v.items())) for k, v in stages.items()},
+        'excluded': dict(sorted(excluded.items())),
+        'firstConversion': {k: dict(sorted(v.items())) for k, v in first.items()},
+        'firstConversionNotAForm': other_events, 'noContact': no_contact,
+        'formsInMapping': len(ls.forms), 'formsNotRead': not_read,
+    }
+
+
+def stage_at(history, t):
+    """A deal's dealstage at time t, from its stage history; None when the deal did not exist yet."""
+    best = None
+    for h in history or []:
+        ht = parse_time(h.get('timestamp'))
+        if ht and ht <= t and (best is None or ht > best[0]):
+            best = (ht, str(h.get('value') or ''))
+    return best[1] if best else None
+
+
+def booking_kind(mid, t, ctx):
+    """One public meeting-link booking: (why it is out: 'customer', 'opportunity', 'internal', 'freeMail' or None,
+    whether a Sales deal on it had no stage history to check, whether a Sales deal on it was On Hold then)."""
+    cfg, scope, a = REPORTING['meetings'], ctx['scope'], ctx['assoc']
+    whys = [scope.contact(cid) for cid in a.get('meetings', mid, 'contacts')]
+    if any(w and w[0] == 'customer' for w in whys):
+        return 'customer', False, False
+    unknown = on_hold = False
+    for did in a.get('meetings', mid, 'deals'):
+        d = ctx['deal_by_id'].get(did)
+        if not d or d['pipeline'] != cfg['dealPipeline']:
+            continue
+        if d.get('stageHistory') is None or t is None:
+            unknown = True
+            continue
+        stage = stage_at(d['stageHistory'], t)
+        if stage in cfg['pastDiscoveryStages']:
+            return 'opportunity', False, False
+        on_hold = on_hold or stage in cfg['notPastStages']
+    if whys and all(whys):
+        return ('internal' if any(w[0] == 'internal' for w in whys) else 'freeMail'), unknown, on_hold
+    return None, unknown, on_hold
+
+
+def booking_counts(brain, ctx):
+    """Meeting-link bookings (hs_meeting_source MEETINGS_PUBLIC, dated by hs_createdate) as a waterfall: total ->
+    customers and past-Discovery opportunities out (afterRules) -> all-free-mail / internal bookings out (counted);
+    overall and by year (PT)."""
+    cfg = REPORTING['meetings']
+    src, tprop = cfg['sourceProperty'], cfg['timeProperty']
+    keys = ('total', 'customer', 'opportunity', 'afterRules', 'internal', 'freeMail', 'counted')
+    total, years = Counter(), {}
+    unknown = on_hold = 0
+    found = False
+    for mid, source, created, start in brain.objects('meetings', [src, tprop, 'hs_meeting_start_time']):
+        found = found or bool(source)
+        if str(source or '').upper() != cfg['sourceValue']:
+            continue
+        t = parse_time(created) or parse_time(start)
+        kind, no_history, held = booking_kind(str(mid), t, ctx)
+        y = years.setdefault(str(t.astimezone(TZ).year) if t else 'unknown', Counter())
+        for c in (total, y):
+            c['total'] += 1
+            c[kind or 'counted'] += 1
+            if kind not in ('customer', 'opportunity'):
+                c['afterRules'] += 1
+        unknown += bool(no_history and kind not in ('customer', 'opportunity'))
+        on_hold += bool(held and kind not in ('customer', 'opportunity'))
+    if not found:
+        return {'available': False, 'reason': 'meeting source (%s) not synced' % src}
+    shape = lambda c: {k: c[k] for k in keys}
+    return {'available': True, 'definition': cfg['about'], **shape(total),
+            'byYear': {y: shape(c) for y, c in sorted(years.items())},
+            'stageHistorySynced': any(d.get('stageHistory') is not None for d in ctx['deal_by_id'].values()
+                                      if d['pipeline'] == cfg['dealPipeline']),
+            'opportunityUnchecked': unknown, 'onHoldKept': on_hold, 'onHoldNote': cfg['notPastNote']}
+
+
+def first_touch(c):
+    """The contact's first-touch query (hs_analytics_first_url parameters, then its utm_* fields; keys lower-cased)
+    and the first referrer's domain."""
+    p = c['props']
+    q = {}
+    url = str(p.get('hs_analytics_first_url') or '')
+    if url:
+        for k, v in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query):
+            if v:
+                q.setdefault(k.strip().lower(), v.strip())
+    for k, v in p.items():
+        k = str(k).lower()
+        if k.startswith('utm_') and v not in (None, ''):
+            q.setdefault('utm_source' if k == 'utm_sourse' else k, str(v).strip())  # the portal has a misspelt utm_sourse
+    return q, domain_of(p.get('hs_analytics_first_referrer'))
+
+
+def ad_touch(c, platforms):
+    """('paid', platform name or None, evidence), ('ai', None, evidence) or None for one contact's first touch."""
+    cfg = REPORTING['adLeads']
+    p = c['props']
+    q, ref = first_touch(c)
+    src = str(p.get('hs_analytics_source') or '').upper()
+    medium = norm(q.get('utm_medium')).replace(' ', '_')
+    clicks = [k for k in cfg['clickIds'] if q.get(k)]
+    net = str(q.get('hsa_net') or '').lower()
+    shown = ', '.join('%s=%s' % (k, q[k]) for k in ('utm_source', 'utm_medium', 'utm_campaign', 'hsa_net') if q.get(k))
+    named = lambda key: next((x['name'] for x in platforms if x['key'] == key), None)
+    if medium in cfg['paidMediums'] or net or clicks or src in cfg['paidAnalyticsSources']:
+        hits = platform_in_text(q.get('utm_source', ''), platforms) or platform_in_text(q.get('utm_campaign', ''), platforms)
+        plat = hits[0]['name'] if len(hits) == 1 else None
+        plat = plat or named(cfg['hsaNetworks'].get(net)) or next((named(cfg['clickIds'][k]) for k in clicks if cfg['clickIds'][k]), None)
+        if not plat and src in cfg['paidAnalyticsSources']:
+            hits = platform_in_text(' '.join(str(p.get(k) or '') for k in ('hs_analytics_source_data_1', 'hs_analytics_source_data_2')), platforms)
+            plat = hits[0]['name'] if len(hits) == 1 else None
+        return 'paid', plat, '; '.join(x for x in [shown, ', '.join(clicks), src] if x)
+    ai = cfg['aiReferral']
+    if src in ai['analyticsSources'] or ref in ai['referrerDomains'] or norm(q.get('utm_source')) in {norm(x) for x in ai['utmSources']}:
+        return 'ai', None, '; '.join(x for x in [src, ref and 'referrer ' + ref, shown] if x)
+    return None
+
+
+def conversion_status(c, ctx):
+    """'lead' when the contact converted (a lead form submission, a conversion event that is not a careers form,
+    or a meeting-link booking); 'careers' when its only conversions are careers forms; else 'noConversion'."""
+    ls, scope = ctx['ls'], ctx['scope']
+    lead = careers = False
+    for sub in (ctx['submissions'] or {}).get(c['email'], []):
+        f = ls.forms.get(sub['formId'])
+        if not f:
+            continue
+        if scope.form_excluded(f) or not ls.form_is_lead(f):
+            careers = True
+        else:
+            lead = True
+    first = c['props'].get('first_conversion_event_name')
+    for e in [first, c['props'].get('recent_conversion_event_name')] if first else []:  # never recent_* alone
+        if not e:
+            continue
+        f = ls.form_for_event(e)
+        if scope.careers_event(e) or (f and (scope.form_excluded(f) or not ls.form_is_lead(f))):
+            careers = True
+        else:
+            lead = True
+    if lead or c['id'] in ctx['booked']:
+        return 'lead'
+    return 'careers' if careers else 'noConversion'
+
+
+def ad_leads(ctx):
+    """Per ad platform, HubSpot-sourced leads (config/lead-rules.json reporting.adLeads), and organic AI referrals apart."""
+    cfg = REPORTING['adLeads']
+    platforms = ctx['ls'].platforms
+    row = lambda name, key: {'name': name, 'key': key, 'leads': 0, 'contacts': 0, 'excluded': Counter(), 'ids': []}
+    rows = {p['name']: row(p['name'], p['key']) for p in platforms}
+    unnamed = row('Paid (platform not named)', 'unnamed')
+    ai = row(cfg['aiReferral']['label'], 'ai')
+    for c in sorted(ctx['contacts'].values(), key=lambda c: c['id']):
+        t = ad_touch(c, platforms)
+        if not t:
+            continue
+        r = ai if t[0] == 'ai' else rows.get(t[1]) or unnamed
+        r['contacts'] += 1
+        why = ctx['scope'].contact(c['id'])
+        status = why[0] if why else conversion_status(c, ctx)
+        if status != 'lead':
+            r['excluded'][status] += 1
+            continue
+        r['leads'] += 1
+        r['ids'].append(c['id'])
+    done = lambda r: {**r, 'excluded': dict(sorted(r['excluded'].items()))}
+    return {'definition': cfg['about'], 'platformFigureLabel': cfg['platformFigureLabel'],
+            'firstUrlSynced': 'hs_analytics_first_url' in ctx['contact_props'],
+            'platforms': [done(rows[p['name']]) for p in platforms], 'unnamed': done(unnamed), 'aiReferral': done(ai)}
+
+
+def booked_contacts(brain, assoc):
+    """Contacts on a meeting-link booking (a conversion for the ad-lead check)."""
+    cfg = REPORTING['meetings']
+    out = set()
+    for mid, source in brain.objects('meetings', [cfg['sourceProperty']]):
+        if str(source or '').upper() == cfg['sourceValue']:
+            out.update(assoc.get('meetings', str(mid), 'contacts'))
+    return out
 
 
 def load_call_classification(path, warn):
@@ -1781,6 +2123,9 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
     comps = load_companies(brain, owners)
     attach_deals(comps, deals)
     contacts, contact_by_email, contact_props = load_contacts(brain, owners, assoc)
+    source_props = [p for p in contact_props if p not in REPORTING_CONTACT_PROPS]
+    # The scope step: the Oct 13 reporting rules, applied once; every count below reads it.
+    scope = ReportingScope(contacts, comps, deals)
     fresh = freshness(brain, as_of)
     hub = next((f for f in fresh if f['source'] == 'hubspot'), None)
     data_at = parse_time(hub['lastOkAt']) if hub else None
@@ -1803,7 +2148,8 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
            'lemlist': lemlist_leads(brain), 'submissions': form_submissions(brain), 'memberships': list_memberships(brain),
            'form_names': {str(i): n for i, n in brain.q('SELECT form_id, name FROM hubspot_forms')} if brain.has('hubspot_forms') else {},
            'campaign_names': {str(i): n for i, n in brain.q('SELECT campaign_id, name FROM lemlist_campaigns')},
-           'lead_insights': lead_insights, 'contact_props': contact_props}
+           'lead_insights': lead_insights, 'contact_props': contact_props, 'scope': scope,
+           'booked': booked_contacts(brain, assoc)}
     ctx['call_class'], ctx['call_class_reason'] = load_call_classification(args.call_classification, warn)
     review = load_review_list(args.review_list)
     ctx['review'] = review['byRow'] if review else {}
@@ -1824,6 +2170,16 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
     leads = build_leads(brain, ctx)
     out_bound = outbound(brain, ls, ctx['lemlist'])
     funnel = mql_funnel(brain, ctx, as_of)
+    meetings['bookings'] = booking_counts(brain, ctx)
+    forms = form_counts(brain, ctx)
+    ad = ad_leads(ctx)
+    for a in ads:
+        a['figureLabel'] = ad['platformFigureLabel']
+        hl_row = next((r for r in ad['platforms'] if r['name'] == a['name']), None)
+        if hl_row:
+            a['hubspotLeads'] = {k: hl_row[k] for k in ('leads', 'contacts', 'excluded')}
+        if a['key'] == 'openai':
+            a['aiReferral'] = {k: ad['aiReferral'][k] for k in ('name', 'leads', 'contacts', 'excluded')}
     hl = headline(sales, stages)
     lost = [d for d in sales if d['lost']]
     for d in lost:
@@ -1856,11 +2212,12 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
                  'hubspot': {'fetchedAt': iso(data_at)}, 'portalId': args.portal_id, 'provisional': provisional_label(ls_doc),
                  'inputs': inputs_used,
                  'leadSourcesAt': (ls_doc or {}).get('generated_at'),
-                 'notSynced': [label for t, label in NEW_SOURCES if not brain.has(t)] + ([] if contact_props else ['HubSpot contact source fields']),
-                 'contactSourceFields': contact_props, 'leadInsights': len(lead_insights),
+                 'notSynced': [label for t, label in NEW_SOURCES if not brain.has(t)] + ([] if source_props else ['HubSpot contact source fields']),
+                 'contactSourceFields': source_props,
+                 'reportingContactFields': [p for p in contact_props if p in REPORTING_CONTACT_PROPS], 'leadInsights': len(lead_insights),
                  'callClassification': (len(ctx['call_class']) if ctx['call_class'] is not None else None)},
         'freshness': fresh,
-        'flags': staleness(fresh, ads, spend, ga4, brain, contact_props, as_of) + ([{'key': 'calls', 'label': 'Call classification unavailable',
+        'flags': staleness(fresh, ads, spend, ga4, brain, source_props, as_of) + ([{'key': 'calls', 'label': 'Call classification unavailable',
                   'text': calls.get('classificationNote', ''), 'level': 'warn'}] if calls.get('classification') == 'fallback' else []),
         'headline': {**hl, 'change': headline_change(sales, priors, data_at, as_of),
                      'definition': OPEN_DEF['definition']},
@@ -1869,6 +2226,8 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
                    'lost': [deal_row(d) for d in lost], 'reasonsDoc': lost_doc,
                    'reasonsNote': 'lost-reasons.json covers new-business Sales Pipeline deals only; losses created after the company\'s first win (expansion at a customer) are listed apart.'},
         'leads': leads,
+        'forms': forms,
+        'adLeads': ad,
         'mqlFunnel': funnel,
         'paidDeals': paid_deals_view(paid, ctx['deal_by_id'], comp_name),
         'reviewList': ({'path': os.path.basename(review['path']), 'rows': [{**{k: r.get(k) for k in ('row', 'company', 'sheet_source', 'hubspot_sources', 'evidence', 'action', 'status',
@@ -1876,7 +2235,8 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
                                   'hold': hold_label(r) if str(r.get('status') or '').startswith('on_hold') else None} for r in review['rows']],
                         'leadIds': {str(r): l['id'] for l in leads.get('items', []) for r in l['rows'] if r in ctx['review']}}
                        if review else None),
-        'rules': {'answeredAt': RULES['answeredAt'], 'sourcePrimary': RULES['source']['primary'], 'mql': RULES['mql']['definition'],
+        'rules': {'answeredAt': RULES['answeredAt'], 'reportingApprovedAt': REPORTING['approvedAt'],
+                  'sourcePrimary': RULES['source']['primary'], 'mql': RULES['mql']['definition'],
                   'mainForms': RULES['forms']['mainForms'], 'brandedFlag': RULES['ads']['brandedFlag']},
         'ads': ads,
         'spend': spend,
@@ -1892,6 +2252,8 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
                         'loaded': ls_doc is not None},
         'scope': {'salesPipeline': SCOPE['salesPipelineId'], 'droppedPipelines': list(SCOPE['excludedPipelines'].values()),
                   'customerCompanies': len(removed_customers),
+                  'reporting': {'about': REPORTING['about'], 'droppedDeals': len(scope.dropped_deals),
+                                'contactsOut': dict(sorted(Counter(w[0] for w in scope.contacts.values() if w).items()))},
                   'currentPage': current_page_scope(args.current_page) if args.current_page else None},
     }
     out = scrub.deep(out)
@@ -1916,6 +2278,18 @@ def audit_lines(d):
     lines.append('lead -> MQL (90 days, proposed): ' + ('%d / %d = %.1f%%' % (f['numerator'], f['denominator'], 100 * f['rate'])
                                                          if f['available'] else 'hidden (%s)%s' % (f['reason'][:120], '; computed %d / %d' % (
                                                              f['computed']['numerator'], f['computed']['denominator']) if f.get('computed') else '')))
+    fm = d['forms']
+    if fm.get('available'):
+        lines.append('forms (submissions, after the reporting rules): %s; excluded %s' % (
+            ', '.join('%s %d' % (b['bucket'], b['submissions']) for b in fm['buckets']), fm['excluded']))
+    bk = d['meetings']['bookings']
+    if bk.get('available'):
+        lines.append('meeting-link bookings: %d -> %d after customers / opportunities (%d customer, %d opportunity%s) -> %d counted' % (
+            bk['total'], bk['afterRules'], bk['customer'], bk['opportunity'],
+            '' if bk['stageHistorySynced'] else ', stage history not synced', bk['counted']))
+    ad = d['adLeads']
+    lines.append('ad-platform HubSpot leads%s: %s; %s %d' % ('' if ad['firstUrlSynced'] else ' (first URL not synced)', ', '.join(
+        '%s %d' % (r['name'], r['leads']) for r in ad['platforms'] + [ad['unnamed']]), ad['aiReferral']['name'], ad['aiReferral']['leads']))
     o = d['outbound']
     lines.append('outbound reply rate: %d / %d = %.1f%% over %d campaigns' % (o['replies'], o['sends'], 100 * (o['rate'] or 0), o['count']))
     p = d['paidDeals']

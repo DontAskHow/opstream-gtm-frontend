@@ -148,9 +148,6 @@ class LeadRules(unittest.TestCase):
         self.assertEqual(wd.load_call_classification(None, lambda *a: None), (None, 'no CALL_CLASSIFICATION path given'))
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class MqlFunnel(unittest.TestCase):
     """lead_to_mql_rate (config/lead-rules.json "mql"): book-a-demo bookers / lead-form fillers plus bookers."""
@@ -171,14 +168,16 @@ class MqlFunnel(unittest.TestCase):
         con.commit()
         con.close()
         brain = wd.Brain(path)
-        contacts = {cid: {'id': cid, 'email': email} for cid, email in
-                    [('1', 'a@buyer.example'), ('2', 'b@buyer.example'), ('3', 'me@ours.example'), ('4', 'c@gmail.com'), ('5', 'job@seeker.example')]}
+        contacts = {cid: {'id': cid, 'email': email, 'lifecycle': life, 'companies': []} for cid, email, life in
+                    [('1', 'a@buyer.example', 'lead'), ('2', 'b@buyer.example', 'opportunity'), ('3', 'me@ours.example', ''),
+                     ('4', 'c@gmail.com', 'lead'), ('5', 'job@seeker.example', ''), ('6', 'd@client.example', 'customer')]}
         ls = wd.LeadSources({'forms': [{'id': 'f-demo', 'bucket': 'demo_request'}, {'id': 'f-jobs', 'bucket': 'not_a_lead_source'}]})
         submissions = {}
         for email, form, at in subs:
             submissions.setdefault(email, []).append({'formId': form, 'at': at})
         ctx = {'assoc': wd.Assoc(brain), 'contacts': contacts, 'contact_by_email': {c['email']: c for c in contacts.values()},
-               'submissions': submissions, 'internal_domains': {'ours.example', 'gmail.com'}, 'ls': ls}
+               'submissions': submissions, 'internal_domains': {'ours.example', 'gmail.com'}, 'ls': ls,
+               'scope': wd.ReportingScope(contacts, {}, [])}
         return brain, ctx
 
     def booking(self, page, created='2026-10-01T15:00:00Z', source='MEETINGS_PUBLIC'):
@@ -203,21 +202,27 @@ class MqlFunnel(unittest.TestCase):
     SUBS = [('b@buyer.example', 'f-demo', '2026-09-01T00:00:00Z'),    # lead form: in the denominator
             ('job@seeker.example', 'f-jobs', '2026-09-01T00:00:00Z'),  # careers: not a lead
             ('me@ours.example', 'f-demo', '2026-09-01T00:00:00Z'),     # internal
-            ('c@gmail.com', 'f-demo', '2026-09-02T00:00:00Z')]         # free-mail is never internal
+            ('c@gmail.com', 'f-demo', '2026-09-02T00:00:00Z'),         # free-mail is never internal (out after the reporting rules)
+            ('d@client.example', 'f-demo', '2026-09-03T00:00:00Z')]    # a customer (out after the reporting rules)
 
     def test_definition(self):
         f = self.run_with(True, self.meetings(), self.SUBS)
         self.assertTrue(f['available'])
-        # bookers {1}; fillers {2, 4}; denominator = fillers + bookers.
-        self.assertEqual((f['numerator'], f['denominator'], f['formFillers'], f['bookersWithoutForm']), (1, 3, 2, 1))
-        self.assertAlmostEqual(f['rate'], 1 / 3)
+        # bookers {1}; fillers {2, 4, 6}; denominator = fillers + bookers.
+        self.assertEqual((f['numerator'], f['denominator'], f['formFillers'], f['bookersWithoutForm']), (1, 4, 3, 1))
+        self.assertAlmostEqual(f['rate'], 1 / 4)
         self.assertEqual(f['schedulingPageBookings'], 3)
+        # The Oct 13 reporting rules, as a separate figure: the free-mail (4) and customer (6) fillers are out.
+        r = f['afterReportingRules']
+        self.assertEqual((r['numerator'], r['denominator'], r['formFillers'], r['bookersWithoutForm']), (1, 2, 1, 1))
+        self.assertAlmostEqual(r['rate'], 1 / 2)
 
     def test_hidden_by_config_keeps_the_computed_figures(self):
         f = self.run_with(False, self.meetings(), self.SUBS)
         self.assertFalse(f['available'])
         self.assertEqual(f['reason'], wd.RULES['mql']['hiddenBecause'])
-        self.assertEqual((f['computed']['numerator'], f['computed']['denominator']), (1, 3))
+        self.assertEqual((f['computed']['numerator'], f['computed']['denominator']), (1, 4))
+        self.assertEqual((f['computed']['afterReportingRules']['numerator'], f['computed']['afterReportingRules']['denominator']), (1, 2))
 
     def test_page_ids_that_match_nothing_hide_it_instead_of_showing_zero(self):
         ms = [(m, dict(p, hs_created_by_scheduling_page='999') if p.get('hs_created_by_scheduling_page') == self.PAGE else p, c)
@@ -235,3 +240,107 @@ class MqlFunnel(unittest.TestCase):
     def test_meetings_without_source_are_counted(self):
         ms = self.meetings() + [('m6', {'hs_createdate': '2026-10-05T00:00:00Z'}, ['2'])]
         self.assertEqual(self.run_with(True, ms, self.SUBS)['meetingsWithoutSource'], 1)
+
+
+class ReportingRules(unittest.TestCase):
+    """The Oct 13 2026 reporting rules (config/lead-rules.json "reporting"), one helper at a time."""
+    LS = {'forms': [{'id': 'f1', 'name': 'Guide', 'bucket': 'content_download'},
+                    {'id': 'f2', 'name': 'Download: Guide', 'bucket': 'demo_request'},
+                    {'id': 'f3', 'name': 'Open Position - Engineer ', 'bucket': 'not_a_lead_source'},
+                    {'id': 'f4', 'name': 'Contact Us', 'bucket': 'contact'}],
+          'ads': {'platforms': ['Google Ads', 'LinkedIn Ads', 'Reddit Ads', 'OpenAI (ChatGPT) Ads']}}
+
+    def contact(self, cid, email, lifecycle='lead', owner='1', companies=(), **props):
+        return {'id': cid, 'email': email, 'lifecycle': lifecycle, 'ownerId': owner, 'companies': list(companies), 'props': props}
+
+    def test_rules_mirror_the_scope_file(self):
+        cu = wd.REPORTING['customers']
+        self.assertEqual(set(cu['ownerIds']), set(wd.SCOPE['csOwnerIds']))
+        self.assertEqual(set(cu['dealPipelines']), {k for k in wd.SCOPE['excludedPipelines'] if k != 'about'})
+        self.assertNotIn(wd.REPORTING['meetings']['notPastStages'][0], wd.REPORTING['meetings']['pastDiscoveryStages'])
+
+    def test_event_names_map_by_suffix_longest_first(self):
+        ls = wd.LeadSources(self.LS)
+        self.assertEqual(ls.form_for_event('Resources | Example: Download: Guide')['id'], 'f2')
+        self.assertEqual(ls.form_for_event('Blog | Example: guide')['id'], 'f1')  # case-insensitive
+        self.assertEqual(ls.form_for_event('Jobs | Example: Open Position - Engineer ')['id'], 'f3')  # trailing spaces
+        self.assertEqual(ls.form_for_event('Contact Us')['id'], 'f4')
+        self.assertIsNone(ls.form_for_event('Meetings Link: example/demo'))
+        self.assertIsNone(ls.form_for_event('Example: Not Contact Us'))  # a suffix, but not after ': '
+        self.assertIsNone(ls.form_for_event(None))
+
+    def test_stage_at(self):
+        h = [{'value': '15879262', 'timestamp': '2026-02-01T00:00:00Z'}, {'value': '943743501', 'timestamp': '2026-01-05T00:00:00Z'}]
+        at = lambda s: wd.parse_time(s)
+        self.assertEqual(wd.stage_at(h, at('2026-01-20T00:00:00Z')), '943743501')
+        self.assertEqual(wd.stage_at(h, at('2026-02-01T00:00:00Z')), '15879262')
+        self.assertIsNone(wd.stage_at(h, at('2026-01-01T00:00:00Z')))  # the deal did not exist yet
+        self.assertIsNone(wd.stage_at([], at('2026-01-01T00:00:00Z')))
+
+    def test_scope_reasons(self):
+        cs = wd.REPORTING['customers']['ownerIds'][0]
+        comps = {'c1': {'lifecycle': 'customer', 'ownerId': '1'}, 'c2': {'lifecycle': 'lead', 'ownerId': cs},
+                 'c3': {'lifecycle': 'opportunity', 'ownerId': '1'}}
+        contacts = {c['id']: c for c in [
+            self.contact('1', 'a@buyer.example', lifecycle='customer'), self.contact('2', 'b@buyer.example', owner=cs),
+            self.contact('3', 'c@buyer.example', companies=['c1']), self.contact('4', 'd@buyer.example', companies=['c2']),
+            self.contact('5', 'e@gmail.com'), self.contact('6', 'f@' + wd.REPORTING['contacts']['internalDomains'][0]),
+            self.contact('7', 'g@buyer.example', lifecycle='opportunity', companies=['c3'])]}
+        deals = [{'id': 'd1', 'pipeline': wd.REPORTING['customers']['dealPipelines'][0]}, {'id': 'd2', 'pipeline': 'default'}]
+        sc = wd.ReportingScope(contacts, comps, deals)
+        self.assertEqual([(sc.contact(i) or ('in',))[0] for i in '1234567'],
+                         ['customer', 'customer', 'customer', 'customer', 'freeMail', 'internal', 'in'])
+        self.assertIn('customer success', sc.customer('4'))
+        self.assertEqual(sc.dropped_deals, {'d1'})
+        self.assertTrue(sc.form_excluded({'name': 'Open Position - Designer'}))
+        self.assertFalse(sc.form_excluded({'name': 'Contact Us'}))
+        self.assertTrue(sc.careers_event('Careers | Example: Open Position - Designer'))
+
+    def test_ad_touch(self):
+        ls = wd.LeadSources(self.LS)
+        t = lambda **p: wd.ad_touch(self.contact('9', 'x@buyer.example', **p), ls.platforms)
+        url = 'https://www.example.com/p?'
+        self.assertEqual(t(hs_analytics_first_url=url + 'utm_source=chatgpt&utm_medium=cpc')[:2], ('paid', 'OpenAI (ChatGPT) Ads'))
+        self.assertEqual(t(hs_analytics_first_url=url + 'utm_source=chatgpt.com')[:2], ('ai', None))  # no paid signal: organic
+        self.assertEqual(t(hs_analytics_source='AI_REFERRALS')[:2], ('ai', None))
+        self.assertEqual(t(hs_analytics_first_referrer='https://chatgpt.com/')[:2], ('ai', None))
+        self.assertEqual(t(hs_analytics_first_url=url + 'hsa_net=adwords&kw=example')[:2], ('paid', 'Google Ads'))
+        self.assertEqual(t(hs_analytics_first_url=url + 'gclid=x')[:2], ('paid', 'Google Ads'))
+        self.assertEqual(t(utm_sourse='linkedin', utm_medium='paid_social')[:2], ('paid', 'LinkedIn Ads'))  # the misspelt field
+        self.assertEqual(t(hs_analytics_source='PAID_SOCIAL', hs_analytics_source_data_1='LinkedIn')[:2], ('paid', 'LinkedIn Ads'))
+        self.assertEqual(t(hs_analytics_source='PAID_SEARCH', hs_analytics_source_data_1='12345')[:2], ('paid', None))
+        self.assertIsNone(t(hs_analytics_first_url=url + 'utm_source=newsletter&utm_medium=email'))
+        self.assertIsNone(t(hs_google_click_id='x'))  # not first touch
+
+    def test_conversion_status_never_uses_recent_alone(self):
+        ls = wd.LeadSources(self.LS)
+        contacts = {}
+        ctx = {'ls': ls, 'submissions': {'sub@buyer.example': [{'formId': 'f4'}], 'job@buyer.example': [{'formId': 'f3'}]},
+               'booked': {'5'}}
+        ctx['scope'] = wd.ReportingScope(contacts, {}, [])
+        st = lambda c: wd.conversion_status(c, ctx)
+        self.assertEqual(st(self.contact('1', 'sub@buyer.example')), 'lead')
+        self.assertEqual(st(self.contact('2', 'job@buyer.example')), 'careers')
+        self.assertEqual(st(self.contact('3', 'r@buyer.example', recent_conversion_event_name='Example: Contact Us')), 'noConversion')
+        self.assertEqual(st(self.contact('4', 'f@buyer.example', first_conversion_event_name='Example: Open Position - Engineer',
+                                         recent_conversion_event_name='Example: Contact Us')), 'lead')
+        self.assertEqual(st(self.contact('5', 'b@buyer.example')), 'lead')  # booked through a meetings link
+        self.assertEqual(st(self.contact('6', 'n@buyer.example', first_conversion_event_name='Jobs: Open Position - QA')), 'careers')
+
+    def test_blended_stage_probability(self):
+        stages = {('default', 's1'): {'pipeline': 'Sales', 'label': 'Demo meeting', 'order': 0, 'closed': False, 'prob': 0.25},
+                  ('default', 's2'): {'pipeline': 'Sales', 'label': 'SQL', 'order': 1, 'closed': False, 'prob': 0.05},
+                  ('default', 's3'): {'pipeline': 'Sales', 'label': 'Decision', 'order': 2, 'closed': False, 'prob': 0.7}}
+        d = lambda i, sid, amount, prob: {'id': i, 'stageId': sid, 'amount': amount, 'probability': prob, 'open': True, 'onHold': False}
+        rows = {r['id']: r for r in wd.headline([d('1', 's1', 100000, 0.25), d('2', 's1', 300000, 0.5), d('3', 's2', 20000, 0.05),
+                                                 d('4', 's2', None, 0.05)], stages)['stages']}
+        self.assertAlmostEqual(rows['s1']['blendedProbability'], 175000 / 400000)
+        self.assertTrue(rows['s1']['probabilityMixed'])
+        self.assertAlmostEqual(rows['s2']['blendedProbability'], 0.05)
+        self.assertFalse(rows['s2']['probabilityMixed'])
+        self.assertIsNone(rows['s3']['blendedProbability'])  # no amount
+        self.assertFalse(rows['s3']['probabilityMixed'])
+
+
+if __name__ == '__main__':
+    unittest.main()
