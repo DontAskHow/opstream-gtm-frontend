@@ -145,7 +145,10 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
   };
   const DEFAULT_RANGE = 'week';
   const rangeOf = (s, key) => (RANGES[key].some(([k]) => k === s[key]) ? s[key] : DEFAULT_RANGE);
-  const rangeOptions = (key, v) => RANGES[key].map(([k, l]) => [k, k === 'week' ? `This week · ${weekWindow(v.meta.asOf).label}` : l]);
+  // "Now" for every range and every today-based check: the open tab's clock (meta.clock, set by the
+  // browser on each render, never behind the data), else the data's as-of time (Node, tests).
+  const clockOf = (v) => v.meta.clock || v.meta.asOf;
+  const rangeOptions = (key, v) => RANGES[key].map(([k, l]) => [k, k === 'week' ? `This week · ${weekWindow(clockOf(v)).label}` : l]);
 
   // "+2 vs last week (Oct 5–6: 3)"; a percentage only when both weeks have at least 5.
   function weekDelta(cur, prev, label) {
@@ -274,7 +277,7 @@ ${NAV}
     const all = s.deals === 'all';
     const open = v.deals.filter((d) => !d.onHold);
     const shown = all ? v.deals : open.slice(0, 10);
-    const now = parseT(v.meta.asOf);
+    const now = parseT(clockOf(v));
     const dealRows = shown.map((d) => ({ cls: 'rowbtn' + (s.deal === d.id ? ' active' : ''), cells: [link(esc(d.name), 'deal=' + d.id), esc(d.stage), usd(d.amount), esc(d.owner), (parseT(d.close) && parseT(d.close) < now ? '<span class="warn-t" title="Close date has passed">' + esc(date(d.close)) + '</span>' : esc(date(d.close)))] }));
     const deals = table([{ label: 'Deal' }, { label: 'Stage', opt: true }, { label: 'Amount', num: true }, { label: 'Owner', opt: true }, { label: 'Close', opt: true }], dealRows);
     const more = link(all ? 'Show the top 10 only' : `Show all ${int(v.deals.length)} open deals (incl. On Hold)`, all ? 'deals=' : 'deals=all', 'btn');
@@ -309,7 +312,7 @@ ${NAV}
   }
 
   // ---------- leads ----------
-  function leadsIn(v, period) { return v.leads.items.filter((l) => period === 'all' || inPeriod(l.leadDate, period, v.meta.asOf)); }
+  function leadsIn(v, period) { return v.leads.items.filter((l) => period === 'all' || inPeriod(l.leadDate, period, clockOf(v))); }
 
   function leadsSection(v, s) {
     const L = v.leads;
@@ -317,9 +320,9 @@ ${NAV}
     const period = rangeOf(s, 'lp');
     const items = leadsIn(v, period);
     const mql = items.filter((l) => l.mql).length;
-    const week = period === 'week' ? weekWindow(v.meta.asOf) : null;
+    const week = period === 'week' ? weekWindow(clockOf(v)) : null;
     const last = week ? leadsIn(v, 'lastweek') : null;
-    const lastLabel = week ? weekWindow(v.meta.asOf, 1).label : '';
+    const lastLabel = week ? weekWindow(clockOf(v), 1).label : '';
     const f = v.mqlFunnel;
     // The r12 lead → MQL rate shows only when its inputs exist; otherwise there is no tile at all.
     const funnel = f && f.available ? tile(f.label, pct(f.rate), `<span class="num">${int(f.numerator)}</span> booked via book-a-demo ÷ <span class="num">${int(f.denominator)}</span> form-filling contacts`, ' data-fig="lead-mql-90"') : '';
@@ -453,13 +456,13 @@ ${NAV}
   function meetingsSection(v, s) {
     const M = v.meetings;
     const period = rangeOf(s, 'mp');
-    const xs = M.items.filter((m) => inPeriod(m.start, period, v.meta.asOf));
+    const xs = M.items.filter((m) => inPeriod(m.start, period, clockOf(v)));
     const sub = (c) => `matched · +${int(c.unmatched)} unmatched · +${int(c.noContact)} no contact`;
-    const week = period === 'week' ? weekWindow(v.meta.asOf) : null;
+    const week = period === 'week' ? weekWindow(clockOf(v)) : null;
     let weekTile = '';
     if (week) {
-      const lw = weekWindow(v.meta.asOf, 1);
-      const prev = M.items.filter((m) => inPeriod(m.start, 'lastweek', v.meta.asOf));
+      const lw = weekWindow(clockOf(v), 1);
+      const prev = M.items.filter((m) => inPeriod(m.start, 'lastweek', clockOf(v)));
       const n = xs.filter((m) => m.matched).length;
       weekTile = tile(`This week · ${week.label}`, int(n), `matched · ${weekDelta(n, prev.filter((m) => m.matched).length, lw.label)}`, ' data-fig="meetings-week"');
     }
@@ -505,10 +508,10 @@ ${NAV}
   function callsSection(v, s) {
     const C = v.calls;
     const period = rangeOf(s, 'cp');
-    const xs = C.items.filter((c) => inPeriod(c.start, period, v.meta.asOf));
-    const week = period === 'week' ? weekWindow(v.meta.asOf) : null;
-    const prevCalls = week ? C.items.filter((c) => inPeriod(c.start, 'lastweek', v.meta.asOf)) : null;
-    const tiles = `<div class="tiles">${tile(week ? `Prospect calls · ${week.label}` : 'Prospect calls', int(xs.length), week ? weekDelta(xs.length, prevCalls.length, weekWindow(v.meta.asOf, 1).label) : 'Fathom, sales and prospect only', ' data-fig="calls"')}${tile('At a Sales Pipeline company', int(xs.filter((c) => c.matched).length))}${tile('With a summary', int(xs.filter((c) => c.summary).length))}</div>`;
+    const xs = C.items.filter((c) => inPeriod(c.start, period, clockOf(v)));
+    const week = period === 'week' ? weekWindow(clockOf(v)) : null;
+    const prevCalls = week ? C.items.filter((c) => inPeriod(c.start, 'lastweek', clockOf(v))) : null;
+    const tiles = `<div class="tiles">${tile(week ? `Prospect calls · ${week.label}` : 'Prospect calls', int(xs.length), week ? weekDelta(xs.length, prevCalls.length, weekWindow(clockOf(v), 1).label) : 'Fathom, sales and prospect only', ' data-fig="calls"')}${tile('At a Sales Pipeline company', int(xs.filter((c) => c.matched).length))}${tile('With a summary', int(xs.filter((c) => c.summary).length))}</div>`;
     const recs = [...new Set(xs.map((c) => c.recorder))].sort((a, b) => xs.filter((c) => c.recorder === b).length - xs.filter((c) => c.recorder === a).length || a.localeCompare(b));
     const max = Math.max(1, ...recs.map((r) => xs.filter((c) => c.recorder === r).length));
     const rows = recs.map((r) => {
@@ -559,7 +562,7 @@ ${NAV}
   function dealDrawer(v, id) {
     const d = v.dealIndex[id];
     if (!d) return drawer('Deal not found', '', [['', '<p>This deal is not in the data.</p>']]);
-    const now = parseT(v.meta.asOf);
+    const now = parseT(clockOf(v));
     return drawer(esc(d.name), chip(d.stage, d.won ? 'ok' : d.lost ? 'neutral' : 'info') + (d.onHold ? chip('On Hold', 'warn') : ''), [
       ['Deal', kv([['Company', esc(d.company || DASH)], ['Amount', usd(d.amount)], ['Weighted', d.open ? usd(d.weighted) : null], ['Owner', esc(d.owner)],
         ['Close date', esc(date(d.close)) + (d.open && parseT(d.close) && parseT(d.close) < now ? ' <span class="warn-t">passed</span>' : '')], ['Created', esc(date(d.created))],
@@ -691,8 +694,18 @@ ${NAV}
     const h = document.querySelector('header.top');
     if (h) h.outerHTML = html; else document.body.insertAdjacentHTML('afterbegin', html);
   }
+  // The PT day the page was last rendered for. When the open tab passes a day boundary (Monday 00:00 PT
+  // starts a new week), the ranges are recomputed from the clock and the page re-renders in place.
+  let renderedDay = null;
+  const setClock = () => {
+    const a = parseT(V.meta.asOf);
+    V.meta.clock = new Date(Math.max(Date.now(), a ? a.getTime() : 0)).toISOString();
+    renderedDay = F_YMD.format(new Date(V.meta.clock));
+  };
+  const dayChanged = () => !!V && renderedDay != null && F_YMD.format(new Date(Math.max(Date.now(), (parseT(V.meta.asOf) || new Date(0)).getTime()))) !== renderedDay;
   function render(focusDrawer, withHeader) {
     if (!V) return;
+    setClock();
     const y = window.scrollY;
     if (withHeader) setHeader(header(V, { now: Date.now() }));
     main.innerHTML = renderMain(V, state);
@@ -807,9 +820,17 @@ ${NAV}
   if (baked) {
     V = JSON.parse(baked.textContent);
     index(V);
-    if (location.hash || RANGE_KEYS.some((k) => state[k])) render(!!location.hash); else hideDismissed();
+    // The first paint was rendered for the data's as-of day; a later day (or a link state) re-renders on the clock.
+    const asOfDay = F_YMD.format(parseT(V.meta.asOf) || new Date(0));
+    setClock();
+    if (location.hash || RANGE_KEYS.some((k) => state[k]) || renderedDay !== asOfDay) render(!!location.hash, true); else hideDismissed();
   } else {
     load(false);
     setInterval(() => { if (!document.hidden) load(true); }, RECHECK_MS);
   }
+  // A new PT day (or week) while the tab is open: same state (hash, drawer, lists), new ranges.
+  const onDay = () => { if (dayChanged()) render(false, true); };
+  setInterval(onDay, 60e3);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) onDay(); });
+  root.GtmClockCheck = onDay;
 })(typeof window !== 'undefined' ? window : this);

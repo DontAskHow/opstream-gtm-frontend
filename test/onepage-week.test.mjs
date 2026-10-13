@@ -3,12 +3,14 @@
 // same weekday. Synthetic data only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
+import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
+import { renderAppHtml } from '../onepage/build.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -126,4 +128,79 @@ test('a range in the hash wins; an unknown one falls back to This week', () => {
   const main = page.renderPage(view(), { lp: '90', mp: 'nonsense' }).main;
   assert.match(section(main, 'leads'), /data-set="lp=90" aria-pressed="true"/);
   assert.match(section(main, 'meetings'), /data-set="mp=week" aria-pressed="true"/);
+});
+
+test('the clock, not the data, decides "now": meta.clock (set by the open tab) moves every range', () => {
+  // Data as of Tuesday Oct 13; the tab's clock says Monday Oct 19, 00:00:30 PT.
+  const v = view((d) => {
+    d.meetings.items.push({ ...d.meetings.items.find((m) => m.matched), id: 'mon19', start: '2026-10-19T07:00:10Z' });
+    d.meta.clock = '2026-10-19T07:00:30Z';
+  });
+  const main = page.renderPage(v, {}).main;
+  for (const key of ['lp', 'mp', 'cp']) assert.match(main, new RegExp(`data-set="${key}=week" aria-pressed="true">This week · Oct 19<`), key);
+  assert.match(section(main, 'meetings'), /data-fig="meetings-week"><div class="tile-l">This week · Oct 19<\/div><div class="tile-v num">1<\/div><div class="tile-s">matched · <span class="delta">[^<]*\(Oct 12: /);
+  assert.match(section(main, 'leads'), /No leads yet this week \(Oct 19\)\. Last week \(Oct 12\)/);
+  // Without a clock the data's as-of time is "now" (Node renders, audits).
+  assert.match(page.renderPage(view(), {}).main, /This week · Oct 12–13</);
+});
+
+// ---------- a real browser with a fake clock crossing Monday 00:00 PT ----------
+const PY = process.env.PLAYWRIGHT_PYTHON || '/workspace/.venv-pw/bin/python';
+const hasBrowser = existsSync(PY) && (() => { try { execFileSync(PY, ['-c', 'import playwright'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+
+test('browser: an open tab passing Monday 00:00 PT recomputes This week from its clock and keeps the drill-down', { skip: !hasBrowser && 'Python Playwright not available', timeout: 600000 }, async (t) => {
+  // Data published Sunday Oct 18, 11:50 PM PT, with a matched meeting on Monday Oct 19, 1:00 AM PT.
+  const d = structuredClone(DATA);
+  delete d.meta.asOf;
+  d.meta.generatedAt = '2026-10-19T06:50:00Z';
+  const base = d.meetings.items.find((m) => m.matched);
+  d.meetings.items.push({ ...base, id: 'mon19', start: '2026-10-19T08:00:00Z' });
+  const files = { '/index.html': renderAppHtml(), '/workspace.json': JSON.stringify(d) };
+  const server = createServer((req, res) => {
+    const path = req.url.split('?')[0] === '/' ? '/index.html' : req.url.split('?')[0];
+    const body = files[path];
+    if (body == null) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'content-type': path.endsWith('.html') ? 'text/html' : 'application/json', 'cache-control': 'no-store' });
+    res.end(body);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const script = `
+import json, sys
+from datetime import datetime, timezone
+from playwright.sync_api import sync_playwright
+url, mtg = sys.argv[1], sys.argv[2]
+with sync_playwright() as p:
+    b = p.chromium.launch(); pg = b.new_page(); pg.set_default_timeout(120000)
+    errors = []; pg.on('pageerror', lambda e: errors.append(str(e)))
+    # Sunday Oct 18, 11:58 PM PT (UTC-7).
+    pg.clock.install(time=datetime(2026, 10, 19, 6, 58, tzinfo=timezone.utc))
+    pg.goto(url + '#mo=*&mtg=' + mtg); pg.wait_for_selector('#meetings'); pg.wait_for_selector('.drawer')
+    snap = lambda: {'mp': pg.inner_text('[data-set="mp=week"]'), 'lp': pg.inner_text('[data-set="lp=week"]'), 'cp': pg.inner_text('[data-set="cp=week"]'),
+        'week': pg.inner_text('[data-fig="meetings-week"] .tile-v'), 'weekSub': pg.inner_text('[data-fig="meetings-week"] .tile-s'),
+        'drawer': pg.inner_text('.drawer h2'), 'hash': pg.evaluate('location.hash'), 'now': pg.evaluate('new Date().toISOString()')}
+    before = snap()
+    pg.clock.run_for(3 * 60 * 1000)  # to 00:01 PT Monday: the one-minute day check fires
+    pg.wait_for_function('(sel) => document.querySelector(sel).textContent.includes("Oct 19")', arg='[data-set="mp=week"]', timeout=60000)
+    after = snap()
+    print(json.dumps({'before': before, 'after': after, 'errors': errors}))
+    b.close()
+`;
+  const dir = mkdtempSync(join(tmpdir(), 'onepage-clock-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, 'clock.py'), script);
+  const out = await new Promise((resolve, reject) => execFile(PY, [join(dir, 'clock.py'), url, base.id], { timeout: 300000 }, (e, so, se) => (e ? reject(new Error(`${e.message}\n${se.slice(-800)}`)) : resolve(so))));
+  const r = JSON.parse(out.trim().split('\n').pop());
+  assert.deepEqual(r.errors, []);
+  assert.equal(r.before.mp, 'This week · Oct 12–18');
+  assert.equal(r.before.week, String(view().meetings.items.filter((m) => m.matched && page.inPeriod(m.start, 'week', '2026-10-19T06:58:00Z')).length), 'Sunday: the week of Oct 12');
+  assert.equal(r.after.mp, 'This week · Oct 19');
+  assert.equal(r.after.lp, 'This week · Oct 19');
+  assert.equal(r.after.cp, 'This week · Oct 19');
+  assert.equal(r.after.week, '1', 'the Monday 1:00 AM meeting is this week now');
+  assert.match(r.after.weekSub, /vs last week \(Oct 12: /);
+  assert.equal(r.after.drawer, r.before.drawer, 'the open drawer stays');
+  assert.equal(r.after.hash, r.before.hash, 'the hash (drill-down state) is unchanged');
+  assert.ok(r.after.now >= '2026-10-19T07:00:00Z');
 });
