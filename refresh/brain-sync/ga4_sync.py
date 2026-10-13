@@ -44,6 +44,10 @@ pace = RateLimiter(1.0)
 MIN_INTERVAL_MIN = float(os.environ.get("GA4_MIN_INTERVAL_MIN") or 60)
 
 WWW_ONLY = {"filter": {"fieldName": "hostName", "stringFilter": {"matchType": "EXACT", "value": "www.opstream.ai"}}}
+# Marketing site and product. GA4 also records staging, localhost, and per-PR
+# preview hosts; those would push real rows past the limit.
+SITE_HOSTS = ["www.opstream.ai", "app.opstream.ai"]
+SITE_AND_APP = {"filter": {"fieldName": "hostName", "inListFilter": {"values": SITE_HOSTS}}}
 ENGAGEMENT = [{"name": "sessions"}, {"name": "engagedSessions"}, {"name": "keyEvents"}]
 REPORTS = {
     "sessions_30d": {
@@ -67,9 +71,10 @@ REPORTS = {
         "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}],
         "limit": 10,
     },
-    # The same views split by hostName with no host filter, so tables can be
-    # filtered to www.opstream.ai or app.opstream.ai. The reports above stay
-    # www-only and remain the default views.
+    # The same views split by hostName, so tables can be filtered to
+    # www.opstream.ai or app.opstream.ai. Sessions lists every host; channels
+    # and landing pages keep those two. The reports above stay www-only and
+    # remain the default views.
     "sessions_by_host_30d": {
         "dateRanges": [{"startDate": "30daysAgo", "endDate": "today"}],
         "dimensions": [{"name": "hostName"}],
@@ -81,6 +86,7 @@ REPORTS = {
         "dateRanges": [{"startDate": "90daysAgo", "endDate": "today"}],
         "dimensions": [{"name": "sessionDefaultChannelGroup"}, {"name": "hostName"}],
         "metrics": ENGAGEMENT,
+        "dimensionFilter": SITE_AND_APP,
         "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}],
         "limit": 100,
     },
@@ -88,6 +94,7 @@ REPORTS = {
         "dateRanges": [{"startDate": "90daysAgo", "endDate": "today"}],
         "dimensions": [{"name": "landingPage"}, {"name": "hostName"}],
         "metrics": ENGAGEMENT,
+        "dimensionFilter": SITE_AND_APP,
         "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}],
         "limit": 50,
     },
