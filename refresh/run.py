@@ -581,9 +581,9 @@ def main():
 AI_OUTPUTS = ("agent-brief.json", "heartbeat.json", "heartbeat-fixes.json")
 SYNC_ONLY_SOURCES = ("sheets", "hubspot", "fathom", "ga4", "lemlist")
 # Fields that change on every build or sync of the same data: build stamps,
-# run ids, and the per-source "last checked" times in marketing.json.
+# run ids, fetch times, and the per-source "last checked" times in marketing.json.
 VOLATILE_KEYS = frozenset(("generatedAt", "runId", "collectedAt", "publishedAt", "carriedFrom",
-                           "at", "lastOkAt", "fetchedAt", "channelsFetchedAt"))
+                           "at", "lastOkAt", "fetchedAt", "channelsFetchedAt", "capturedAt"))
 LOCK_KEY = "locks/sync-only.json"
 PHOENIX = timezone(timedelta(hours=-7))  # America/Phoenix has no DST.
 EXIT_SYNC_FAILED = 4
@@ -591,7 +591,10 @@ EXIT_SYNC_FAILED = 4
 
 def _strip_volatile(value):
     if isinstance(value, dict):
-        return {k: _strip_volatile(v) for k, v in value.items() if k not in VOLATILE_KEYS}
+        # A successful sync outcome's detail is a per-run counter ("14 objects
+        # upserted"). A failure's detail is kept: it is news.
+        drop = VOLATILE_KEYS | ({"detail"} if value.get("ok") is True and "source" in value else set())
+        return {k: _strip_volatile(v) for k, v in value.items() if k not in drop}
     if isinstance(value, list):
         return [_strip_volatile(v) for v in value]
     return value
