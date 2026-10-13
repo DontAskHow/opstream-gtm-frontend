@@ -9,6 +9,9 @@
 #   workspace/refresh/deploy.sh --disabled # create or leave the schedule DISABLED
 #   workspace/refresh/deploy.sh --no-app   # skip uploading index.html/app.js/styles.css/vendor
 #
+# Never uploads insights.json or lost-reasons.json: the Strategy seat publishes
+# those with refresh/publish-insights.mjs and refresh/publish-lost-reasons.mjs.
+#
 # Off switch: workspace/refresh/gtm-preview-refresh-off.sh
 set -euo pipefail
 export AWS_PROFILE="${AWS_PROFILE:-opstream-deploy}"
@@ -159,6 +162,7 @@ if [ "$APP" = 1 ]; then
   up styles.css styles.css "text/css; charset=utf-8"
   up charts.js vendor/gtm-charts.js "application/javascript; charset=utf-8"
   up insights.js vendor/insights.js "application/javascript; charset=utf-8"
+  up lost-reasons.js vendor/lost-reasons.js "application/javascript; charset=utf-8"
 fi
 
 echo "function  $FN_ARN"

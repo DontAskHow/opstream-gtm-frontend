@@ -26,10 +26,11 @@ The build prints the pipeline figures it computed, per pipeline, plus the expect
 | `data.js` | `window.GTM_DATA = {…}`, a trimmed projection of the inputs (`lib/project.mjs`) |
 | `vendor/gtm-charts.js` | A small hand-written SVG chart kit (`src/charts.js`) |
 | `vendor/insights.js` | The Analysis file validator (`src/insights.js`), shared with `refresh/publish-insights.mjs` |
+| `vendor/lost-reasons.js` | The lost-reasons file validator and categorizer (`src/lost-reasons.js`), shared with `refresh/publish-lost-reasons.mjs` |
 | `transcripts/<recording-id>.js` | Per-recording transcripts. Each loads on demand when you click "Show transcript". |
 | `fonts/`, `logo.svg` | Poppins (from `source/assets/fonts`) and the brand `logo-main.svg` |
 
-The page's CSP sets `connect-src 'self'`. The app makes only two same-origin reads, both `no-store` and both optional: `refresh.json` (the "Last refreshed" time written by the scheduled refresh, `refresh/README.md`) and `insights.json` (the Analysis panel, `docs/insights-schema.md`). Under `file://` they fail, so the header shows the time from `data.js` and the Analysis panel says no insights are published. The app has no ask box and no send actions. Links inside recording summaries render as plain text. The Analysis text has no links of its own; names the page recognizes from its data (deals, accounts, stages, headline metrics, overview panels) become in-page links (`docs/insights-schema.md`).
+The page's CSP sets `connect-src 'self'`. The app makes only three same-origin reads, all `no-store` and all optional: `refresh.json` (the "Last refreshed" time written by the scheduled refresh, `refresh/README.md`), `insights.json` (the Analysis panel, `docs/insights-schema.md`) and `lost-reasons.json` (the lost-reason categories, `docs/lost-reasons-schema.md`). Under `file://` they fail, so the header shows the time from `data.js`, the Analysis panel says no insights are published, and every lost deal is auto-mapped from its HubSpot reason. The app has no ask box and no send actions. Links inside recording summaries render as plain text. The Analysis text has no links of its own; names the page recognizes from its data (deals, accounts, stages, headline metrics, overview panels) become in-page links (`docs/insights-schema.md`).
 
 ## Inputs
 
@@ -55,7 +56,7 @@ The page's CSP sets `connect-src 'self'`. The app makes only two same-origin rea
 
 ## Views (hash routes)
 
-- `#/overview`: the HubSpot headline, the Analysis panel, the 5-line brief (what's new first, then top actions, then watch-outs), upcoming prep meetings, all pipelines (each on its own row), and a filtered view: the funnel with the largest deals per stage, value by close month, and meetings over time (click a month to list its meetings).
+- `#/overview`: the HubSpot headline, the Analysis panel, the 5-line brief (what's new first, then top actions, then watch-outs), upcoming prep meetings, all pipelines (each on its own row), why the headline pipeline's deals were lost (six categories that together cover every closed-lost deal; click one to list its deals with HubSpot's reason, `docs/lost-reasons-schema.md`), and a filtered view: the funnel with the largest deals per stage, value by close month, and meetings over time (click a month to list its meetings).
 - `#/pipeline?pipe=&owner=&stage=&seg=&from=&to=`: summary tiles, the funnel and close-month charts (click to filter), a sortable deals table, and accounts. Sheet-vs-HubSpot differences are flagged on the deal page only.
 - `#/deal/<id>` shows a deal's HubSpot fields, its Sheet values and any data-quality flags. `#/account/<id>` shows an account's fields and deals. Both pages also show the account's meetings, notes, and recording summaries with action items (verbatim).
 - `#/campaigns?c=<campaignId>`: running campaigns (sent / opened / replied / meetings; zero opens read "tracking off"), all campaigns, paid ads by channel, spend, and tradeshow leads → MQL → SQL.
@@ -75,4 +76,10 @@ npm test   # node --test test/ && python3 -m unittest discover -s scripts/tests
 
 ## Scheduled preview refresh and Analysis
 
-`refresh/` holds the Lambda that rebuilds the private preview's `data.js` from the published snapshot every 15 minutes (`refresh/README.md`), plus `refresh/publish-insights.mjs`, which validates and publishes the Strategy seat's Analysis file (`docs/insights-schema.md`). `test/preview-refresh.test.mjs` and `test/insights.test.mjs` cover change detection, the fallbacks, the alarms and the Analysis shape.
+`refresh/` holds the Lambda that rebuilds the private preview's `data.js` from the published snapshot every 15 minutes (`refresh/README.md`), plus `refresh/publish-insights.mjs` and `refresh/publish-lost-reasons.mjs`, which validate and publish the Strategy seat's Analysis file (`docs/insights-schema.md`) and lost-reason categories (`docs/lost-reasons-schema.md`):
+
+```sh
+node workspace/refresh/publish-lost-reasons.mjs /workspace/gtm-insights/lost-reasons.json [--dry-run]
+```
+
+`test/preview-refresh.test.mjs`, `test/insights.test.mjs` and `test/lost-reasons.test.mjs` cover change detection, the fallbacks, the alarms, the Analysis shape, and the lost-reasons file, rules and counts.

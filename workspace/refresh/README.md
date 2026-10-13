@@ -57,7 +57,7 @@ ON=1 workspace/refresh/gtm-preview-refresh-off.sh   # back on
 aws lambda invoke --profile opstream-deploy --region us-east-2 --function-name gtm-preview-refresh --payload '{"dryRun":true}' /tmp/out.json   # read-only check
 ```
 
-`deploy.sh` also uploads the page's code (`index.html`, `app.js`, `styles.css`, `vendor/gtm-charts.js`, `vendor/insights.js`) unless you pass `--no-app`. `/workspace/gtm-preview-teardown.sh` deletes the schedule, alarm, function, log group and both roles before it removes the distribution and bucket.
+`deploy.sh` also uploads the page's code (`index.html`, `app.js`, `styles.css`, `vendor/gtm-charts.js`, `vendor/insights.js`, `vendor/lost-reasons.js`) unless you pass `--no-app`. Neither the function nor `deploy.sh` writes `insights.json` or `lost-reasons.json`; the Strategy seat publishes those (`publish-insights.mjs`, `publish-lost-reasons.mjs`). `/workspace/gtm-preview-teardown.sh` deletes the schedule, alarm, function, log group and both roles before it removes the distribution and bucket.
 
 ## LIVE_PULL (off, not granted)
 

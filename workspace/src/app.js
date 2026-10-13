@@ -1,8 +1,9 @@
 // GTM workspace app. Reads window.GTM_DATA (written by build.mjs, or by the
 // scheduled refresh in workspace/refresh) and renders hash-routed views. The
-// only network calls are two same-origin, no-store reads: refresh.json (when
-// the data was last checked) and insights.json (the Analysis panel). Both are
-// optional; from file:// they fail and the page says so.
+// only network calls are three same-origin, no-store reads: refresh.json (when
+// the data was last checked), insights.json (the Analysis panel) and
+// lost-reasons.json (the lost-reason categories). All are optional; from
+// file:// they fail and the page says so or falls back.
 (function () {
   'use strict';
 
@@ -202,8 +203,8 @@
       .map(([label, iso, stale, asOf]) => `<span class="updated${stale ? ' stale' : ''}">${label ? esc(label) + ' · ' : ''}${asOf ? 'as of' : 'Updated'} ${esc(fmtUpdated(iso))}</span>`)
       .join(' ');
   }
-  function panel({ title, sub, updated, span = 12, body, cls = '' }) {
-    return `<section class="panel span-${span} ${cls}"><div class="panel-head"><div><h2>${esc(title)}</h2>${sub ? `<p class="sub">${sub}</p>` : ''}</div><div>${updatedTag(updated)}</div></div>${body}</section>`;
+  function panel({ title, sub, updated, span = 12, body, cls = '', id = '' }) {
+    return `<section${id ? ` id="${esc(id)}"` : ''} class="panel span-${span} ${cls}"><div class="panel-head"><div><h2>${esc(title)}</h2>${sub ? `<p class="sub">${sub}</p>` : ''}</div><div>${updatedTag(updated)}</div></div>${body}</section>`;
   }
   const empty = (title, detail) => `<div class="empty"><strong>${esc(title)}</strong>${detail ? esc(detail) : ''}</div>`;
   function sourceWarning(key) {
@@ -448,19 +449,50 @@
     return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)}${e.checked && e.matches ? ' <span class="pill green">verified</span>' : ''}</h4>${figTiles(h, lostTile)}</div>${caveat}`;
   }
 
-  // closed_lost_reason is free text in HubSpot; the largest groups only.
+  // ---------- why deals were lost (lost-reasons.json, else keyword rules) ----------
+  // Every closed-lost deal of the headline pipeline sits in exactly one of six
+  // categories (GtmLostReasons.categorize, src/lost-reasons.js). The Strategy
+  // seat's lost-reasons.json decides the deals it lists; the rest are
+  // auto-mapped from HubSpot's closed_lost_reason. The panel shows "Loading"
+  // until the file is read (or found missing/invalid), so its counts don't jump.
+  const LR = window.GtmLostReasons;
+  let lostDoc = { state: 'loading' };
+  const lrOpen = new Set(); // category rows the user opened, kept across re-renders
+  const LR_MARK = { inferred: 'inferred', auto: 'auto-mapped' };
+  const lostDealItem = (x, competitorRow) => `<li>
+      <div class="lr-deal">${dealLink(x)}${competitorRow ? `<span class="muted">· ${esc(x.competitor || 'unnamed')}</span>` : ''}${LR_MARK[x.source] ? `<span class="pill">${LR_MARK[x.source]}</span>` : ''}<span class="lr-amt">${moneyFull(x.amount)}</span></div>
+      <div class="lr-reason" title="HubSpot lost reason">${x.reason ? `“${esc(x.reason)}”` : DASH}</div>${x.basis ? `<div class="lr-basis" title="Strategy’s basis">${esc(x.basis)}</div>` : ''}</li>`;
   function lostReasonsPanel() {
     const cl = D.closedLost;
     if (!cl || !cl.count) return '';
-    const top = cl.reasons.slice(0, 8);
-    const rest = cl.reasons.length - top.length;
-    const body = (top.length ? table('lost-reasons', [
-      { key: 'reason', label: 'Lost reason' },
-      { key: 'count', label: 'Deals', num: true, render: (r) => int(r.count) },
-      { key: 'amount', label: 'Amount', num: true, render: (r) => moneyFull(r.amount) },
-    ], top, { sort: { key: 'count', dir: 'desc' } }) : '') +
-      `<p class="desc muted">${[rest > 0 ? `${plural(rest, 'other reason')}` : '', cl.noReason ? `${int(cl.noReason)} of ${int(cl.count)} without a reason` : ''].filter(Boolean).join(' · ')}</p>`;
-    return panel({ title: `Why ${cl.pipeline} deals were lost`, span: 6, updated: pipeUpdated(), body });
+    const p = { title: `Why ${cl.pipeline} deals were lost`, span: 6, id: 'lost-reasons', updated: pipeUpdated() };
+    if (!LR) return panel({ ...p, body: empty('Lost-reason categories are unavailable', '') });
+    if (lostDoc.state === 'loading') return panel({ ...p, body: empty('Loading lost reasons…', '') });
+    const doc = lostDoc.state === 'ok' ? lostDoc.doc : null;
+    if (doc) p.updated = [...(Array.isArray(p.updated) ? p.updated : [[null, p.updated]]), ['Categories', doc.generated_at]];
+    const r = LR.categorize(D, doc);
+    const max = Math.max(1, ...r.rows.map((x) => x.count));
+    const rows = r.rows.map((x) => {
+      const comp = x.key === 'competitor';
+      const named = comp ? x.competitors.slice(0, 5).map((c) => `${c.name} ${int(c.count)}`) : [];
+      if (comp && x.competitors.length > 5) named.push(`${int(x.competitors.length - 5)} more named`);
+      if (comp && x.unnamed) named.push(`unnamed ${int(x.unnamed)}`);
+      const w = x.count ? Math.max(1.5, (x.count / max) * 100) : 0;
+      const line = `<span class="lr-label"><span class="bt-name">${esc(x.label)}</span>${named.length ? `<span class="bt-sub">${esc(named.join(' · '))}</span>` : ''}</span>` +
+        `<span class="lr-bar" aria-hidden="true">${w ? `<span style="width:${w.toFixed(1)}%"></span>` : ''}</span>` +
+        `<span class="lr-n">${int(x.count)}</span><span class="lr-amt"${x.noAmount ? ` title="${esc(plural(x.noAmount, 'deal'))} without an amount"` : ''}>${moneyFull(x.amount)}</span>`;
+      if (!x.count) return `<div class="lr-row none">${line}</div>`;
+      return `<details class="lr-row" data-lr="${esc(x.key)}"${lrOpen.has(x.key) ? ' open' : ''}><summary>${line}</summary>` +
+        `<ul class="lr-deals">${x.deals.map((d) => lostDealItem(d, comp)).join('')}</ul></details>`;
+    }).join('');
+    const body = (lostDoc.state === 'invalid' ? '<p class="note warn">lost-reasons.json is invalid, so it is ignored: every deal is auto-mapped.</p>' : '') +
+      `<div class="lr"><div class="lr-head"><span>Category</span><span></span><span class="n">Deals</span><span class="n">Amount</span></div>${rows}</div>` +
+      '<p class="desc muted lr-foot"><span>inferred: Strategy’s reading, not stated in HubSpot</span> · <span>auto-mapped: keyword rules</span></p>';
+    return panel({ ...p, sub: 'Click a category to list its deals.', body });
+  }
+  function fillLostReasons() {
+    const box = document.getElementById('lost-reasons');
+    if (box) box.outerHTML = lostReasonsPanel();
   }
 
   function pipelinesTable() {
@@ -1000,6 +1032,10 @@
     // SVG marks have no .click(), so dispatch a synthetic click for both.
     if (el.matches('th[data-sort-key], [data-href]')) { e.preventDefault(); el.dispatchEvent(new MouseEvent('click', { bubbles: true })); }
   });
+  document.addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (d instanceof Element && d.matches('details[data-lr]')) { if (d.open) lrOpen.add(d.dataset.lr); else lrOpen.delete(d.dataset.lr); }
+  }, true);
   document.addEventListener('change', (e) => {
     const el = e.target.closest('[data-filter]');
     if (el) applyFilter(el.closest('.filters'), el.getAttribute('data-filter'), el.value);
@@ -1347,6 +1383,20 @@
       .then((a) => { analysis = a; fillAnalysis(); });
   }
 
+  // lost-reasons.json from the Strategy seat; optional. Missing, unreadable or
+  // invalid means every deal is auto-mapped (invalid also says so).
+  function loadLostReasons() {
+    if (!window.fetch || !LR) { lostDoc = { state: 'unreachable' }; fillLostReasons(); return; }
+    fetch('lost-reasons.json', { cache: 'no-store' })
+      .then((r) => {
+        if (r.status === 404 || r.status === 403) return { state: 'missing' };
+        if (!r.ok) return { state: 'unreachable' };
+        return r.text().then((t) => { const v = LR.parse(t); return v.ok ? { state: 'ok', doc: v.doc } : { state: 'invalid' }; });
+      })
+      .catch(() => ({ state: 'unreachable' }))
+      .then((a) => { lostDoc = a; fillLostReasons(); });
+  }
+
   // ---------- boot ----------
   let resizeTimer;
   window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawCharts, 120); });
@@ -1356,4 +1406,5 @@
   showRefreshed();
   loadRefresh();
   loadAnalysis();
+  loadLostReasons();
 })();

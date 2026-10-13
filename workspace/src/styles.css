@@ -246,6 +246,34 @@ tr.muted-row .bt-name, tr.muted-row .bt-val { color: var(--muted); }
 @keyframes cite-pulse { 0%, 45% { outline: 2px solid var(--accent); outline-offset: 3px; } 100% { outline: 2px solid transparent; outline-offset: 3px; } }
 @media (prefers-reduced-motion: reduce) { .cite-pulse { animation: none; outline: 2px solid var(--accent); outline-offset: 3px; } }
 
+/* ---------- why deals were lost ---------- */
+/* Rows share the bar-table's columns: label, bar, count, amount. Each row is a <details>. */
+.lr { font-size: 13px; }
+.note + .lr { margin-top: 12px; }
+.lr-head, .lr-row > summary, .lr-row.none { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(50px, 1fr) 44px 96px; gap: 10px; align-items: center; padding-left: 18px; }
+.lr-head { font-size: 12px; font-weight: 600; color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.lr-row { border-bottom: 1px solid var(--grid); }
+.lr > :last-child { border-bottom: 0; }
+.lr-row > summary, .lr-row.none { position: relative; padding-top: 8px; padding-bottom: 8px; }
+.lr-row > summary { cursor: pointer; list-style: none; }
+.lr-row > summary::-webkit-details-marker { display: none; }
+.lr-row > summary::before { content: "▸"; position: absolute; left: 3px; top: 9px; font-size: 11px; color: var(--muted); }
+.lr-row[open] > summary::before { content: "▾"; }
+.lr-row > summary:hover { background: #f6faf8; }
+.lr-row.none .bt-name, .lr-row.none .lr-n, .lr-row.none .lr-amt { color: var(--muted); }
+.lr-bar { display: block; height: 12px; }
+.lr-bar span { display: block; height: 100%; background: var(--s1); border-radius: 0 4px 4px 0; }
+.lr-n, .lr-amt { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lr-deals { list-style: none; margin: 0 0 8px 18px; padding: 0; max-height: 320px; overflow: auto; border-left: 2px solid var(--grid); }
+.lr-deals li { padding: 6px 4px 6px 12px; border-bottom: 1px solid var(--grid); }
+.lr-deals li:last-child { border-bottom: 0; }
+.lr-deal { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.lr-deal .lr-amt { margin-left: auto; color: var(--ink-2); }
+.lr-reason { color: var(--ink-2); overflow-wrap: anywhere; }
+.lr-basis { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.lr-foot { font-size: 12px; margin-top: 10px; }
+.lr-foot span { white-space: nowrap; }
+
 /* ---------- responsive ---------- */
 @media (max-width: 1024px) {
   .span-8, .span-7, .span-6, .span-5, .span-4 { grid-column: span 12; }
@@ -274,5 +302,6 @@ tr.muted-row .bt-name, tr.muted-row .bt-val { color: var(--muted); }
   .tile.hero .value { font-size: 28px; }
   .bartable .bt-label { min-width: 130px; }
   .bt-cell { min-width: 110px; }
+  .lr-head, .lr-row > summary, .lr-row.none { grid-template-columns: minmax(0, 1fr) 40px 32px 80px; gap: 8px; }
   .kv { grid-template-columns: 1fr 1fr; }
 }

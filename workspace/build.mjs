@@ -128,6 +128,7 @@ export function build(opts) {
   for (const f of ['index.html', 'app.js', 'styles.css']) copyFileSync(join(SRC, f), join(opts.out, f));
   copyFileSync(join(SRC, 'charts.js'), join(opts.out, 'vendor', 'gtm-charts.js'));
   copyFileSync(join(SRC, 'insights.js'), join(opts.out, 'vendor', 'insights.js'));
+  copyFileSync(join(SRC, 'lost-reasons.js'), join(opts.out, 'vendor', 'lost-reasons.js'));
   for (const f of ['poppins-400.ttf', 'poppins-600.ttf']) {
     if (existsSync(join(FONTS, f))) copyFileSync(join(FONTS, f), join(opts.out, 'fonts', f));
     else warn(`warn: font ${f} not found; headings fall back to system fonts`);
