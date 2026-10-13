@@ -85,13 +85,106 @@ How `hubspot_sync.py` collects these, paced under the limits above:
   `propertiesWithHistory=hubspot_owner_id` (50 a call). Changed deals are read
   every run (about 2 calls), all deals every `HUBSPOT_EXTRAS_FULL_HOURS`
   (default 6, about 12 calls for 578 deals). The read-only guard in
-  `common.py` allows only these `…/batch/read` POSTs besides CRM search.
+  `common.py` allows only these `…/batch/read` POSTs, CRM search, and
+  `POST /crm/v3/lists/search` (a read); every other non-GET is refused.
 
 Older sync code (the 6-hourly job) rewrites `hubspot_pipelines` and
 `hubspot_owners` without the new columns. When `closed` metadata is NULL, the
 export uses the previous snapshot's stages. With no previous export either,
 no file is written and the run exits 4. Deals archived in HubSpot are not
 tracked, so a deal stays until the sync sees it change.
+
+## HubSpot attribution, forms, lists, and imports
+
+Contacts carry source attribution (`hs_analytics_source*`,
+`hs_latest_source*`), first and recent conversion, `hs_object_source*`,
+`hs_google_click_id`, and the lead, MQL, SQL, and customer lifecycle dates.
+Custom `paid_touch_campaign` and `utm_*` properties are added when
+`GET /crm/v3/properties/contacts` lists them; when they are absent, or the call
+fails, the sync goes on without them. The incremental search reads these
+properties for contacts that changed.
+
+`HUBSPOT_CONTACT_BACKFILL=1` re-reads every contact's properties once and
+merges them into `hubspot_objects`. Each search asks for `hs_object_id` above
+the last stored id, 200 per call, so the 10,000-result search cap does not
+apply. `sync_state` `hubspot_contact_backfill` holds that id after every
+page, so an interrupted backfill resumes there. When it finishes it is marked
+done and later runs skip it; `HUBSPOT_CONTACT_BACKFILL=restart` starts over.
+It leaves associations and the contacts watermark alone. 10,000 contacts take
+about 50 searches.
+
+After the objects, three extra pulls run every time. Each writes its own
+`sync_outcomes` row (`hubspot_forms`, `hubspot_lists`, `hubspot_imports`,
+plus `hubspot_contact_backfill` when set). A failure in one, such as a 403
+for a scope the app lacks, is recorded there with its route and status. The
+`hubspot` row stays ok, the other pulls still run, and the exit code stays 0.
+Their tables are created up front, so they exist even when the pull fails.
+
+| Table | Source | Refresh |
+| --- | --- | --- |
+| `hubspot_forms` | `GET /marketing/v3/forms`, `formTypes=all`, active then `archived=true` | every run (one call per 100 forms) |
+| `hubspot_form_submissions` | `GET /form-integrations/v1/submissions/forms/{guid}`, 50 a page, newest first | first run: all pages. Later: stops at the form's watermark |
+| `hubspot_lists` | `POST /crm/v3/lists/search`, 500 a page | every run, mirrored (deleted lists go) |
+| `hubspot_list_memberships` | `GET /crm/v3/lists/{id}/memberships`, 250 a page, contact lists (`0-1`) only | at most every `LIST_MIN_INTERVAL_MIN` (default 360) |
+| `hubspot_imports` | `GET /crm/v3/imports` | every run |
+
+The per-form watermark (`sync_state` `hubspot_forms`) is the newest
+`submittedAt` in ms. Archived forms are read once. A form that fails keeps its
+watermark, the others go on, and `hubspot_forms` records the failure.
+Submissions are keyed by `conversionId`, or by a hash when it is missing.
+`contact_email` is the `email` field value.
+
+## Lemlist leads and activities
+
+`lemlist_activities` comes from `GET /api/activities?version=v2` for
+emailsReplied, linkedinReplied, meetingBooked, emailsSent, emailsClicked,
+and emailsOpened, across all campaigns. Each request covers a 30-day
+`minDate`/`maxDate` window and pages by `offset`, 100 a page. `sync_state`
+`lemlist_activities` holds, per type, the end of the last complete window, and
+later runs re-read from an hour before it (about 6 calls). The first pull
+starts at the oldest campaign. It stops after `LEMLIST_ACTIVITY_MAX_CALLS`
+calls (default 300, about 2.5 min) and resumes next run. Reply types go first.
+Reply activities keep their full `raw_json` (message preview and text), so
+later code can tell auto-replies. Other types drop the nested `lead` object.
+
+`lemlist_leads` has one row per lead per campaign, replaced each run, from
+`GET /api/v2/campaigns/{id}/export/leads?state=all&format=json`. When that
+is refused, the rows come from `GET /api/campaigns/{id}/leads/`, paged by
+`offset` (or by `next` cursor). That route has no email or domain.
+`contacted_at`, `opened_at`, `clicked_at`, `replied_at`, and
+`meeting_booked_at` are the first matching activity for that lead id in that
+campaign.
+
+Both write their own `sync_outcomes` rows (`lemlist_activities`,
+`lemlist_leads`) and fail alone, as on HubSpot. A 429 is retried after
+`Retry-After` or 2, 4, 8, and 16 s.
+
+## Run time
+
+Incremental extra calls per run: HubSpot about 4 plus one per active form
+(at 0.15 s each, 50 forms add about 8 s), and memberships every 6 h at one
+call per 250 members. Lemlist adds one export per campaign and about 6
+activity calls (0.5 s each, so 30 campaigns add about 18 s). The one-off
+pulls are bounded: the first submission pull reads 50 per call, the first
+activity pull stops at `LEMLIST_ACTIVITY_MAX_CALLS`, and the contact backfill
+runs only with its variable set.
+
+## Tests
+
+`refresh/tests/test_sync_e2e.py` runs `hubspot_sync.py` and `lemlist_sync.py`
+unmodified against local fakes (`refresh/tests/fakes.py`). The scripts get
+`HTTPS_PROXY` pointing at a local proxy that answers CONNECT only for
+api.hubapi.com and api.lemlist.com. That proxy serves those hosts itself with
+a CA made for the run (`SSL_CERT_FILE`). Secrets Manager is faked through
+`AWS_ENDPOINT_URL_SECRETS_MANAGER`. The tests check tables, row counts,
+watermarks, and `sync_outcomes` across repeated runs. They cover paging,
+429s, archived forms, a missing scope, resuming an interrupted backfill and
+activity pull, and that only GETs and the read-only POSTs were sent.
+
+    python3 -m unittest discover -s refresh/tests -v
+
+They need Python 3 with boto3 and the `openssl` CLI, and take about 1.5
+minutes, mostly the scripts' own pacing. Nothing leaves the machine.
 
 ## GA4
 

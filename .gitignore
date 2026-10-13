@@ -4,3 +4,4 @@ out/
 *.db
 *.sqlite*
 preview-check.png
+__pycache__/
