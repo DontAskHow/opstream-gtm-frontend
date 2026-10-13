@@ -6,7 +6,7 @@
 import { mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { readInputs } from '../build.mjs';
-import { compose, stamp, sha256, refreshDoc, alarmDecision, problems, isHubspotExport } from './compose.mjs';
+import { compose, stamp, sha256, refreshDoc, alarmDecision, problems, isHubspotExport, hubspotLive } from './compose.mjs';
 
 export const CONFIG = {
   region: process.env.AWS_REGION || 'us-east-2',
@@ -90,7 +90,8 @@ export async function loadSnapshot(deps, cfg = CONFIG) {
     let j;
     try { j = JSON.parse(readFileSync(join(dir, f), 'utf8')); } catch { continue; }
     if (isHubspotExport(j)) {
-      snapshot.hubspotExport = { live: { pipes: j.pipes, stages: j.stages, deals: j.deals }, fetchedAt: j.fetchedAt ?? j.generatedAt ?? meta.publishedAt ?? null };
+      // deals pass through whole (companyIds, ownerHistory, closed_lost_reason); companies and owners resolve them.
+      snapshot.hubspotExport = { live: hubspotLive(j), fetchedAt: j.fetchedAt ?? j.generatedAt ?? meta.publishedAt ?? null };
       break;
     }
   }

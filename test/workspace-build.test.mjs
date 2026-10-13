@@ -175,3 +175,36 @@ test('serve.mjs serves the build on 127.0.0.1 and nothing outside it', async () 
     rmSync(fx.root, { recursive: true, force: true });
   }
 });
+
+test('closed lost = closed and not won (lost + disqualified), with lost reasons, owner at close and export companies', async () => {
+  const { buildData } = await import('../workspace/lib/project.mjs');
+  const live = JSON.parse(JSON.stringify(LIVE));
+  live.stages[106] = stage('Sales Pipeline', 'Closed won', true, 1);
+  live.deals.push({ ...deal('10', 'Won Co - New Deal', '106', '90000', '1', '2026-06-01'), companyIds: ['c1'] });
+  live.deals[9].properties.hs_is_closed_won = 'true';
+  const d5 = live.deals.find((x) => x.id === '5'), d6 = live.deals.find((x) => x.id === '6');
+  d5.properties.closed_lost_reason = 'No budget ';
+  d6.properties.closed_lost_reason = 'no budget';
+  live.deals.push(deal('11', 'Ghost Ltd - New Deal', '104', '10000', '0', '2026-05-01'));
+  // Owner history (newest first, as HubSpot returns it): 9002 owned the deal at close, 9001 owns it now.
+  d5.ownerHistory = [{ value: '9001', timestamp: '2026-09-01T00:00:00Z', sourceType: 'CRM_UI' }, { value: '9002', timestamp: '2026-01-01T00:00:00Z', sourceType: 'CRM_UI' }];
+  d5.companyIds = ['c9', 'c1'];
+  live.companies = { c9: { name: 'Initech', domain: 'initech.example' } };
+  live.owners = { 9002: { name: 'Former Owner', archived: true } };
+  const data = buildData({ records: { owners: { 9001: 'Pat Example' }, companies: [] }, recon: { live } });
+  assert.deepEqual([data.headline.active.count, data.headline.onHold.count], [3, 1], 'closed deals never touch the headline');
+  const cl = data.closedLost;
+  assert.equal(cl.pipeline, 'Sales Pipeline');
+  assert.deepEqual([cl.count, cl.amount], [3, 160000], 'won deal 10 is not lost');
+  assert.deepEqual(cl.byStage.map((s) => [s.stage, s.count]), [['Closed lost', 2], ['Disqualified', 1]]);
+  assert.deepEqual(cl.reasons, [{ reason: 'No budget', count: 2, amount: 150000 }]);
+  assert.equal(cl.noReason, 1);
+  const byId = (id) => data.deals.find((x) => x.id === id);
+  assert.equal(byId('deal-10').won, true);
+  assert.equal(byId('deal-10').lostReason, null);
+  assert.equal(byId('deal-5').ownerAtClose, 'Former Owner');
+  assert.equal(byId('deal-5').owner, 'Pat Example');
+  assert.deepEqual(byId('deal-5').ownerHistory.map((h) => h.owner), ['Pat Example', 'Former Owner']);
+  assert.equal(byId('deal-5').companyId, 'c9', 'primary company from the export');
+  assert.equal(byId('deal-5').account, 'Initech');
+});

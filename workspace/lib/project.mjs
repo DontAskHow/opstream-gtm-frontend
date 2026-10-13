@@ -100,6 +100,17 @@ export function hubspotPipelines(live) {
   return [...pipelines.values()];
 }
 
+// Owner in effect at a time from hubspot_owner_id history (any order): the newest entry at or before `when`.
+// No `when` or no entry before it: the oldest known owner. No history: null.
+export function ownerAt(history, when) {
+  const h = arr(history).filter((x) => x && x.timestamp).slice().sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+  if (!h.length) return null;
+  const t = when ? Date.parse(when) : NaN;
+  let pick = h[0];
+  if (Number.isFinite(t)) for (const x of h) if (Date.parse(x.timestamp) <= t) pick = x;
+  return String(pick.value ?? '');
+}
+
 export function hubspotDeals(live, { owners, recordsDeals }) {
   const stages = live?.stages || {};
   const pipes = live?.pipes || {};
@@ -110,21 +121,30 @@ export function hubspotDeals(live, { owners, recordsDeals }) {
     const stageLabel = s ? String(s.label).trim() : null;
     // closedRule: the stage's isClosed metadata; hs_is_closed only when the stage is not in the catalog.
     const closed = model.closedFromExport(s, p);
+    // Won: HubSpot's own hs_is_closed_won, else a closed stage at probability 1. Closed and not won is lost.
+    const won = closed && (String(p.hs_is_closed_won).toLowerCase() === 'true' || (p.hs_is_closed_won == null && Number(s?.prob) === 1));
     const rec = recordsDeals.get(dealKey(d.id));
     const ownerName = owners[String(p.hubspot_owner_id ?? '')] ?? null;
+    // The export's own deal->company association (primary first) covers deals records.json leaves out.
+    const exportCompanyId = str(arr(d.companyIds)[0]);
+    const ownerHistory = arr(d.ownerHistory);
+    const ownerAtClose = closed ? ownerAt(ownerHistory, p.closedate) : null;
     // The same shape gtm_metrics.deals_from_hubspot_export gives the Python rules.
     const flags = bookFlags({ pipeline: str(p.pipeline), pipelineLabel: pipeLabel, stageLabel, closed });
     return {
-      id: dealKey(d.id), name: str(p.dealname) ?? DEF.fallbackNames.deal, companyId: rec?.companyId ?? null,
+      id: dealKey(d.id), name: str(p.dealname) ?? DEF.fallbackNames.deal, companyId: rec?.companyId ?? exportCompanyId ?? null,
       pipelineId: str(p.pipeline) ?? pipeLabel, pipeline: pipeLabel ?? NO_PIPELINE,
-      stageId: str(p.dealstage), stage: stageLabel ?? DEF.fallbackNames.stage, closed,
+      stageId: str(p.dealstage), stage: stageLabel ?? DEF.fallbackNames.stage, closed, won, lost: closed && !won,
       ...flags,
       amount: numText(p.amount),
+      lostReason: closed && !won ? str(String(p.closed_lost_reason ?? '').trim()) : null,
       probability: model.probabilityFromScale(numText(p.hs_deal_stage_probability), 'fraction'),
       close: day(p.closedate), created: day(p.createdate),
       owner: ownerName ?? rec?.owner ?? (p.hubspot_owner_id ? 'Owner not in owners list' : 'Unassigned'),
       inRecords: !!rec, source: 'hubspot',
-      historyCount: rec ? rec.historyCount : 0,
+      historyCount: (rec ? rec.historyCount : 0) + ownerHistory.length,
+      ownerHistory: ownerHistory.map((h) => ({ owner: owners[String(h.value ?? '')] ?? str(h.value) ?? 'Unassigned', at: str(h.timestamp), source: str(h.sourceType) })),
+      ownerAtClose: ownerAtClose == null ? null : (owners[ownerAtClose] ?? (ownerAtClose === '' ? 'Unassigned' : 'Owner not in owners list')),
     };
   });
 }
@@ -177,6 +197,35 @@ function headline(figures, deals) {
     pipeline: nb[0].label, id: nb[0].id, label: nb[0].label, kind: nb[0].kind,
     active: roundTotals(model.openTotals(deals.filter((d) => d.openBook))),
     onHold: roundTotals(model.openTotals(deals.filter((d) => d.onHoldBook))),
+  };
+}
+
+// "Closed lost" in the headline pipeline = every closed deal that isn't won (in the Sales Pipeline:
+// the Closed lost and Disqualified stages). byStage gives the split; reasons groups closed_lost_reason
+// case-insensitively (the most common spelling labels the group), largest first.
+export function closedLost(head, deals) {
+  if (!head) return null;
+  const lost = deals.filter((d) => d.pipeline === head.label && d.lost);
+  const amount = (xs) => Math.round(xs.reduce((a, d) => a + (d.amount ?? 0), 0) * 100) / 100;
+  const group = (keyOf) => {
+    const m = new Map();
+    for (const d of lost) {
+      const k = keyOf(d);
+      if (!m.has(k.key)) m.set(k.key, { deals: [], labels: new Map() });
+      const e = m.get(k.key);
+      e.deals.push(d);
+      e.labels.set(k.label, (e.labels.get(k.label) || 0) + 1);
+    }
+    return [...m.values()].map((e) => ({ label: [...e.labels].sort((a, b) => b[1] - a[1])[0][0], count: e.deals.length, amount: amount(e.deals) }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  };
+  const byStage = group((d) => ({ key: d.stage, label: d.stage })).map(({ label, ...r }) => ({ stage: label, ...r }));
+  const reasons = group((d) => (d.lostReason ? { key: d.lostReason.toLowerCase(), label: d.lostReason } : { key: '', label: '' }));
+  const none = reasons.find((r) => r.label === '');
+  return {
+    pipeline: head.label, count: lost.length, amount: amount(lost), byStage,
+    reasons: reasons.filter((r) => r.label !== '').map(({ label, ...r }) => ({ reason: label, ...r })),
+    noReason: none ? none.count : 0,
   };
 }
 
@@ -240,7 +289,8 @@ export function dataQuality({ sheetReview, deals, source }) {
 
 export function buildData(inp) {
   const { records, marketing, brief, operator, sheetReview, recon, expect, transcripts = [] } = inp;
-  const owners = records?.owners || {};
+  // records.json owners first; the export's owner catalog (archived owners included) fills the gaps.
+  const owners = { ...Object.fromEntries(Object.entries(recon?.live?.owners || {}).map(([id, o]) => [id, o?.name ?? null]).filter(([, n]) => n)), ...(records?.owners || {}) };
 
   const companies = [];
   const recordsDeals = new Map();
@@ -276,6 +326,13 @@ export function buildData(inp) {
     });
   }
   const companyById = new Map(companies.map((c) => [c.id, c]));
+  // Companies known only from the reconciliation export (deals of companies with no open deal).
+  for (const [id, c] of Object.entries(recon?.live?.companies || {})) {
+    if (companyById.has(String(id))) continue;
+    const row = { id: String(id), name: str(c?.name) ?? 'Company not named', domain: str(c?.domain), segment: segmentOf({}), dealIds: [],
+      contactCount: 0, emailCount: null, callCount: 0, notes: [], meetings: [], recordings: [], exportOnly: true };
+    companyById.set(row.id, row);
+  }
 
   const source = recon?.live ? 'hubspot' : 'records';
   let deals, pipelines;
@@ -299,6 +356,7 @@ export function buildData(inp) {
   const figures = pipelineFigures(pipelines, deals);
   const head = headline(figures, deals);
   const expectCheck = checkExpect(head, expect);
+  const lost = closedLost(head, deals);
   const quality = dataQuality({ sheetReview, deals, source });
   const recordsOpen = [...recordsDeals.values()].filter((d) => !d.closed).length;
   // The Sheet-to-HubSpot bridge holds when Sheet-active − closed in HubSpot − other differences + missing = HubSpot count.
@@ -309,6 +367,7 @@ export function buildData(inp) {
   const history = {
     deals: recordsDeals.size,
     withHistory: [...recordsDeals.values()].filter((d) => d.historyCount > 0).length,
+    ownerHistoryDeals: deals.filter((d) => arr(d.ownerHistory).length > 0).length,
     entries: [...recordsDeals.values()].flatMap((d) => d.history.map((h) => ({ dealId: d.id, deal: d.name, ...h }))),
   };
 
@@ -330,7 +389,7 @@ export function buildData(inp) {
     definition: model.PIPELINE_DEF.definition,
     recordsOpenCount: recordsOpen,
     recordsDealCount: recordsDeals.size,
-    pipelines, figures, headline: head, expect: expectCheck, bridge, notInExport: notInExport.length,
+    pipelines, figures, headline: head, closedLost: lost, expect: expectCheck, bridge, notInExport: notInExport.length,
     quality,
     deals, companies, history,
     unmatchedRecordings: arr(records?.unmatchedRecordings).length,
@@ -403,6 +462,10 @@ export function figuresReport(data) {
     t = f.onHold;
     lines.push(active + `On Hold ${f.onHold.count} deals, ${money(f.onHold.openAmount)}`);
     t = null;
+  }
+  if (data.closedLost) {
+    const c = data.closedLost;
+    lines.push(`  ${c.pipeline} closed lost (closed, not won): ${c.count} deals (${c.byStage.map((s) => `${s.count} ${s.stage}`).join(' + ')}), ${c.noReason} without a lost reason`);
   }
   lines.push(`  records.json open deals (HubSpot stage not closed, all pipelines): ${data.recordsOpenCount} of ${data.recordsDealCount}`);
   return lines.join('\n');

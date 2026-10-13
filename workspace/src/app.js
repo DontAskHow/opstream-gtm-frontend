@@ -216,6 +216,8 @@
     `<div class="tile ${cls}"><div class="label">${esc(label)}</div><div class="value">${value}</div>${foot ? `<div class="foot">${foot}</div>` : ''}</div>`;
   const kv = (pairs) => `<dl class="kv">${pairs.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join('')}</dl>`;
   const accountLink = (id) => (companyById.has(id) ? `<a href="#/account/${encodeURIComponent(id)}">${esc(companyName(id))}</a>` : DASH);
+  // Accounts known only from the HubSpot export (no records.json page) show as plain text.
+  const dealAccount = (d) => (companyById.has(d.companyId) ? accountLink(d.companyId) : text(d.account));
   const dealLink = (d) => `<a href="#/deal/${encodeURIComponent(d.id)}">${text(d.name)}</a>`;
 
   // Chart rendering is deferred until containers exist so widths are real.
@@ -422,11 +424,11 @@
   // A total over deals that all lack an amount is unknown, not $0.
   const sumOrDash = (t, v) => (t.count > 0 && t.noAmountCount === t.count ? DASH : moneyFull(v));
   const KIND_LABEL = { 'new business': 'New business', renewal: 'Renewal / customer-success book', partnership: 'Partnerships', unknown: 'Pipeline not recorded' };
-  const figTiles = (fig) => `<div class="tiles">
+  const figTiles = (fig, extra = '') => `<div class="tiles">
       ${tile('Open deals', int(fig.active.count), 'excl. On Hold', 'hero headline')}
       ${tile('Open amount', sumOrDash(fig.active, fig.active.openAmount), fig.active.noAmountCount ? `${plural(fig.active.noAmountCount, 'deal')} without amount` : '', 'headline')}
       ${tile('Weighted', sumOrDash(fig.active, fig.active.weighted), fig.active.noProbabilityCount ? `${plural(fig.active.noProbabilityCount, 'deal')} without probability` : '', 'headline')}
-      ${tile('On Hold (separate)', int(fig.onHold.count), sumOrDash(fig.onHold, fig.onHold.openAmount))}
+      ${tile('On Hold (separate)', int(fig.onHold.count), sumOrDash(fig.onHold, fig.onHold.openAmount))}${extra}
     </div>`;
 
   // HubSpot (--recon) is the only headline; builds without it are refused.
@@ -440,7 +442,25 @@
     const caveat = bad
       ? `<p class="note bad">Doesn’t match the expected figures: ${esc(e.rows.filter((r) => !r.ok).map((r) => `${r.key} ${r.got} vs ${r.want}`).join('; '))}.</p>`
       : '';
-    return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)}${e.checked && e.matches ? ' <span class="pill green">verified</span>' : ''}</h4>${figTiles(h)}</div>${caveat}`;
+    const cl = D.closedLost;
+    // Closed lost = closed and not won (lib/project.mjs closedLost); the sub-line is the stage split.
+    const lostTile = cl ? tile('Closed lost', int(cl.count), esc(cl.byStage.map((s) => `${int(s.count)} ${s.stage}`).join(' · '))) : '';
+    return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)}${e.checked && e.matches ? ' <span class="pill green">verified</span>' : ''}</h4>${figTiles(h, lostTile)}</div>${caveat}`;
+  }
+
+  // closed_lost_reason is free text in HubSpot; the largest groups only.
+  function lostReasonsPanel() {
+    const cl = D.closedLost;
+    if (!cl || !cl.count) return '';
+    const top = cl.reasons.slice(0, 8);
+    const rest = cl.reasons.length - top.length;
+    const body = (top.length ? table('lost-reasons', [
+      { key: 'reason', label: 'Lost reason' },
+      { key: 'count', label: 'Deals', num: true, render: (r) => int(r.count) },
+      { key: 'amount', label: 'Amount', num: true, render: (r) => moneyFull(r.amount) },
+    ], top, { sort: { key: 'count', dir: 'desc' } }) : '') +
+      `<p class="desc muted">${[rest > 0 ? `${plural(rest, 'other reason')}` : '', cl.noReason ? `${int(cl.noReason)} of ${int(cl.count)} without a reason` : ''].filter(Boolean).join(' · ')}</p>`;
+    return panel({ title: `Why ${cl.pipeline} deals were lost`, span: 6, updated: pipeUpdated(), body });
   }
 
   function pipelinesTable() {
@@ -465,6 +485,7 @@
         ${briefPanel(7)}
         ${upcomingPanel(5)}
         ${panel({ title: 'All pipelines', sub: 'Each pipeline separately; never added together.', updated: pipeUpdated(), body: pipelinesTable() })}
+        ${lostReasonsPanel()}
       </div>
       <h2 class="section-title">Filtered view</h2>
       ${filterBar('overview', f)}
@@ -768,14 +789,17 @@
     ].filter(Boolean);
     const status = d.open ? (d.onHold ? '<span class="pill">On Hold (not in active totals)</span>' : '<span class="pill green">open</span>') : '<span class="pill">closed / not in open pipeline</span>';
     const fields = kv([
-      ['Account', d.companyId ? accountLink(d.companyId) : 'No account in snapshot'], ['Pipeline', text(d.pipeline)], ['Stage', text(d.stage)], ['Status', status],
+      ['Account', d.companyId ? dealAccount(d) : 'No account in snapshot'], ['Pipeline', text(d.pipeline)], ['Stage', text(d.stage)], ['Status', status],
       ['Owner', text(d.owner)], ['Amount', moneyFull(d.amount)], ['Probability', probText(d.probability)], ['Weighted', moneyFull(weightedOf(d))],
       ['Close date', `${fmtDay(d.close)}${passed ? ' <span class="flag">passed</span>' : ''}`], ['Created', fmtDay(d.created)], ['Segment (industry)', text(d.segment)],
-    ]) + (d.sheet ? `<h3>On the master Sheet <span class="muted">(as of ${esc(fmtUpdated(times.sheet))})</span></h3>${kv([['Sheet stage', text(d.sheet.stage)], ['Sheet amount', moneyFull(d.sheet.amount)], ['Sheet close', fmtDay(d.sheet.close)], ['Sheet owner', text(d.sheet.owner)], ['Sheet probability', isNum(d.sheet.probability) ? `${d.sheet.probability}%` : DASH]])}` : '<p class="desc muted">Not among the master Sheet’s open rows.</p>') +
+      ...(d.lost ? [['Lost reason', text(d.lostReason)]] : []),
+      ...(d.closed ? [['Owner at close', text(d.ownerAtClose)]] : []),
+    ]) + ((d.ownerHistory || []).length ? `<h3>Owner history</h3><ul class="actions">${d.ownerHistory.slice().sort((a, b) => String(b.at).localeCompare(String(a.at)))
+      .map((h) => `<li>${fmtDay(h.at)} · ${text(h.owner)}</li>`).join('')}</ul>` : '') + (d.sheet ? `<h3>On the master Sheet <span class="muted">(as of ${esc(fmtUpdated(times.sheet))})</span></h3>${kv([['Sheet stage', text(d.sheet.stage)], ['Sheet amount', moneyFull(d.sheet.amount)], ['Sheet close', fmtDay(d.sheet.close)], ['Sheet owner', text(d.sheet.owner)], ['Sheet probability', isNum(d.sheet.probability) ? `${d.sheet.probability}%` : DASH]])}` : '<p class="desc muted">Not among the master Sheet’s open rows.</p>') +
       (flags.length ? flags.map((x) => `<p class="note bad">${esc(x)}</p>`).join('') : '');
     const m = c ? accountMeetings(c) : { upcoming: [], recent: [] };
     const acctDeals = c ? c.dealIds.map((x) => dealById.get(x)).filter(Boolean) : [];
-    return `<div class="crumbs"><a href="#/pipeline${qs({ pipe: d.pipeline })}">Pipeline</a> / ${d.companyId ? accountLink(d.companyId) : 'Deal'}</div>
+    return `<div class="crumbs"><a href="#/pipeline${qs({ pipe: d.pipeline })}">Pipeline</a> / ${d.companyId ? dealAccount(d) : 'Deal'}</div>
       <div class="page-head"><div><h1>${text(d.name)}</h1><p>${text(d.pipeline)} · ${text(d.stage)} · ${moneyFull(d.amount)}</p></div>${c ? `<a class="btn" href="#/prep/${encodeURIComponent(c.id)}">Meeting prep</a>` : ''}</div>
       <div class="grid">
         ${panel({ title: 'Deal fields', updated: pipeUpdated(), body: fields })}

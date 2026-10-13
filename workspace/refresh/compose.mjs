@@ -36,6 +36,14 @@ export function isHubspotExport(j) {
     && Array.isArray(j.deals) && j.deals.every((d) => d && d.id != null && d.properties && typeof d.properties === 'object'));
 }
 
+// The parts of an export (or last-good copy) the build reads: the deals unchanged, plus the
+// optional companies (account names) and owners (owner names, archived included) catalogs.
+export function hubspotLive(j) {
+  const out = { pipes: j.pipes, stages: j.stages, deals: j.deals };
+  for (const k of ['companies', 'owners']) if (j[k] && typeof j[k] === 'object') out[k] = j[k];
+  return out;
+}
+
 // New live Fathom recordings are added to the snapshot's accounts (LIVE_PULL
 // only); recordings already in the snapshot are left exactly as published.
 export function mergeRecordings(records, recordings) {

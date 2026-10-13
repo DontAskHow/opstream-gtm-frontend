@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { refresh } from '../workspace/refresh/handler.mjs';
-import { compose, stamp, NOW_TOKEN, alarmDecision, problems, isHubspotExport } from '../workspace/refresh/compose.mjs';
+import { compose, stamp, NOW_TOKEN, alarmDecision, problems, isHubspotExport, hubspotLive } from '../workspace/refresh/compose.mjs';
 import {
   assertHubspotRead, fetchHubspot, outboundFromCampaigns, recordingFromFathom, matchRecording, tokenFromSecret, validateHubspotDoc,
 } from '../workspace/refresh/sources.mjs';
@@ -261,6 +261,37 @@ test('a snapshot without a HubSpot export uses the last good copy; with none it 
   await w.run();
   assert.equal(w.data().refresh.hubspot, 'last-good');
   assert.equal(w.data().pipelineSource, 'hubspot');
+});
+
+test('companies, owners, ownerHistory, companyIds and closed_lost_reason survive the snapshot export and the last good copy', async (t) => {
+  const w = world({ withExport: false });
+  t.after(() => rmSync(w.tmp, { recursive: true, force: true }));
+  const ex = hubspotExport();
+  const lost = ex.deals.find((d) => d.id === '102');
+  lost.properties.closed_lost_reason = 'Went with a competitor';
+  lost.properties.closedate = '2026-01-10T00:00:00Z';
+  lost.companyIds = ['c77'];
+  lost.ownerHistory = [{ value: '2', timestamp: '2026-01-12T00:00:00Z', sourceType: 'CRM_UI' }, { value: '3', timestamp: '2025-12-01T00:00:00Z', sourceType: 'CRM_UI' }];
+  ex.companies = { c77: { name: 'Gone Corp', domain: 'gone.example' } };
+  ex.owners = { 2: { name: 'Now Owner' }, 3: { name: 'Closing Owner', archived: true } };
+  const check = (d, mode) => {
+    const deal = d.deals.find((x) => x.id === 'deal-102');
+    assert.equal(d.refresh.hubspot, mode);
+    assert.equal(deal.lostReason, 'Went with a competitor', mode);
+    assert.equal(deal.account, 'Gone Corp', mode);
+    assert.equal(deal.ownerAtClose, 'Closing Owner', mode);
+    assert.deepEqual(deal.ownerHistory.map((h) => h.owner), ['Now Owner', 'Closing Owner'], mode);
+    assert.deepEqual([d.closedLost.count, d.closedLost.reasons[0].reason], [1, 'Went with a competitor'], mode);
+  };
+  w.publish('run-test-2', { ...w.files, 'hubspot-deals.json': ex }, '2026-01-16T20:30:00Z');
+  await w.run();
+  check(w.data(), 'snapshot');
+  const cache = JSON.parse(w.s3.get('preview/_state/hubspot-live.json'));
+  assert.deepEqual(Object.keys(cache.live).sort(), ['companies', 'deals', 'owners', 'pipes', 'stages']);
+  w.publish('run-test-3', { ...w.files }, '2026-01-16T20:45:00Z');
+  await w.run();
+  check(w.data(), 'last-good');
+  assert.deepEqual(Object.keys(hubspotLive({ pipes: {}, stages: {}, deals: [] })).sort(), ['deals', 'pipes', 'stages']);
 });
 
 test('a stale LATEST.json alarms', async (t) => {

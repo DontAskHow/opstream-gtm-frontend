@@ -12,7 +12,7 @@ const HUBSPOT_FIELDS = ['portal_id', 'client_id', 'client_secret', 'refresh_toke
 // The deal properties workspace/lib/project.mjs reads (the live_deals.json export shape).
 export const DEAL_PROPERTIES = [
   'amount', 'closedate', 'createdate', 'dealname', 'dealstage', 'hs_deal_stage_probability',
-  'hs_forecast_probability', 'hs_is_closed', 'hs_is_closed_won', 'hubspot_owner_id', 'pipeline',
+  'hs_forecast_probability', 'hs_is_closed', 'hs_is_closed_won', 'closed_lost_reason', 'hubspot_owner_id', 'pipeline',
 ];
 const LEMLIST_HOST = 'api.lemlist.com';
 const FATHOM_HOST = 'api.fathom.ai';
