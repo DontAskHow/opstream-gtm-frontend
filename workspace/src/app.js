@@ -1,5 +1,8 @@
-// GTM workspace app. Reads window.GTM_DATA (written by build.mjs) and renders
-// hash-routed views. Never fetches anything: no network calls, ever.
+// GTM workspace app. Reads window.GTM_DATA (written by build.mjs, or by the
+// scheduled refresh in workspace/refresh) and renders hash-routed views. The
+// only network calls are two same-origin, no-store reads: refresh.json (when
+// the data was last checked) and insights.json (the Analysis panel). Both are
+// optional; from file:// they fail and the page says so.
 (function () {
   'use strict';
 
@@ -19,6 +22,8 @@
   const dealById = new Map(deals.map((d) => [d.id, d]));
   const transcriptIds = new Set(D.transcripts || []);
   const times = D.times || {};
+  // Set by the scheduled refresh (workspace/refresh); absent in a local build.
+  const R = D.refresh || null;
   const sourceStatus = new Map((D.sources || []).map((s) => [s.source, s]));
   const fromHubspot = D.pipelineSource === 'hubspot';
   const pipelines = D.pipelines || [];
@@ -194,7 +199,7 @@
   function updatedTag(parts) {
     const list = (Array.isArray(parts) ? parts : [[null, parts]]).filter(Boolean);
     return list
-      .map(([label, iso, stale]) => `<span class="updated${stale ? ' stale' : ''}">${label ? esc(label) + ' · ' : ''}Updated ${esc(fmtUpdated(iso))}</span>`)
+      .map(([label, iso, stale, asOf]) => `<span class="updated${stale ? ' stale' : ''}">${label ? esc(label) + ' · ' : ''}${asOf ? 'as of' : 'Updated'} ${esc(fmtUpdated(iso))}</span>`)
       .join(' ');
   }
   function panel({ title, sub, updated, span = 12, body, cls = '' }) {
@@ -450,7 +455,7 @@
           ${tile('Open amount', money(all ? all.active.openAmount + all.onHold.openAmount : null), '')}
           ${tile('Of which On Hold', int(all && all.onHold.count), '')}
         </div><p class="sub muted">${updatedTag(times.records)}</p></div>
-        <p class="note bad"><strong>Unreconciled.</strong> records.json has ${int(D.recordsOpenCount)} deals whose HubSpot stage isn’t closed (${int(openCount)} counted here). It doesn’t record each deal’s pipeline, so new business can’t be separated from renewal, customer-success and partnership deals. Build with <code>--recon</code> for the HubSpot headline.</p>`;
+        <p class="note bad"><strong>Unreconciled.</strong> records.json has ${int(D.recordsOpenCount)} deals whose HubSpot stage isn’t closed (${int(openCount)} counted here). It doesn’t record each deal’s pipeline, so new business can’t be separated from renewal, customer-success and partnership deals. ${R ? 'The published snapshot has no HubSpot pipeline export yet, so HubSpot-only deals are missing too.' : 'Build with <code>--recon</code> for the HubSpot headline.'}</p>`;
     }
     const e = D.expect || {};
     const verified = e.checked && e.matches;
@@ -458,6 +463,16 @@
     const bridgeText = q.missingFromSheet
       ? `Sheet-active rows ${int(q.sheetActiveCount)} − ${int(q.closedButActive.length)} closed in HubSpot${q.otherDiffs.length ? ` − ${int(q.otherDiffs.length)} other stage differences` : ''}${q.notInHubspot.length ? ` − ${int(q.notInHubspot.length)} not in HubSpot` : ''} + ${int(q.missingFromSheet.length)} HubSpot deals missing from the Sheet = ${int(bridge)}${bridge === h.active.count ? ' (matches HubSpot)' : ` (HubSpot has ${int(h.active.count)}: the bridge doesn’t close)`}.`
       : '';
+    const liveMode = R && !e.checked ? R.hubspot : null;
+    if (liveMode === 'live' || liveMode === 'snapshot' || liveMode === 'last-good') {
+      const live = liveMode !== 'last-good';
+      const from = liveMode === 'live' ? 'Live from HubSpot' : `From HubSpot as synced into the published snapshot (HubSpot ${fmtUpdated(times.recon)})`;
+      const note = live
+        ? `<p class="note">${esc(from)}: HubSpot is the source of truth for every deal’s amount, stage and status. The page checks for new data every 15 minutes; these figures aren’t compared with a fixed reconciliation. Sheet comparisons use the Sheet as of ${esc(fmtUpdated(times.sheet))}. ${esc(bridgeText)} <a href="#/pipeline#quality">See data quality</a>.</p>`
+        : `<p class="note warn"><strong>The live HubSpot pull failed.</strong> These figures are from the last successful pull (${esc(fmtUpdated(times.recon))}). ${esc(bridgeText)}</p>`;
+      return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)} <span class="pill ${live ? 'green' : 'warn'}">${liveMode === 'live' ? 'live' : liveMode === 'snapshot' ? 'HubSpot sync' : 'last good pull'}</span></h4>${figTiles(h)}
+        <p class="sub muted">${updatedTag(pipeUpdated())}</p></div>${note}`;
+    }
     const caveat = verified
       ? `<p class="note">HubSpot is the source of truth. These figures match the expected reconciliation exactly (${esc(e.rows.map((r) => r.key).join(', '))}). ${esc(bridgeText)} <a href="#/pipeline#quality">See data quality</a>.</p>`
       : `<p class="note bad"><strong>${e.checked ? 'Doesn’t match the expected reconciliation' : 'Not verified'}.</strong> ${e.checked
@@ -505,7 +520,7 @@
       if ((q.otherDiffs || []).length) body += `<h3>Other differences</h3>` + table('dq-other', cols([{ key: 'sheetStage', label: 'Sheet stage' }, { key: 'hubspotStage', label: 'HubSpot stage' }, { key: 'hubspotPipeline', label: 'HubSpot pipeline' }]), q.otherDiffs);
       if ((q.notInHubspot || []).length) body += `<h3>Sheet-active rows not in HubSpot</h3>` + table('dq-nohs', cols([{ key: 'sheetStage', label: 'Sheet stage' }]), q.notInHubspot);
     } else body += `<p class="table-foot"><a href="#/pipeline#quality">See the deals</a></p>`;
-    return `<section class="panel span-${span}" id="quality"><div class="panel-head"><div><h2>Data quality: Sheet vs HubSpot</h2><p class="sub">The master Sheet’s open rows (sheet-review.json) against ${fromHubspot ? 'the HubSpot export' : 'records.json'}. HubSpot wins.</p></div><div>${updatedTag([['Sheet', times.sheet], fromHubspot ? ['HubSpot', times.recon] : ['CRM', times.records]])}</div></div>${body}</section>`;
+    return `<section class="panel span-${span}" id="quality"><div class="panel-head"><div><h2>Data quality: Sheet vs HubSpot</h2><p class="sub">The master Sheet’s open rows (sheet-review.json) against ${fromHubspot ? 'the HubSpot export' : 'records.json'}. HubSpot wins.</p></div><div>${updatedTag([['Sheet', times.sheet, false, true], fromHubspot ? ['HubSpot', times.recon] : ['CRM', times.records]])}</div></div>${body}</section>`;
   }
 
   // ---------- views ----------
@@ -514,7 +529,8 @@
     const list = inScope(f);
     return `<div class="page-head"><div><h1>GTM overview</h1><p>Pipeline, meetings and this week’s brief. Nothing is estimated: missing values show as ${DASH}.</p></div></div>
       <div class="grid">
-        ${panel({ title: 'New-business pipeline', sub: fromHubspot ? 'HubSpot is the source of truth. Renewal, customer-success and partnership pipelines are listed separately below.' : 'CRM snapshot only: build with --recon for the HubSpot headline.', updated: pipeUpdated(), body: headlineBlock() })}
+        ${panel({ title: 'New-business pipeline', sub: fromHubspot ? 'HubSpot is the source of truth. Renewal, customer-success and partnership pipelines are listed separately below.' : (R ? 'CRM snapshot only: the published snapshot has no HubSpot pipeline export yet.' : 'CRM snapshot only: build with --recon for the HubSpot headline.'), updated: pipeUpdated(), body: headlineBlock() })}
+        <section class="panel span-12" id="analysis" aria-live="polite"></section>
         ${briefPanel(7)}
         ${upcomingPanel(5)}
         ${panel({ title: 'All pipelines', span: 7, sub: 'One row per pipeline. Click to open it.', updated: pipeUpdated(), body: pipelinesTable() })}
@@ -560,11 +576,16 @@
   }
 
   function sourcesPanel(span) {
-    const list = D.sourceStatus || [];
+    const list = D.sources || [];
+    const how = (s) => (s.live ? 'live' : R ? 'from the snapshot' : '');
     const body = list.length
-      ? `<ul class="status-list">${list.map((s) => `<li><span><strong class="${s.ok ? 'ok' : 'fail'}">${s.ok ? '✓' : '✕'}</strong> ${text(s.label)}</span><span class="muted">${s.ok ? `OK ${esc(fmtUpdated(s.at))}` : `Failed ${esc(fmtUpdated(s.at))} · last OK ${esc(fmtUpdated(s.lastOkAt))}`}</span></li>`).join('')}</ul>`
+      ? `<ul class="status-list">${list.map((s) => `<li><span><strong class="${s.ok ? 'ok' : 'fail'}">${s.ok ? '✓' : '✕'}</strong> ${text(s.label)}${how(s) ? `<span class="sub muted"> · ${esc(how(s))}</span>` : ''}</span><span class="muted">${s.ok ? `OK ${esc(fmtUpdated(s.at))}` : `Failed ${esc(fmtUpdated(s.at))} · last OK ${esc(fmtUpdated(s.lastOkAt))}`}</span></li>`).join('')}</ul>`
       : empty('No source status in the data', '');
-    return panel({ title: 'Data sources', sub: 'Status of the last refresh for each source', span, updated: times.marketing, body });
+    const anyLive = list.some((s) => s.live);
+    const sub = !R ? 'Status of the last refresh for each source'
+      : anyLive ? `HubSpot, LemList and Fathom are pulled live; the rest are as of the snapshot (${esc(fmtUpdated(R.snapshot && R.snapshot.publishedAt))}).`
+        : `Each source’s last sync, as recorded in the published snapshot (${esc(fmtUpdated(R.snapshot && R.snapshot.publishedAt))}).`;
+    return panel({ title: 'Data sources', sub, span, updated: R ? [['Snapshot', R.snapshot && R.snapshot.publishedAt, false, true]] : times.marketing, body });
   }
 
   function viewPipeline(q) {
@@ -750,9 +771,9 @@
     return `<div class="page-head"><div><h1>Campaigns</h1><p>Outbound sequences, paid channels, budget and events.</p></div></div>
       <div class="grid">
         ${outboundPanels}
-        ${panel({ title: 'Paid ads by channel', span: 6, updated: times.marketing, sub: 'Spend, clicks and conversions as reported by each ad platform export. Each metric has its own scale.', body: adsBody })}
-        ${panel({ title: 'Marketing spend by month', span: 6, updated: [['Budget sheet', times.marketing, isStale('sheets')]], sub: sp ? esc(sp.source || '') : '', body: spendBody + sourceWarning('sheets') })}
-        ${panel({ title: 'Tradeshows: lead → MQL → SQL', updated: [['Show calendar', times.marketing, isStale('sheets')]], sub: 'Events grouped by spend, on one shared scale (people). Hover for conversion and cost per lead from the data.', body: showsBody + sourceWarning('sheets') })}
+        ${panel({ title: 'Paid ads by channel', span: 6, updated: [['Ad exports', times.marketing, false, true]], sub: 'Spend, clicks and conversions as reported by each ad platform export. Each metric has its own scale.', body: adsBody })}
+        ${panel({ title: 'Marketing spend by month', span: 6, updated: [['Budget sheet', times.marketing, isStale('sheets'), true]], sub: sp ? esc(sp.source || '') : '', body: spendBody + sourceWarning('sheets') })}
+        ${panel({ title: 'Tradeshows: lead → MQL → SQL', updated: [['Show calendar', times.marketing, isStale('sheets'), true]], sub: 'Events grouped by spend, on one shared scale (people). Hover for conversion and cost per lead from the data.', body: showsBody + sourceWarning('sheets') })}
       </div>`;
   }
 
@@ -843,7 +864,7 @@
       ['Owner', text(d.owner)], ['Amount', moneyFull(d.amount)], ['Probability', probText(d.probability)], ['Weighted', moneyFull(weightedOf(d))],
       ['Close date', `${fmtDay(d.close)}${passed ? ' <span class="flag">passed</span>' : ''}`], ['Created', fmtDay(d.created)], ['Segment (industry)', text(d.segment)],
       ['Source', fromHubspot ? 'HubSpot export' : 'records.json'],
-    ]) + (d.sheet ? `<h3>On the master Sheet</h3>${kv([['Sheet stage', text(d.sheet.stage)], ['Sheet amount', moneyFull(d.sheet.amount)], ['Sheet close', fmtDay(d.sheet.close)], ['Sheet owner', text(d.sheet.owner)], ['Sheet probability', isNum(d.sheet.probability) ? `${d.sheet.probability}%` : DASH]])}` : '<p class="desc muted">Not among the master Sheet’s open rows.</p>') +
+    ]) + (d.sheet ? `<h3>On the master Sheet <span class="muted">(as of ${esc(fmtUpdated(times.sheet))})</span></h3>${kv([['Sheet stage', text(d.sheet.stage)], ['Sheet amount', moneyFull(d.sheet.amount)], ['Sheet close', fmtDay(d.sheet.close)], ['Sheet owner', text(d.sheet.owner)], ['Sheet probability', isNum(d.sheet.probability) ? `${d.sheet.probability}%` : DASH]])}` : '<p class="desc muted">Not among the master Sheet’s open rows.</p>') +
       (flags.length ? flags.map((x) => `<p class="note bad">${esc(x)}</p>`).join('') : '');
     const m = c ? accountMeetings(c) : { upcoming: [], recent: [] };
     const acctDeals = c ? c.dealIds.map((x) => dealById.get(x)).filter(Boolean) : [];
@@ -858,7 +879,7 @@
         ]) }) : panel({ title: 'Account', span: 6, updated: times.records, body: empty('No account for this deal in records.json', 'Meetings, notes and recordings are attached to accounts, so none are shown.') })}
         ${c ? panel({ title: 'Meetings', span: 6, updated: times.records, sub: 'Account meetings from the CRM', body: `<h3>Upcoming</h3>${meetingList(m.upcoming, 'No upcoming meetings', 3)}<h3>Recent</h3>${meetingList(m.recent, 'No past meetings', 5)}` }) : ''}
         ${c ? panel({ title: 'Notes', span: 6, updated: times.records, body: notesBlock(c, 3) }) : ''}
-        ${c ? panel({ title: 'Recording summaries & action items', span: 6, updated: [['Recordings', times.records, isStale('fathom')]], body: recordingsBlock(c, 3) }) : ''}
+        ${c ? panel({ title: 'Recording summaries & action items', span: 6, updated: [['Recordings', times.recordings || times.records, isStale('fathom')]], body: recordingsBlock(c, 3) }) : ''}
       </div>`;
   }
 
@@ -889,7 +910,7 @@
         ${panel({ title: 'Deals', sub: `${plural(acctDeals.length, 'deal')}, ${int(acctDeals.filter((d) => d.open).length)} open, across all pipelines`, updated: pipeUpdated(), body: table('acct-deals-' + c.id, dealCols, acctDeals, { sort: { key: 'close', dir: 'desc' }, href: (d) => `#/deal/${encodeURIComponent(d.id)}`, emptyTitle: 'No deals at this account' }) })}
         ${panel({ title: 'Meetings', span: 6, updated: times.records, sub: `${plural(c.meetings.length, 'meeting')} in the CRM`, body: `<h3>Upcoming</h3>${meetingList(m.upcoming, 'No upcoming meetings', 4)}<h3>Recent</h3>${meetingList(m.recent, 'No past meetings', 8)}` })}
         ${panel({ title: 'Notes', span: 6, updated: times.records, body: notesBlock(c, 5) })}
-        ${panel({ title: 'Recording summaries & action items', span: 6, updated: [['Recordings', times.records, isStale('fathom')]], body: recordingsBlock(c) })}
+        ${panel({ title: 'Recording summaries & action items', span: 6, updated: [['Recordings', times.recordings || times.records, isStale('fathom')]], body: recordingsBlock(c) })}
       </div>`;
   }
 
@@ -959,7 +980,7 @@
         ${panel({ title: 'Recent meetings', span: 6, updated: times.records, body: meetingList(recent, 'No past meetings in the CRM', 5) })}
         ${prepPanels}
         ${panel({ title: 'Open deals', updated: pipeUpdated(), body: (() => { const od = c.dealIds.map((x) => dealById.get(x)).filter((x) => x && x.open); return od.length ? `<ul class="actions">${od.map((x) => `<li><a href="#/deal/${encodeURIComponent(x.id)}">${text(x.name)}</a> · ${text(x.pipeline)} · ${text(x.stage)} · ${moneyFull(x.amount)}${x.close ? ` · close ${fmtDay(x.close)}` : ''}</li>`).join('')}</ul>` : empty('No open deals at this account', ''); })() })}
-        ${panel({ title: 'Recording summaries & next steps', sub: 'Summaries and action items exactly as recorded in the data.', updated: [['Recordings', times.records, isStale('fathom')]], body: recordingsBlock(c, 3) })}
+        ${panel({ title: 'Recording summaries & next steps', sub: 'Summaries and action items exactly as recorded in the data.', updated: [['Recordings', times.recordings || times.records, isStale('fathom')]], body: recordingsBlock(c, 3) })}
         ${panel({ title: 'Recent notes', updated: times.records, body: notesBlock(c, 3) })}
       </div>`;
   }
@@ -993,6 +1014,7 @@
       a.classList.toggle('active', a.getAttribute('data-nav') === navFor);
     });
     drawCharts();
+    fillAnalysis();
     const key = `${route}/${id || ''}`;
     if (anchor) { const el = document.getElementById(anchor); if (el) el.scrollIntoView({ block: 'start' }); }
     else if (key !== lastRouteKey) window.scrollTo(0, 0);
@@ -1115,10 +1137,139 @@
   results.addEventListener('click', (e) => { if (e.target.closest('a')) { input.value = ''; closeSearch(); input.blur(); } });
   input.addEventListener('blur', closeSearch);
 
+  // ---------- refresh status (header) ----------
+  // refresh.json is rewritten on every scheduled check (data.js only when the
+  // data changed). Without it, data.js's own refreshedAt is shown.
+  const LATE_MS = 45 * 60 * 1000;
+  let refreshDoc = null;
+  function showRefreshed() {
+    const box = document.getElementById('refreshed');
+    if (!box) return;
+    const at = (refreshDoc && refreshDoc.refreshedAt) || D.refreshedAt || null;
+    const changed = (refreshDoc && refreshDoc.dataChangedAt) || D.dataChangedAt || null;
+    const ms = Date.parse(at || '');
+    const late = Number.isFinite(ms) && Date.now() - ms > LATE_MS;
+    box.className = `refreshed ${!at ? '' : late ? 'late' : 'ok'}`;
+    box.firstElementChild.textContent = at ? `Last refreshed ${fmtUpdated(at)}` : `Built ${fmtUpdated(D.builtAt)}`;
+    const parts = [];
+    if (late) parts.push('refresh is late');
+    if (changed) parts.push(`data changed ${fmtUpdated(changed)}`);
+    if (R && R.snapshot && R.snapshot.publishedAt) parts.push(`snapshot ${fmtUpdated(R.snapshot.publishedAt)}`);
+    if (!refreshDoc && at) parts.push('from data.js');
+    box.lastElementChild.textContent = parts.join(' · ');
+    box.title = [at && `Last check: ${fmtDateTime(at)}`, changed && `Data last changed: ${fmtDateTime(changed)}`,
+      R && R.snapshot && `Snapshot published: ${fmtDateTime(R.snapshot.publishedAt)}`].filter(Boolean).join('\n');
+  }
+  function loadRefresh() {
+    if (!window.fetch) return;
+    fetch('refresh.json', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((doc) => {
+        if (!doc || typeof doc.refreshedAt !== 'string') return;
+        refreshDoc = doc;
+        // data.js is only re-uploaded when its content changes; the current
+        // fetch/publish times of the data it holds come with every check.
+        let moved = false;
+        for (const [path, v] of Object.entries(doc.stamps || {})) {
+          const [head, a, b] = path.split('.');
+          if (head === 'times') { if (times[a] !== v) { times[a] = v; moved = true; } }
+          else if (head === 'sources' && sourceStatus.has(a) && (b === 'at' || b === 'lastOkAt')) { sourceStatus.get(a)[b] = v; moved = true; }
+          else if (head === 'quality' && D.quality && a === 'sheetGeneratedAt') D.quality.sheetGeneratedAt = v;
+          else if (head === 'refresh' && R) { if (a === 'snapshot' && R.snapshot) R.snapshot[b] = v; else if (a === 'sheetAsOf') R.sheetAsOf = v; moved = true; }
+        }
+        if (moved) render();
+      })
+      .catch(() => {})
+      .then(showRefreshed);
+  }
+
+  // ---------- Analysis (insights.json from the Strategy seat) ----------
+  // Every string is set with textContent: nothing from the file is parsed as HTML.
+  let analysis = { state: 'loading' };
+  function el(tag, cls, txt) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (txt != null) n.textContent = txt;
+    return n;
+  }
+  function fillAnalysis() {
+    const box = document.getElementById('analysis');
+    if (!box) return;
+    box.replaceChildren();
+    const head = el('div', 'panel-head');
+    const left = el('div');
+    left.append(el('h2', null, 'Analysis'));
+    left.append(el('p', 'sub', 'Written by the Strategy seat from this workspace’s data. Plain text; check the evidence before acting.'));
+    const right = el('div');
+    if (analysis.state === 'ok') right.append(el('span', 'updated', `Generated ${fmtUpdated(analysis.doc.generated_at)}`));
+    head.append(left, right);
+    box.append(head);
+    if (analysis.state !== 'ok') {
+      const e = el('div', 'empty');
+      e.append(el('strong', null, analysis.state === 'loading' ? 'Loading analysis…' : 'No insights published yet'));
+      if (analysis.state === 'invalid') e.append(document.createTextNode('A file was published but it does not match the expected format, so it is not shown.'));
+      if (analysis.state === 'unreachable') e.append(document.createTextNode('The analysis file could not be loaded.'));
+      box.append(e);
+      return;
+    }
+    const doc = analysis.doc;
+    box.append(el('p', 'analysis-head', doc.headline));
+    const list = el('ol', 'analysis-list');
+    for (const it of doc.insights) {
+      const li = el('li', 'analysis-item');
+      const h = el('h3');
+      h.append(el('span', null, it.title), el('span', `pill ${it.confidence === 'high' ? 'green' : it.confidence === 'low' ? 'warn' : ''}`, `${it.confidence} confidence`));
+      li.append(h);
+      for (const [lbl, val] of [['Evidence', it.evidence], ['Why it matters', it.why_it_matters], ['Recommended play', it.recommended_play], ['Owner', it.owner]]) {
+        const p = el('p');
+        p.append(el('span', 'lbl', lbl), document.createTextNode(val));
+        li.append(p);
+      }
+      if (Array.isArray(it.citations) && it.citations.length) {
+        const d = el('details');
+        d.append(el('summary', null, `${it.citations.length} citation${it.citations.length === 1 ? '' : 's'}`));
+        const ul = el('ul');
+        for (const c of it.citations) ul.append(el('li', null, c));
+        d.append(ul);
+        li.append(d);
+      }
+      list.append(li);
+    }
+    box.append(list);
+    const extra = el('div', 'analysis-extra');
+    const changes = Array.isArray(doc.changed_since_last) ? doc.changed_since_last : [doc.changed_since_last];
+    extra.append(el('h4', null, 'Changed since the last analysis'));
+    const cu = el('ul');
+    for (const c of changes) cu.append(el('li', null, c));
+    extra.append(cu);
+    if (doc.data_quality_flags.length) {
+      extra.append(el('h4', null, 'Data-quality flags'));
+      const fu = el('ul');
+      for (const f of doc.data_quality_flags) fu.append(el('li', null, window.GtmInsights.flagText(f)));
+      extra.append(fu);
+    }
+    box.append(extra);
+  }
+  function loadAnalysis() {
+    if (!window.fetch || !window.GtmInsights) { analysis = { state: 'unreachable' }; fillAnalysis(); return; }
+    fetch('insights.json', { cache: 'no-store' })
+      .then((r) => {
+        // S3 behind CloudFront answers 403 for a key that doesn't exist.
+        if (r.status === 404 || r.status === 403) return { state: 'missing' };
+        if (!r.ok) return { state: 'unreachable' };
+        return r.text().then((t) => { const v = window.GtmInsights.parse(t); return v.ok ? { state: 'ok', doc: v.doc } : { state: 'invalid' }; });
+      })
+      .catch(() => ({ state: 'unreachable' }))
+      .then((a) => { analysis = a; fillAnalysis(); });
+  }
+
   // ---------- boot ----------
   let resizeTimer;
   window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawCharts, 120); });
   window.addEventListener('hashchange', render);
   if (!location.hash || location.hash === '#' || location.hash === '#/') history.replaceState(null, '', '#/overview');
   render();
+  showRefreshed();
+  loadRefresh();
+  loadAnalysis();
 })();

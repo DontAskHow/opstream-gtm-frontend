@@ -91,18 +91,26 @@ function writeTranscripts(dataDir, outDir, wanted) {
 // JSON is valid JS; escaping "<" means no string can close the script element.
 const safeJson = (v) => JSON.stringify(v).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 
-export function build(opts) {
-  const log = opts.quiet ? () => {} : (...a) => console.log(...a);
-  const warn = opts.quiet ? () => {} : (...a) => console.warn(...a);
-  const dir = opts.data;
-  const inputs = {
+// The snapshot inputs buildData reads. Shared with workspace/refresh (the
+// scheduled preview refresh), which then swaps in live sources.
+export function readInputs(dir, warn = () => {}) {
+  return {
     records: readJson(dir, 'records.json', warn),
     marketing: readJson(dir, 'marketing.json', warn),
     brief: readJson(dir, 'agent-brief.json', warn),
     sheetReview: readJson(dir, 'sheet-review.json', warn),
     operator: findPrepFile(dir, warn),
-    expect: opts.expect,
   };
+}
+
+// The exact text of data.js for a GTM_DATA object.
+export const dataJsText = (data) => `window.GTM_DATA=${safeJson(data)};\n`;
+
+export function build(opts) {
+  const log = opts.quiet ? () => {} : (...a) => console.log(...a);
+  const warn = opts.quiet ? () => {} : (...a) => console.warn(...a);
+  const dir = opts.data;
+  const inputs = { ...readInputs(dir, warn), expect: opts.expect };
   if (opts.recon) {
     const p = join(opts.recon, 'live_deals.json');
     if (!existsSync(p)) throw new Error(`--recon ${opts.recon} has no live_deals.json`);
@@ -115,9 +123,10 @@ export function build(opts) {
   inputs.transcripts = writeTranscripts(dir, opts.out, wanted);
   const data = buildData(inputs);
 
-  writeFileSync(join(opts.out, 'data.js'), `window.GTM_DATA=${safeJson(data)};\n`);
+  writeFileSync(join(opts.out, 'data.js'), dataJsText(data));
   for (const f of ['index.html', 'app.js', 'styles.css']) copyFileSync(join(SRC, f), join(opts.out, f));
   copyFileSync(join(SRC, 'charts.js'), join(opts.out, 'vendor', 'gtm-charts.js'));
+  copyFileSync(join(SRC, 'insights.js'), join(opts.out, 'vendor', 'insights.js'));
   for (const f of ['poppins-400.ttf', 'poppins-600.ttf']) {
     if (existsSync(join(FONTS, f))) copyFileSync(join(FONTS, f), join(opts.out, 'fonts', f));
     else warn(`warn: font ${f} not found; headings fall back to system fonts`);

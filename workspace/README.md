@@ -25,10 +25,11 @@ The build prints the pipeline figures it computed, per pipeline, plus the expect
 | `index.html`, `app.js`, `styles.css` | The app (copied from `src/`) |
 | `data.js` | `window.GTM_DATA = {…}`, a trimmed projection of the inputs (`lib/project.mjs`) |
 | `vendor/gtm-charts.js` | A small hand-written SVG chart kit (`src/charts.js`) |
+| `vendor/insights.js` | The Analysis file validator (`src/insights.js`), shared with `refresh/publish-insights.mjs` |
 | `transcripts/<recording-id>.js` | Per-recording transcripts. Each loads on demand when you click "Show transcript". |
 | `fonts/`, `logo.svg` | Poppins (from `source/assets/fonts`) and the brand `logo-main.svg` |
 
-The page's CSP sets `connect-src 'none'`, so the app can't make fetch/XHR calls. It has no ask box and no send actions. Links inside recording summaries render as plain text.
+The page's CSP sets `connect-src 'self'`. The app makes only two same-origin reads, both `no-store` and both optional: `refresh.json` (the "Last refreshed" time written by the scheduled refresh, `refresh/README.md`) and `insights.json` (the Analysis panel, `docs/insights-schema.md`). Under `file://` they fail, so the header shows the time from `data.js` and the Analysis panel says no insights are published. The app has no ask box and no send actions. Links inside recording summaries and the Analysis text render as plain text.
 
 ## Inputs
 
@@ -71,3 +72,7 @@ npm test   # node --test test/ && python3 -m unittest discover -s scripts/tests
 ```
 
 `test/workspace-build.test.mjs` builds from synthetic fixtures and checks the figures, the caveat, data quality, the output guard and the server.
+
+## Scheduled preview refresh and Analysis
+
+`refresh/` holds the Lambda that rebuilds the private preview's `data.js` from the published snapshot every 15 minutes (`refresh/README.md`), plus `refresh/publish-insights.mjs`, which validates and publishes the Strategy seat's Analysis file (`docs/insights-schema.md`). `test/preview-refresh.test.mjs` and `test/insights.test.mjs` cover change detection, the fallbacks, the alarms and the Analysis shape.

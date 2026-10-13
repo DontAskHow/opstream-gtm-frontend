@@ -121,8 +121,11 @@ test('HubSpot export drives the pipeline; pipelines never mix; expected figures 
     assert.ok(!readFileSync(join(fx.out, 'transcripts/recording-1.js'), 'utf8').includes('</script>'));
     const app = readFileSync(join(fx.out, 'app.js'), 'utf8') + readFileSync(join(fx.out, 'vendor/gtm-charts.js'), 'utf8');
     assert.doesNotMatch(app, /run-facts|runFacts|Sheet-based/i);
-    assert.doesNotMatch(app, /\bfetch\(|XMLHttpRequest|WebSocket|sendBeacon|https?:\/\/(?!www\.w3\.org)/);
-    assert.match(readFileSync(join(fx.out, 'index.html'), 'utf8'), /connect-src 'none'/);
+    // The only network reads are the two same-origin status files, never an absolute URL.
+    assert.doesNotMatch(app, /XMLHttpRequest|WebSocket|sendBeacon|https?:\/\/(?!www\.w3\.org)/);
+    assert.deepEqual([...app.matchAll(/\bfetch\(([^,)]*)/g)].map((m) => m[1]).sort(), ["'insights.json'", "'refresh.json'"]);
+    assert.match(readFileSync(join(fx.out, 'index.html'), 'utf8'), /connect-src 'self'/);
+    assert.ok(existsSync(join(fx.out, 'vendor', 'insights.js')));
   } finally { rmSync(fx.root, { recursive: true, force: true }); }
 });
 

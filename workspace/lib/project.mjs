@@ -325,7 +325,7 @@ export function buildData(inp) {
       outbound: str(mk.outbound?.fetchedAt), web: str(mk.web?.fetchedAt), brief: str(brief?.generatedAt),
       operator: str(operator?.generatedAt), sheet: str(sheetReview?.generatedAt), recon: str(recon?.fetchedAt),
     },
-    sources: arr(mk.sources).map((s) => ({ source: str(s.source), label: str(s.label) ?? str(s.source), ok: !!s.ok, at: str(s.at), lastOkAt: str(s.lastOkAt), detail: str(s.detail) })),
+    sources: arr(mk.sources).map((s) => ({ source: str(s.source), label: str(s.label) ?? str(s.source), ok: !!s.ok, at: str(s.at), lastOkAt: str(s.lastOkAt), detail: str(s.detail), live: !!s.live, fromSnapshot: !!s.fromSnapshot })),
     pipelineSource: source,
     definition: model.PIPELINE_DEF.definition,
     recordsOpenCount: recordsOpen,
