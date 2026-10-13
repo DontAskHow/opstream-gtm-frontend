@@ -55,8 +55,8 @@ The page's CSP sets `connect-src 'self'`. The app makes only two same-origin rea
 
 ## Views (hash routes)
 
-- `#/overview`: the reconciled headline, the 5-line brief (what's new first, then top actions, then watch-outs), upcoming prep meetings, all pipelines, a data-quality summary, and a filtered view. The filtered view has the funnel, value by close month, meetings over time (click a month to list its meetings), pipeline-over-time and source status.
-- `#/pipeline?pipe=&owner=&stage=&seg=&from=&to=`: summary tiles, the funnel and close-month charts (click to filter), a sortable deals table, every pipeline's figures, data quality, and accounts.
+- `#/overview`: the HubSpot headline, the Analysis panel, the 5-line brief (what's new first, then top actions, then watch-outs), upcoming prep meetings, all pipelines (each on its own row), and a filtered view: the funnel with the largest deals per stage, value by close month, and meetings over time (click a month to list its meetings).
+- `#/pipeline?pipe=&owner=&stage=&seg=&from=&to=`: summary tiles, the funnel and close-month charts (click to filter), a sortable deals table, and accounts. Sheet-vs-HubSpot differences are flagged on the deal page only.
 - `#/deal/<id>` shows a deal's HubSpot fields, its Sheet values and any data-quality flags. `#/account/<id>` shows an account's fields and deals. Both pages also show the account's meetings, notes, and recording summaries with action items (verbatim).
 - `#/campaigns?c=<campaignId>`: running campaigns (sent / opened / replied / meetings; zero opens read "tracking off"), all campaigns, paid ads by channel, spend, and tradeshow leads → MQL → SQL.
 - `#/prep`, `#/prep/<account id>`: accounts with a meeting in the last or next 14 days, plus every account in the prep brief. Each account page shows meetings, the prep brief's fields, open deals, recording summaries and next steps only from existing fields ("No recording summary in the data" when there are none), and notes.

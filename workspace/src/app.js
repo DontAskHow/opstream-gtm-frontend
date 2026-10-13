@@ -30,8 +30,8 @@
   const figures = D.figures || [];
   const pipelineByLabel = new Map(pipelines.map((p) => [p.label, p]));
   const defaultPipe = (D.headline && D.headline.pipeline) || (pipelines[0] && pipelines[0].label) || '';
-  // Pipeline panels say where their numbers come from.
-  const pipeUpdated = () => (fromHubspot ? [['HubSpot export', times.recon], ['Accounts', times.records]] : [['CRM snapshot', times.records, isStale('hubspot')]]);
+  // Pipeline panels carry one compact "Updated" tag: the HubSpot export time.
+  const pipeUpdated = () => (fromHubspot ? times.recon : [[null, times.records, isStale('hubspot')]]);
 
   // One entry per meeting id; a meeting can be linked to several accounts.
   const meetings = (() => {
@@ -209,7 +209,7 @@
   function sourceWarning(key) {
     const s = sourceStatus.get(key);
     if (!s || s.ok) return '';
-    return `<p class="note warn">${esc(s.label || key)}: the latest refresh failed (${esc(fmtUpdated(s.at))}). Last successful sync ${esc(fmtUpdated(s.lastOkAt))}.</p>`;
+    return `<p class="note warn">${esc(s.label || key)} not syncing; last OK ${esc(fmtUpdated(s.lastOkAt))}.</p>`;
   }
   const isStale = (key) => { const s = sourceStatus.get(key); return !!(s && !s.ok); };
   const tile = (label, value, foot, cls = '') =>
@@ -298,7 +298,6 @@
         <div class="field"><label for="f-from">Close date from</label><input id="f-from" type="date" data-filter="from" value="${esc(f.from)}"></div>
         <div class="field"><label for="f-to">Close date to</label><input id="f-to" type="date" data-filter="to" value="${esc(f.to)}"></div>
         <button class="btn ghost" type="button" data-clear-filters ${n ? '' : 'disabled'}>Clear</button>
-        <span class="active-filters">Pipelines are never mixed. Segment = HubSpot company industry. Close-date filters drop deals without a close date.</span>
       </div></div>`;
   }
 
@@ -306,14 +305,18 @@
   // Funnel: every open stage of the selected pipeline in HubSpot order, On Hold
   // last and marked as outside the active pipeline. The stage filter highlights
   // its row instead of hiding the others.
+  // The two largest deals in a stage, by account name.
+  const keyDeals = (list) => list.filter((d) => isNum(d.amount)).sort((a, b) => b.amount - a.amount).slice(0, 2)
+    .map((d) => `${d.account || d.name} ${money(d.amount)}`).join(', ');
   function stageBarTable(f) {
     const list = pipeOpen(f).filter((d) => dealMatches(d, f, true));
     const rank = stageRankFor(f.pipe);
     const by = new Map();
     for (const d of list) {
       const k = d.stage;
-      const e = by.get(k) || { count: 0, amount: 0, priced: 0 };
+      const e = by.get(k) || { count: 0, amount: 0, priced: 0, deals: [] };
       e.count++;
+      e.deals.push(d);
       if (isNum(d.amount)) { e.amount += d.amount; e.priced++; }
       by.set(k, e);
     }
@@ -322,7 +325,7 @@
       .sort((a, b) => hold(a[0]) - hold(b[0]) || (rank.get(a[0]) ?? 999) - (rank.get(b[0]) ?? 999))
       .map(([k, e]) => ({
         label: k,
-        sub: [hold(k) ? 'Not in the active pipeline' : '', e.priced < e.count ? `${e.count - e.priced} without amount` : '', f.stage === k ? 'Filtered' : ''].filter(Boolean).join(' · '),
+        sub: [hold(k) ? 'Not in totals' : keyDeals(e.deals), f.stage === k ? 'Filtered' : ''].filter(Boolean).join(' · '),
         href: `#/pipeline${qs({ ...f, stage: f.stage === k ? '' : k })}`,
         tip: `${k}\n${plural(e.count, 'open deal')} · ${moneyFull(e.priced ? e.amount : null)}${e.priced < e.count ? `\n${e.count - e.priced} without an amount` : ''}\n${f.stage === k ? 'Click to clear the stage filter' : 'Click to filter'}`,
         values: { count: e.count, amount: e.priced ? e.amount : null },
@@ -365,24 +368,7 @@
     return (dated.some((d) => monthKey(d.close) < today) ? Charts.legend([{ name: 'Close date not yet reached', color: S1 }, { name: 'Close date passed, still open', color: 'var(--past)' }]) : '') + chartSlot((w) => Charts.columns({
       width: Math.max(w, months.length * 16), height: 230, data, series: [{ name: 'Value', color: S1 }], yFormat: money,
       marker: { index: months.indexOf(today), label: 'This month' }, title: 'Open value by close month',
-    })) + (undated ? `<p class="note">${plural(undated, 'open deal')} in this view ${undated === 1 ? 'has' : 'have'} no close date and ${undated === 1 ? 'is' : 'are'} not shown.</p>` : '');
-  }
-
-  function historyPanel(span) {
-    const h = D.history || {};
-    let body;
-    if (!h.withHistory) {
-      body = empty('Pipeline over time isn’t in the snapshot',
-        `All ${int(h.deals)} deals in records.json have empty history, amountHistory and closeHistory, so there is no stage, amount or close-date trend to chart. Only the current state is shown.`);
-    } else {
-      const fields = [...new Set((h.entries || []).flatMap((e) => Object.keys(e)).filter((k) => !['dealId', 'deal'].includes(k)))];
-      body = `<p class="note">${plural(h.withHistory, 'deal')} carry history entries. Their shape isn’t documented in the snapshot, so they’re listed as recorded rather than charted.</p>` +
-        table('history', [
-          { key: 'deal', label: 'Deal', render: (e) => `<a href="#/deal/${encodeURIComponent(e.dealId)}">${text(e.deal)}</a>` },
-          ...fields.map((k) => ({ key: k, label: k, render: (e) => text(typeof e[k] === 'object' ? JSON.stringify(e[k]) : e[k]) })),
-        ], h.entries || [], { limit: 10 });
-    }
-    return panel({ title: 'Pipeline over time', sub: 'From deal history / amountHistory / closeHistory in records.json', updated: times.records, span, body });
+    })) + (undated ? `<p class="note">${plural(undated, 'deal')} without a close date not shown.</p>` : '');
   }
 
   function meetingsPanel(f, selMonth) {
@@ -427,7 +413,7 @@
     }
     return panel({
       title: 'Meetings over time', span: 12, updated: times.records,
-      sub: `CRM meetings by month (PT), deduplicated by meeting id: ${int(list.length)} meetings. Owner (meeting owner) and segment filters apply; stage and close-date filters don’t.`,
+      sub: `${plural(list.length, 'meeting')}. Click a month to list them.`,
       body,
     });
   }
@@ -437,40 +423,24 @@
   const sumOrDash = (t, v) => (t.count > 0 && t.noAmountCount === t.count ? DASH : moneyFull(v));
   const KIND_LABEL = { 'new business': 'New business', renewal: 'Renewal / customer-success book', partnership: 'Partnerships', unknown: 'Pipeline not recorded' };
   const figTiles = (fig) => `<div class="tiles">
-      ${tile('Open deals', int(fig.active.count), 'open stages, excl. On Hold', 'hero headline')}
+      ${tile('Open deals', int(fig.active.count), 'excl. On Hold', 'hero headline')}
       ${tile('Open amount', sumOrDash(fig.active, fig.active.openAmount), fig.active.noAmountCount ? `${plural(fig.active.noAmountCount, 'deal')} without amount` : '', 'headline')}
-      ${tile('Weighted', sumOrDash(fig.active, fig.active.weighted), `${plural(fig.active.noProbabilityCount, 'deal')} without probability`, 'headline')}
+      ${tile('Weighted', sumOrDash(fig.active, fig.active.weighted), fig.active.noProbabilityCount ? `${plural(fig.active.noProbabilityCount, 'deal')} without probability` : '', 'headline')}
       ${tile('On Hold (separate)', int(fig.onHold.count), sumOrDash(fig.onHold, fig.onHold.openAmount))}
     </div>`;
 
   // HubSpot (--recon) is the only headline; builds without it are refused.
+  // The panel's own tag says when the export was taken; a caveat appears only
+  // when the figures fail the expected-figure check.
   function headlineBlock() {
     const h = D.headline;
-    const q = D.quality || {};
-    if (!fromHubspot || !h) {
-      return `<div class="side"><h4>HubSpot · Sales Pipeline</h4><p class="note warn">HubSpot figures are not in this build.</p></div>`;
-    }
+    if (!fromHubspot || !h) return '<p class="note warn">HubSpot figures are not in this build.</p>';
     const e = D.expect || {};
-    const verified = e.checked && e.matches;
-    const bridge = D.bridge;
-    const bridgeText = q.missingFromSheet
-      ? `Sheet-active rows ${int(q.sheetActiveCount)} − ${int(q.closedButActive.length)} closed in HubSpot${q.otherDiffs.length ? ` − ${int(q.otherDiffs.length)} other stage differences` : ''}${q.notInHubspot.length ? ` − ${int(q.notInHubspot.length)} not in HubSpot` : ''} + ${int(q.missingFromSheet.length)} HubSpot deals missing from the Sheet = ${int(bridge)}${bridge === h.active.count ? ' (matches HubSpot)' : ` (HubSpot has ${int(h.active.count)}: the bridge doesn’t close)`}.`
+    const bad = e.checked && !e.matches;
+    const caveat = bad
+      ? `<p class="note bad">Doesn’t match the expected figures: ${esc(e.rows.filter((r) => !r.ok).map((r) => `${r.key} ${r.got} vs ${r.want}`).join('; '))}.</p>`
       : '';
-    const liveMode = R && !e.checked ? R.hubspot : null;
-    if (liveMode === 'live' || liveMode === 'snapshot' || liveMode === 'last-good') {
-      const live = liveMode !== 'last-good';
-      const from = liveMode === 'live' ? 'Live from HubSpot' : `From HubSpot as synced into the published snapshot (HubSpot ${fmtUpdated(times.recon)})`;
-      const note = live ? '' : `<p class="note">HubSpot figures as of ${esc(fmtUpdated(times.recon))}.</p>`;
-      return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)} <span class="pill ${live ? 'green' : 'warn'}">${liveMode === 'live' ? 'live' : 'HubSpot sync'}</span></h4>${figTiles(h)}
-        <p class="sub muted">${updatedTag(pipeUpdated())}</p></div>${note}`;
-    }
-    const caveat = verified
-      ? `<p class="note">HubSpot is the source of truth. These figures match the expected reconciliation exactly (${esc(e.rows.map((r) => r.key).join(', '))}). ${esc(bridgeText)} <a href="#/pipeline#quality">See data quality</a>.</p>`
-      : `<p class="note bad"><strong>${e.checked ? 'Doesn’t match the expected reconciliation' : 'Not verified'}.</strong> ${e.checked
-        ? esc(e.rows.filter((r) => !r.ok).map((r) => `${r.key}: computed ${r.got}, expected ${r.want}`).join('; ')) + '.'
-        : 'The build was run without expected figures (--expect), so these HubSpot numbers haven’t been checked against the reconciliation.'} ${esc(bridgeText)}</p>`;
-    return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)} <span class="pill ${verified ? 'green' : 'warn'}">${verified ? 'verified' : 'HubSpot'}</span></h4>${figTiles(h)}
-        <p class="sub muted">${updatedTag(pipeUpdated())}</p></div>${caveat}`;
+    return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)}${e.checked && e.matches ? ' <span class="pill green">verified</span>' : ''}</h4>${figTiles(h)}</div>${caveat}`;
   }
 
   function pipelinesTable() {
@@ -480,61 +450,28 @@
       { key: 'count', label: 'Open deals', num: true, sort: (p) => p.active.count, render: (p) => int(p.active.count) },
       { key: 'amount', label: 'Open amount', num: true, sort: (p) => p.active.openAmount, render: (p) => `${sumOrDash(p.active, p.active.openAmount)}${p.active.noAmountCount ? `<span class="sub">${int(p.active.noAmountCount)} without amount</span>` : ''}` },
       { key: 'weighted', label: 'Weighted', num: true, sort: (p) => p.active.weighted, render: (p) => sumOrDash(p.active, p.active.weighted) },
-      { key: 'noprob', label: 'No probability', num: true, sort: (p) => p.active.noProbabilityCount, render: (p) => int(p.active.noProbabilityCount) },
       { key: 'hold', label: 'On Hold', num: true, sort: (p) => p.onHold.count, render: (p) => (p.onHold.count ? `${int(p.onHold.count)}<span class="sub">${sumOrDash(p.onHold, p.onHold.openAmount)}</span>` : int(0)) },
-    ], figures, { href: (p) => `#/pipeline${qs({ pipe: p.label })}`, foot: esc(D.definition || '') });
-  }
-
-  function qualityPanel(span, compact) {
-    const q = D.quality || {};
-    const cols = (extra) => [
-      { key: 'name', label: 'Deal', render: (r) => (dealById.has(r.id) ? `<a href="#/deal/${encodeURIComponent(r.id)}">${text(r.name)}</a>` : text(r.name)) },
-      ...extra,
-      { key: 'amount', label: 'Amount', num: true, render: (r) => moneyFull(r.amount) },
-      { key: 'owner', label: 'Owner' },
-    ];
-    const closed = q.closedButActive || [];
-    const missing = q.missingFromSheet;
-    let body = `<div class="tiles">
-        ${tile('Closed in HubSpot, active on Sheet', int(closed.length), 'Sheet still counts them', closed.length ? 'warnt' : '')}
-        ${tile('Open in HubSpot, missing from Sheet', missing ? int(missing.length) : DASH, missing ? 'new business, excl. On Hold' : 'needs the HubSpot export', missing && missing.length ? 'warnt' : '')}
-        ${tile('Other stage differences', int((q.otherDiffs || []).length), 'Sheet active, HubSpot On Hold or another pipeline')}
-        ${tile('Sheet-active rows', int(q.sheetActiveCount), `of ${int(q.sheetDealCount)} open Sheet rows`)}
-      </div>`;
-    if (!compact) {
-      body += `<h3>Closed in HubSpot but still active on the Sheet</h3>` + table('dq-closed', cols([
-        { key: 'sheetStage', label: 'Sheet stage' }, { key: 'hubspotStage', label: 'HubSpot stage', render: (r) => `<span class="pill bad">${text(r.hubspotStage)}</span>` },
-      ]), closed, { emptyTitle: 'None', sort: { key: 'amount', dir: 'desc' } });
-      body += `<h3>Open in HubSpot, not on the Sheet</h3>` + (missing ? table('dq-missing', cols([
-        { key: 'hubspotStage', label: 'HubSpot stage' }, { key: 'close', label: 'Close', sort: (r) => r.close, render: (r) => fmtDay(r.close) },
-      ]), missing, { emptyTitle: 'None', sort: { key: 'amount', dir: 'desc' } }) : empty('Needs the HubSpot export', 'records.json doesn’t record each deal’s pipeline, so missing new-business deals can’t be found without --recon.'));
-      if ((q.otherDiffs || []).length) body += `<h3>Other differences</h3>` + table('dq-other', cols([{ key: 'sheetStage', label: 'Sheet stage' }, { key: 'hubspotStage', label: 'HubSpot stage' }, { key: 'hubspotPipeline', label: 'HubSpot pipeline' }]), q.otherDiffs);
-      if ((q.notInHubspot || []).length) body += `<h3>Sheet-active rows not in HubSpot</h3>` + table('dq-nohs', cols([{ key: 'sheetStage', label: 'Sheet stage' }]), q.notInHubspot);
-    } else body += `<p class="table-foot"><a href="#/pipeline#quality">See the deals</a></p>`;
-    return `<section class="panel span-${span}" id="quality"><div class="panel-head"><div><h2>Data quality: Sheet vs HubSpot</h2><p class="sub">The master Sheet’s open rows (sheet-review.json) against ${fromHubspot ? 'the HubSpot export' : 'records.json'}. HubSpot wins.</p></div><div>${updatedTag([['Sheet', times.sheet, false, true], fromHubspot ? ['HubSpot', times.recon] : ['CRM', times.records]])}</div></div>${body}</section>`;
+    ], figures, { href: (p) => `#/pipeline${qs({ pipe: p.label })}` });
   }
 
   // ---------- views ----------
   function viewOverview(q) {
     const f = getFilters(q);
     const list = inScope(f);
-    return `<div class="page-head"><div><h1>GTM overview</h1><p>Pipeline, meetings and this week’s brief. Nothing is estimated: missing values show as ${DASH}.</p></div></div>
+    return `<div class="page-head"><div><h1>GTM overview</h1></div></div>
       <div class="grid">
-        ${panel({ title: 'New-business pipeline', sub: fromHubspot ? 'HubSpot is the source of truth. Renewal, customer-success and partnership pipelines are listed separately below.' : (R ? 'CRM snapshot only: the published snapshot has no HubSpot pipeline export yet.' : 'CRM snapshot only: build with --recon for the HubSpot headline.'), updated: pipeUpdated(), body: headlineBlock() })}
+        ${panel({ title: 'New-business pipeline', updated: pipeUpdated(), body: headlineBlock() })}
         <section class="panel span-12" id="analysis" aria-live="polite"></section>
         ${briefPanel(7)}
         ${upcomingPanel(5)}
-        ${panel({ title: 'All pipelines', span: 7, sub: 'One row per pipeline. Click to open it.', updated: pipeUpdated(), body: pipelinesTable() })}
-        ${qualityPanel(5, true)}
+        ${panel({ title: 'All pipelines', sub: 'Each pipeline separately; never added together.', updated: pipeUpdated(), body: pipelinesTable() })}
       </div>
       <h2 class="section-title">Filtered view</h2>
       ${filterBar('overview', f)}
       <div class="grid">
-        ${panel({ title: `${f.pipe}: open pipeline by stage`, span: 6, updated: pipeUpdated(), sub: `Deal count and value per stage, ordered by ${fromHubspot ? 'HubSpot stage probability' : 'median deal probability (the snapshot has no stage order)'}. Click a row to filter.`, body: stageBarTable(f) })}
-        ${panel({ title: 'Open value by close month', span: 6, updated: pipeUpdated(), sub: `${plural(list.length, 'deal')} in view${f.stage ? '' : ', excl. On Hold'}. Deals without an amount add 0 and are counted in the tooltip. Click a month to filter.`, body: closeMonthChart(list, f) })}
+        ${panel({ title: `${f.pipe}: open pipeline by stage`, span: 6, updated: pipeUpdated(), sub: 'Largest deals per stage. Click a row to filter.', body: stageBarTable(f) })}
+        ${panel({ title: 'Open value by close month', span: 6, updated: pipeUpdated(), sub: 'Click a month to filter.', body: closeMonthChart(list, f) })}
         ${meetingsPanel(f, q.get('mm'))}
-        ${historyPanel(6)}
-        ${sourcesPanel(6)}
       </div>`;
   }
 
@@ -552,9 +489,9 @@
     const top = uniq.slice(0, 5);
     const rest = uniq.slice(5);
     const body = top.length
-      ? `<ol class="brief">${top.map(li).join('')}</ol>${rest.length ? `<details><summary class="source-tag">${plural(rest.length, 'more brief item')} (top actions and watch-outs)</summary><ol class="brief" start="6">${rest.map(li).join('')}</ol></details>` : ''}`
+      ? `<ol class="brief">${top.map(li).join('')}</ol>${rest.length ? `<details><summary class="source-tag">${int(rest.length)} more</summary><ol class="brief" start="6">${rest.map(li).join('')}</ol></details>` : ''}`
       : empty('The brief is empty', '');
-    return panel({ title: 'This week', sub: 'Five lines from the agent brief: what’s new first, then top actions, then watch-outs.', span, updated: times.brief, body });
+    return panel({ title: 'This week', span, updated: times.brief, body });
   }
 
   function upcomingPanel(span) {
@@ -563,20 +500,7 @@
     const body = items.length
       ? `<ul class="status-list">${items.map((m) => `<li><span>${companyById.has(m.companyId) ? `<a href="#/prep/${encodeURIComponent(m.companyId)}">${text(companyName(m.companyId))}</a>` : text(m.company)}<span class="sub muted"> · ${text(m.title)}</span></span><span class="muted">${esc(fmtDateTime(m.start))}${prepIds.has(m.companyId) ? ' <span class="pill green">prep</span>' : ''}</span></li>`).join('')}</ul>`
       : empty('No meetings in the prep brief', '');
-    return panel({ title: 'Upcoming meetings', sub: 'From the prep brief. Open one for prep notes.', span, updated: times.operator, body });
-  }
-
-  function sourcesPanel(span) {
-    const list = D.sources || [];
-    const how = (s) => (s.live ? 'live' : R ? 'from the snapshot' : '');
-    const body = list.length
-      ? `<ul class="status-list">${list.map((s) => `<li><span><strong class="${s.ok ? 'ok' : 'fail'}">${s.ok ? '✓' : '✕'}</strong> ${text(s.label)}${how(s) ? `<span class="sub muted"> · ${esc(how(s))}</span>` : ''}</span><span class="muted">${s.ok ? `OK ${esc(fmtUpdated(s.at))}` : `Failed ${esc(fmtUpdated(s.at))} · last OK ${esc(fmtUpdated(s.lastOkAt))}`}</span></li>`).join('')}</ul>`
-      : empty('No source status in the data', '');
-    const anyLive = list.some((s) => s.live);
-    const sub = !R ? 'Status of the last refresh for each source'
-      : anyLive ? `HubSpot, LemList and Fathom are pulled live; the rest are as of the snapshot (${esc(fmtUpdated(R.snapshot && R.snapshot.publishedAt))}).`
-        : `Each source’s last sync, as recorded in the published snapshot (${esc(fmtUpdated(R.snapshot && R.snapshot.publishedAt))}).`;
-    return panel({ title: 'Data sources', sub, span, updated: R ? [['Snapshot', R.snapshot && R.snapshot.publishedAt, false, true]] : times.marketing, body });
+    return panel({ title: 'Upcoming meetings', span, updated: times.operator, body });
   }
 
   function viewPipeline(q) {
@@ -593,9 +517,8 @@
     const tiles = `<div class="tiles">
       ${tile('Deals in view', int(list.length), hasFilters(f) ? `of ${int(fig ? fig.active.count : 0)} open (excl. On Hold)` : (f.stage ? '' : 'open, excl. On Hold'), 'hero')}
       ${tile('Open amount', list.length ? moneyFull(t.amount) : DASH, t.noAmount ? `${plural(t.noAmount, 'deal')} without amount` : '')}
-      ${tile('Weighted', list.length ? moneyFull(t.weighted) : DASH, `${plural(t.noProb, 'deal')} without probability`)}
-      ${tile('Close date passed', int(past), 'still open, flagged')}
-      ${tile('No close date', int(list.filter((d) => !d.close).length), '')}
+      ${tile('Weighted', list.length ? moneyFull(t.weighted) : DASH, t.noProb ? `${plural(t.noProb, 'deal')} without probability` : '')}
+      ${tile('Close date passed', int(past), 'still open')}
     </div>`;
     const rank = stageRankFor(f.pipe);
     const dealCols = [
@@ -629,17 +552,14 @@
       { key: 'lastContact', label: 'Last contact', sort: (r) => dayKey(r.c.lastContact), render: (r) => lastContactText(r.c.lastContact) },
     ];
 
-    return `<div class="page-head"><div><h1>Pipeline</h1><p>${fromHubspot ? 'HubSpot deals, one pipeline at a time.' : 'records.json deals (pipeline not recorded).'} Filters update the charts, the tables and the URL.</p></div></div>
+    return `<div class="page-head"><div><h1>Pipeline</h1></div></div>
       ${filterBar('pipeline', f)}
       <div class="grid">
         ${panel({ title: `${f.pipe}: summary`, updated: pipeUpdated(), body: tiles })}
-        ${panel({ title: 'Open pipeline by stage', span: 6, updated: pipeUpdated(), sub: `Deals and value per stage, ordered by ${fromHubspot ? 'HubSpot stage probability' : 'median deal probability'}. On Hold is shown last and isn’t in the active totals. Click a row to filter.`, body: stageBarTable(f) })}
-        ${panel({ title: 'Open value by close month', span: 6, updated: pipeUpdated(), sub: 'Click a month to filter to it.', body: closeMonthChart(list, f) })}
-        ${panel({ title: 'Deals', sub: `${plural(list.length, 'deal')}. Click a column header to sort.`, updated: pipeUpdated(), body: table('deals', dealCols, list, { sort: { key: 'amount', dir: 'desc' }, limit: 50, href: (d) => `#/deal/${encodeURIComponent(d.id)}`, emptyTitle: 'No open deals match these filters' }) })}
-        ${panel({ title: 'All pipelines', updated: pipeUpdated(), sub: 'Never mixed: each pipeline has its own totals.', body: pipelinesTable() })}
-        ${qualityPanel(12, false)}
-        ${panel({ title: 'Accounts', sub: `${plural(acctRows.length, 'account')}. Industry filter applies; owner matches the account owner or an open-deal owner; stage and close-date filters keep accounts with a matching deal.`, updated: [['Accounts', times.records]], body: table('accounts', acctCols, acctRows, { sort: { key: 'openValue', dir: 'desc' }, limit: 50, href: (r) => `#/account/${encodeURIComponent(r.c.id)}`, emptyTitle: 'No accounts match these filters' }) })}
-        ${historyPanel(12)}
+        ${panel({ title: 'Open pipeline by stage', span: 6, updated: pipeUpdated(), sub: 'Largest deals per stage. Click a row to filter.', body: stageBarTable(f) })}
+        ${panel({ title: 'Open value by close month', span: 6, updated: pipeUpdated(), sub: 'Click a month to filter.', body: closeMonthChart(list, f) })}
+        ${panel({ title: 'Deals', sub: plural(list.length, 'deal'), updated: pipeUpdated(), body: table('deals', dealCols, list, { sort: { key: 'amount', dir: 'desc' }, limit: 50, href: (d) => `#/deal/${encodeURIComponent(d.id)}`, emptyTitle: 'No open deals match these filters' }) })}
+        ${panel({ title: 'Accounts', sub: plural(acctRows.length, 'account'), updated: times.records, body: table('accounts', acctCols, acctRows, { sort: { key: 'openValue', dir: 'desc' }, limit: 50, href: (r) => `#/account/${encodeURIComponent(r.c.id)}`, emptyTitle: 'No accounts match these filters' }) })}
       </div>`;
   }
 
@@ -673,7 +593,7 @@
         body: kv([
           ['Status', text(selected.status)], ['Sent', int(selected.sent)], ['Delivered', int(selected.delivered)],
           ['Opened', trackingOff(selected) ? 'tracking off' : int(selected.opened)], ['Replied', int(selected.replied)],
-          ['Reply rate (replied ÷ delivered)', pct(selected.replied, selected.delivered)], ['Bounced', int(selected.bounced)], ['Meetings', int(selected.meetings)],
+          ['Reply rate', pct(selected.replied, selected.delivered)], ['Bounced', int(selected.bounced)], ['Meetings', int(selected.meetings)],
         ]),
       }) : '';
       const cols = [
@@ -688,8 +608,8 @@
         { key: 'meetings', label: 'Meetings', num: true, render: (c) => int(c.meetings) },
       ];
       outboundPanels = detail +
-        panel({ title: 'Running campaigns', updated: [['Outbound', times.outbound, isStale('lemlist')]], sub: `Each metric has its own scale. Opens of 0 on a campaign that sent mail mean open tracking is off. Click a campaign for details.`, body: chart + sourceWarning('lemlist') }) +
-        panel({ title: 'All campaigns', updated: times.outbound, sub: `${plural(ob.campaigns.length, 'campaign')}. Reply rate = replied ÷ delivered.`, body: table('campaigns', cols, ob.campaigns, { sort: { key: 'sent', dir: 'desc' }, href: (c) => (c.id ? `#/campaigns?c=${encodeURIComponent(c.id)}` : null), highlight: (c) => c.id && c.id === sel }) });
+        panel({ title: 'Running campaigns', updated: [[null, times.outbound, isStale('lemlist')]], sub: 'Click a campaign for details.', body: chart + sourceWarning('lemlist') }) +
+        panel({ title: 'All campaigns', updated: times.outbound, sub: plural(ob.campaigns.length, 'campaign'), body: table('campaigns', cols, ob.campaigns, { sort: { key: 'sent', dir: 'desc' }, href: (c) => (c.id ? `#/campaigns?c=${encodeURIComponent(c.id)}` : null), highlight: (c) => c.id && c.id === sel }) });
     }
 
     // Paid ads
@@ -705,7 +625,7 @@
         { key: 'ctr', label: 'CTR', num: true, sort: (a) => (a.impressions > 0 && isNum(a.clicks) ? a.clicks / a.impressions : null), render: (a) => pct(a.clicks, a.impressions) },
         { key: 'cpc', label: 'Cost / click', num: true, sort: (a) => (a.clicks > 0 && isNum(a.spend) ? a.spend / a.clicks : null), render: (a) => (a.clicks > 0 && isNum(a.spend) ? `$${(a.spend / a.clicks).toFixed(2)}` : DASH) },
         { key: 'cpa', label: 'Cost / conversion', num: true, sort: (a) => (a.conversions > 0 && isNum(a.spend) ? a.spend / a.conversions : null), render: (a) => (a.conversions > 0 && isNum(a.spend) ? moneyFull(a.spend / a.conversions) : DASH) },
-      ], ads, { sort: { key: 'name', dir: 'asc' } }) + '<p class="note">Each channel reports over its own window (shown under the name), so totals aren’t comparable period-for-period. Ratios are computed from the reported figures.</p>'
+      ], ads, { sort: { key: 'name', dir: 'asc' } }) + '<p class="note">Each channel reports over its own window (under its name).</p>'
       : empty('No ad platform data in the snapshot', '');
 
     // Spend by month
@@ -721,11 +641,8 @@
       const thisMonth = todayYmd().slice(0, 7);
       const noActual = sp.months.filter((m) => !isNum(m.actual));
       const missing = noActual.filter((m) => !m.month || m.month <= thisMonth).map((m) => (m.month ? monthLong(m.month) : m.label));
-      const future = noActual.filter((m) => m.month && m.month > thisMonth).map((m) => monthLong(m.month));
       spendBody = Charts.legend(series) + chartSlot((w) => Charts.columns({ width: w, height: 220, data, series, yFormat: money, title: 'Planned vs actual spend' })) +
-        (missing.length ? `<p class="note warn">No actuals entered for ${esc(missing.join(', '))}; those months show planned only.</p>` : '') +
-        (future.length ? `<p class="note">${esc(future.join(', '))} haven\u2019t happened yet, so they show planned only.</p>` : '') +
-        (sp.currency ? '' : '<p class="note">The budget sheet doesn’t state a currency.</p>') +
+        (missing.length ? `<p class="note warn">No actuals entered for ${esc(missing.join(', '))}.</p>` : '') +
         (sp.channels.length ? `<h3>Spend by budget channel</h3>${Charts.barTable({ labelHeader: 'Channel', rows: sp.channels.map((c) => ({ label: c.name || DASH, values: { amount: c.amount } })), columns: [{ key: 'amount', label: 'Amount', format: moneyFull }] })}` : '');
     }
 
@@ -759,12 +676,12 @@
       ], sh.items, { sort: { key: 'start', dir: 'desc' } });
     }
 
-    return `<div class="page-head"><div><h1>Campaigns</h1><p>Outbound sequences, paid channels, budget and events.</p></div></div>
+    return `<div class="page-head"><div><h1>Campaigns</h1></div></div>
       <div class="grid">
         ${outboundPanels}
-        ${panel({ title: 'Paid ads by channel', span: 6, updated: [['Ad exports', times.marketing, false, true]], sub: 'Spend, clicks and conversions as reported by each ad platform export. Each metric has its own scale.', body: adsBody })}
-        ${panel({ title: 'Marketing spend by month', span: 6, updated: [['Budget sheet', times.marketing, isStale('sheets'), true]], sub: sp ? esc(sp.source || '') : '', body: spendBody + sourceWarning('sheets') })}
-        ${panel({ title: 'Tradeshows: lead → MQL → SQL', updated: [['Show calendar', times.marketing, isStale('sheets'), true]], sub: 'Events grouped by spend, on one shared scale (people). Hover for conversion and cost per lead from the data.', body: showsBody + sourceWarning('sheets') })}
+        ${panel({ title: 'Ad spend vs results', span: 6, updated: times.marketing, body: adsBody })}
+        ${panel({ title: 'Marketing spend by month', span: 6, updated: [[null, times.marketing, isStale('sheets')]], body: spendBody + sourceWarning('sheets') })}
+        ${panel({ title: 'Tradeshows: lead → MQL → SQL', updated: [[null, times.marketing, isStale('sheets')]], sub: 'Hover for conversion and cost per lead.', body: showsBody })}
       </div>`;
   }
 
@@ -854,7 +771,6 @@
       ['Account', d.companyId ? accountLink(d.companyId) : 'No account in snapshot'], ['Pipeline', text(d.pipeline)], ['Stage', text(d.stage)], ['Status', status],
       ['Owner', text(d.owner)], ['Amount', moneyFull(d.amount)], ['Probability', probText(d.probability)], ['Weighted', moneyFull(weightedOf(d))],
       ['Close date', `${fmtDay(d.close)}${passed ? ' <span class="flag">passed</span>' : ''}`], ['Created', fmtDay(d.created)], ['Segment (industry)', text(d.segment)],
-      ['Source', fromHubspot ? 'HubSpot export' : 'records.json'],
     ]) + (d.sheet ? `<h3>On the master Sheet <span class="muted">(as of ${esc(fmtUpdated(times.sheet))})</span></h3>${kv([['Sheet stage', text(d.sheet.stage)], ['Sheet amount', moneyFull(d.sheet.amount)], ['Sheet close', fmtDay(d.sheet.close)], ['Sheet owner', text(d.sheet.owner)], ['Sheet probability', isNum(d.sheet.probability) ? `${d.sheet.probability}%` : DASH]])}` : '<p class="desc muted">Not among the master Sheet’s open rows.</p>') +
       (flags.length ? flags.map((x) => `<p class="note bad">${esc(x)}</p>`).join('') : '');
     const m = c ? accountMeetings(c) : { upcoming: [], recent: [] };
@@ -868,7 +784,7 @@
           ['Contacts', int(c.contactCount)], ['Deals at account', `${int(acctDeals.length)} (${int(acctDeals.filter((x) => x.open).length)} open)`],
           ['Last contact', lastContactText(c.lastContact)], ['Emails logged', int(c.emailCount)],
         ]) }) : panel({ title: 'Account', span: 6, updated: times.records, body: empty('No account for this deal in records.json', 'Meetings, notes and recordings are attached to accounts, so none are shown.') })}
-        ${c ? panel({ title: 'Meetings', span: 6, updated: times.records, sub: 'Account meetings from the CRM', body: `<h3>Upcoming</h3>${meetingList(m.upcoming, 'No upcoming meetings', 3)}<h3>Recent</h3>${meetingList(m.recent, 'No past meetings', 5)}` }) : ''}
+        ${c ? panel({ title: 'Meetings', span: 6, updated: times.records, body: `<h3>Upcoming</h3>${meetingList(m.upcoming, 'No upcoming meetings', 3)}<h3>Recent</h3>${meetingList(m.recent, 'No past meetings', 5)}` }) : ''}
         ${c ? panel({ title: 'Notes', span: 6, updated: times.records, body: notesBlock(c, 3) }) : ''}
         ${c ? panel({ title: 'Recording summaries & action items', span: 6, updated: [['Recordings', times.recordings || times.records, isStale('fathom')]], body: recordingsBlock(c, 3) }) : ''}
       </div>`;
@@ -935,11 +851,10 @@
     ];
     return `<div class="page-head"><div><h1>Meeting prep</h1><p>Accounts with a meeting in the last or next ${PREP_WINDOW_DAYS} days, plus every account in the prep brief.</p></div></div>
       <div class="grid">${panel({
-        title: 'Accounts', updated: [['CRM', times.records], ['Prep brief', times.operator]],
-        sub: `${plural(rows.length, 'account')}. Sorted by next meeting.`,
+        title: 'Accounts', updated: times.operator,
+        sub: plural(rows.length, 'account'),
         body: table('prep', cols, rows, {
           sort: { key: 'next', dir: 'asc' }, href: (r) => `#/prep/${encodeURIComponent(r.c.id)}`, emptyTitle: 'No accounts with recent or upcoming meetings',
-          foot: D.unmatchedRecordings ? `${plural(D.unmatchedRecordings, 'recording')} in the data ${D.unmatchedRecordings === 1 ? 'isn’t' : 'aren’t'} linked to any account, so ${D.unmatchedRecordings === 1 ? 'it doesn’t' : 'they don’t'} appear here.` : '',
         }),
       })}</div>`;
   }
@@ -971,7 +886,7 @@
         ${panel({ title: 'Recent meetings', span: 6, updated: times.records, body: meetingList(recent, 'No past meetings in the CRM', 5) })}
         ${prepPanels}
         ${panel({ title: 'Open deals', updated: pipeUpdated(), body: (() => { const od = c.dealIds.map((x) => dealById.get(x)).filter((x) => x && x.open); return od.length ? `<ul class="actions">${od.map((x) => `<li><a href="#/deal/${encodeURIComponent(x.id)}">${text(x.name)}</a> · ${text(x.pipeline)} · ${text(x.stage)} · ${moneyFull(x.amount)}${x.close ? ` · close ${fmtDay(x.close)}` : ''}</li>`).join('')}</ul>` : empty('No open deals at this account', ''); })() })}
-        ${panel({ title: 'Recording summaries & next steps', sub: 'Summaries and action items exactly as recorded in the data.', updated: [['Recordings', times.recordings || times.records, isStale('fathom')]], body: recordingsBlock(c, 3) })}
+        ${panel({ title: 'Recording summaries & next steps', updated: [['Recordings', times.recordings || times.records, isStale('fathom')]], body: recordingsBlock(c, 3) })}
         ${panel({ title: 'Recent notes', updated: times.records, body: notesBlock(c, 3) })}
       </div>`;
   }
@@ -1142,12 +1057,8 @@
     const late = Number.isFinite(ms) && Date.now() - ms > LATE_MS;
     box.className = `refreshed ${!at ? '' : late ? 'late' : 'ok'}`;
     box.firstElementChild.textContent = at ? `Last refreshed ${fmtUpdated(at)}` : `Built ${fmtUpdated(D.builtAt)}`;
-    const parts = [];
-    if (late) parts.push('refresh is late');
-    if (changed) parts.push(`data changed ${fmtUpdated(changed)}`);
-    if (R && R.snapshot && R.snapshot.publishedAt) parts.push(`snapshot ${fmtUpdated(R.snapshot.publishedAt)}`);
-    if (!refreshDoc && at) parts.push('from data.js');
-    box.lastElementChild.textContent = parts.join(' · ');
+    // Details stay in the tooltip; the sub line only speaks up when late.
+    box.lastElementChild.textContent = late ? 'refresh is late' : '';
     box.title = [at && `Last check: ${fmtDateTime(at)}`, changed && `Data last changed: ${fmtDateTime(changed)}`,
       R && R.snapshot && `Snapshot published: ${fmtDateTime(R.snapshot.publishedAt)}`].filter(Boolean).join('\n');
   }
@@ -1190,7 +1101,6 @@
     const head = el('div', 'panel-head');
     const left = el('div');
     left.append(el('h2', null, 'Analysis'));
-    left.append(el('p', 'sub', 'Written by the Strategy seat from this workspace’s data. Plain text; check the evidence before acting.'));
     const right = el('div');
     if (analysis.state === 'ok') right.append(el('span', 'updated', `Generated ${fmtUpdated(analysis.doc.generated_at)}`));
     head.append(left, right);
@@ -1227,19 +1137,15 @@
       list.append(li);
     }
     box.append(list);
-    const extra = el('div', 'analysis-extra');
-    const changes = Array.isArray(doc.changed_since_last) ? doc.changed_since_last : [doc.changed_since_last];
-    extra.append(el('h4', null, 'Changed since the last analysis'));
-    const cu = el('ul');
-    for (const c of changes) cu.append(el('li', null, c));
-    extra.append(cu);
+    // Data-quality flags fold into one line; open it to read them.
     if (doc.data_quality_flags.length) {
-      extra.append(el('h4', null, 'Data-quality flags'));
+      const d = el('details', 'analysis-extra');
+      d.append(el('summary', null, `${doc.data_quality_flags.length} data caveat${doc.data_quality_flags.length === 1 ? '' : 's'}`));
       const fu = el('ul');
       for (const f of doc.data_quality_flags) fu.append(el('li', null, window.GtmInsights.flagText(f)));
-      extra.append(fu);
+      d.append(fu);
+      box.append(d);
     }
-    box.append(extra);
   }
   function loadAnalysis() {
     if (!window.fetch || !window.GtmInsights) { analysis = { state: 'unreachable' }; fillAnalysis(); return; }
