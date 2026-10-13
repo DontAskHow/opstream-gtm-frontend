@@ -6,7 +6,7 @@ async function main(){
  const html=fs.readFileSync('source/workspace.html','utf8').replace('/* FRONTEND_MODULES */',()=>['globalThis.GTM_PIPELINE_DEF='+fs.readFileSync('shared/open-pipeline.json','utf8').trim()+';',...modules.map(f=>fs.readFileSync(f,'utf8'))].join('\n'));
  fs.writeFileSync('out/index.html',html);fs.mkdirSync('out/gtm',{recursive:true});fs.writeFileSync('out/gtm/index.html',html);
  fs.mkdirSync('out/data',{recursive:true});fs.writeFileSync('out/data/records.json',JSON.stringify({companies:[],unmatchedRecordings:[]}));fs.writeFileSync('out/data/transcripts.json','{}');
- require('./scripts/synthetic-data.cjs');
+ require('./scripts/synthetic-data.cjs').writeDemo();
  await esbuild.build({entryPoints:['evidence-renderer.mjs'],bundle:true,format:'iife',globalName:'OpstreamEvidence',platform:'browser',target:'es2022',outfile:'out/assets/evidence-renderer.js',minify:true});
  console.log('Built frontend. Production data and authenticated APIs are not included.');
 } main().catch(e=>{console.error(e);process.exitCode=1;});
