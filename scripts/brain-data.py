@@ -358,18 +358,23 @@ def main():
         return 'Unknown'
 
     stage_catalog = {}
+    stage_closed = {}  # (pipeline, stage) -> the stage's isClosed, when the catalog has it
     pipeline_labels = {}
     if 'hubspot_pipelines' in tables:
         cols = {r[1] for r in q(cur, 'PRAGMA table_info(hubspot_pipelines)')}
         if {'pipeline_id', 'stage_id', 'stage_label'} <= cols:
             has_pipe_label = 'pipeline_label' in cols
-            selected = 'pipeline_id, stage_id, stage_label' + (', pipeline_label' if has_pipe_label else '')
+            has_closed = 'is_closed' in cols
+            selected = ('pipeline_id, stage_id, stage_label' + (', pipeline_label' if has_pipe_label else '')
+                        + (', is_closed' if has_closed else ''))
             for row in q(cur, 'SELECT %s FROM hubspot_pipelines' % selected):
                 pid, sid, slabel = str(row[0] or ''), str(row[1] or ''), row[2]
                 if pid and sid and slabel:
                     stage_catalog[(pid, sid)] = str(slabel).strip()
                 if has_pipe_label and pid and row[3]:
                     pipeline_labels[pid] = str(row[3]).strip()
+                if has_closed and pid and sid and row[-1] is not None:
+                    stage_closed[(pid, sid)] = bool(row[-1])
     for pid, expected in (('686463412', 'renewal/CS'), ('855205465', 'renewal/CS')):
         label = pipeline_labels.get(pid)
         if label and not re.search(r'renew|customer|success', label, flags=re.I):
@@ -387,6 +392,20 @@ def main():
             return raw
         # Never show a raw HubSpot stage ID. Callers label it as unsynced.
         return None
+
+    def hubspot_stage_label(raw, pipeline):
+        """HubSpot's own stage label. stage_label() prefers the Sheet's."""
+        return stage_catalog.get((str(pipeline or ''), str(raw or ''))) or NAMED_STAGES.get(raw)
+
+    def hubspot_closed(dp):
+        """The stage's isClosed decides. hs_is_closed only when the catalog has no answer."""
+        known = stage_closed.get((str(dp.get('pipeline') or ''), str(dp.get('dealstage') or '')))
+        if known is not None:
+            return known
+        flag = dp.get('hs_is_closed')
+        if flag is not None and str(flag).strip() != '':
+            return str(flag).strip().lower() == 'true'
+        return (dp.get('dealstage') or '') in CLOSED_STAGES
 
     def describe_deal(deal_name, stage_label_val, amount, close):
         """Human-readable deal line reconciled from all available fields.
@@ -557,6 +576,9 @@ def main():
                 'close': close_day, 'created': date_only(dp.get('createdate')),
                 'owner': owner_label(dp.get('hubspot_owner_id')),
                 'closed': (raw_stage or '') in CLOSED_STAGES,
+                'pipeline': str(dp.get('pipeline') or ''),
+                'hubspotStageLabel': hubspot_stage_label(raw_stage, dp.get('pipeline')),
+                'hubspotClosed': hubspot_closed(dp),
                 'history': [], 'amountHistory': [], 'closeHistory': [], 'refs': [dref]})
         deal_objs.sort(key=lambda d: (d['closed'], d['created'] or ''))
 
@@ -909,6 +931,9 @@ def main():
             'note': '',
             'refs': [f'hubspot:deals:{did}'],
             'closed': False,
+            # The open book reads these: HubSpot's stage and isClosed, not the Sheet's stage.
+            'hubspotStageLabel': hubspot_stage_label(dp.get('dealstage'), pipe),
+            'hubspotClosed': hubspot_closed(dp),
         }
         # Renewals, current agreements, and other excluded deals stay in the
         # list so a lookup can say they are not in the open book. The open

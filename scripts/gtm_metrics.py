@@ -1,11 +1,14 @@
 """Shared GTM headline metrics.
 
 The browser copy lives in workspace-model.cjs. Keep the rules aligned:
-open-pipeline exclusions, Phoenix calendar dates, quiet days, unworked leads,
-and commit-versus-forecast wording. Callers describe these numbers; they do
-not compute a second one.
+Phoenix calendar dates, quiet days, unworked leads, and commit-versus-forecast
+wording. The open book is not copied: it is read from shared/workspace-scope.json
+and shared/open-pipeline.json, as scripts/workspace-data.py reads it. Callers
+describe these numbers; they do not compute a second one.
 """
+import json
 import math
+import os
 import re
 from datetime import date, datetime, timedelta, timezone
 
@@ -243,7 +246,7 @@ def sheet_class(deal):
 
 
 def is_renewal_record(deal):
-    if sheet_class(deal) == "active":
+    if is_open_pipeline(deal):
         return False
     return is_renewal_pipeline(deal) or _title_is_renewal(deal)
 
@@ -334,46 +337,61 @@ def renewal_book(deals, today):
     }
 
 
-def hubspot_looks_open(deal, today):
-    """HubSpot-shaped open check. The sheet, not this function, defines the book."""
-    if not deal or deal.get("closed") is True:
-        return False
-    if is_test_record(deal):
-        return False
-    blob = _stage_blob(deal)
-    if _closed_blob(blob):
-        return False
-    if "disqualif" in blob:
-        return False
-    if re.search(r"\bon hold\b", blob):
-        return False
-    if is_renewal_pipeline(deal):
-        return False
-    if "current agreement" in blob:
-        return False
-    if re.search(r"\brenewal\b", blob):
-        return False
-    if close_date_passed(deal, today):
-        return False
-    return True
+# The open book is the HubSpot Sales Pipeline, by the same rules as
+# scripts/workspace-data.py: both read these two files.
+_SHARED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "shared")
+with open(os.path.join(_SHARED, "workspace-scope.json"), encoding="utf-8") as _fh:
+    SALES_PIPELINE_ID = json.load(_fh)["salesPipelineId"]
+with open(os.path.join(_SHARED, "open-pipeline.json"), encoding="utf-8") as _fh:
+    PIPELINE_DEF = json.load(_fh)
 
 
-def is_open_pipeline(deal, today):
-    """The open book is the master sheet's active new-business rows.
+def _letters(value):
+    return re.sub(r"[^a-z]", "", str(value or "").lower())
 
-    A past close date stays in the book. A renewal pipeline does not override
-    the sheet. A deal that is not on the sheet is not in the total.
+
+_ON_HOLD_KEYS = frozenset(_letters(label) for label in PIPELINE_DEF["onHoldStageLabels"])
+
+
+def hubspot_stage_label(deal):
+    """HubSpot's stage label. A Sheet override keeps it in hubspotStageLabel."""
+    for key in PIPELINE_DEF["fields"]["stageLabel"]:
+        if (deal or {}).get(key) is not None:
+            return str(deal[key])
+    return ""
+
+
+def hubspot_closed(deal):
+    """HubSpot closed the deal: brain-data.py sets a flag from the stage's isClosed. A stage name never decides it."""
+    return any((deal or {}).get(k) is True for k in PIPELINE_DEF["closedRule"]["dealFlags"])
+
+
+def _sales_pipeline_status(deal):
+    """'open', 'onHold', or '' (closed, or not in the Sales Pipeline)."""
+    if not deal or pipeline_id(deal) != SALES_PIPELINE_ID or hubspot_closed(deal):
+        return ""
+    return "onHold" if _letters(hubspot_stage_label(deal)) in _ON_HOLD_KEYS else "open"
+
+
+def is_open_pipeline(deal, today=None):
+    """The open book: Sales Pipeline deals HubSpot has not closed, not On Hold.
+
+    A deal counts with or without a company or a Sheet row. The Sheet does not
+    decide membership, and a Sheet row with no HubSpot deal is not counted. A
+    past close date stays in the book and is flagged.
     """
-    return sheet_class(deal) == "active"
+    return _sales_pipeline_status(deal) == "open"
+
+
+def is_on_hold(deal):
+    return _sales_pipeline_status(deal) == "onHold"
 
 
 def is_hubspot_only_open(deal, today):
-    """A non-renewal HubSpot deal that looks open and is not on the sheet."""
+    """An open-book deal with no Sheet row. It is in the book."""
     if sheet_class(deal):
         return False
-    if is_renewal_record(deal):
-        return False
-    return hubspot_looks_open(deal, today)
+    return is_open_pipeline(deal, today)
 
 
 def _money_sum(deals):
@@ -389,7 +407,7 @@ def _money_sum(deals):
 
 
 def on_hold_book(deals):
-    rows = [d for d in (deals or []) if sheet_class(d) == "on hold"]
+    rows = [d for d in (deals or []) if is_on_hold(d)]
     return {"count": len(rows), "amount": _money_sum(rows), "deals": rows}
 
 
@@ -402,33 +420,17 @@ def exclusion_reason(deal, today):
     """Why a deal is outside the open book. None when it is in the book."""
     if is_open_pipeline(deal, today):
         return None
-    kind = sheet_class(deal)
-    if kind == "on hold":
+    if is_on_hold(deal):
         return "On Hold"
-    if kind == "disqualified":
-        return "Disqualified"
-    if kind == "closed":
-        return "closed"
-    if is_hubspot_only_open(deal, today):
-        return "In HubSpot, not on the Sheet"
-    if (deal or {}).get("closed") is True:
-        return "closed"
-    if is_test_record(deal):
-        return "verification fixture"
-    blob = _stage_blob(deal)
-    if _closed_blob(blob):
-        return "closed won or lost"
-    if "disqualif" in blob:
-        return "Disqualified"
-    if re.search(r"\bon hold\b", blob):
-        return "On Hold"
-    if is_renewal_pipeline(deal) or re.search(r"\brenewal\b", blob):
+    if (deal or {}).get("sheetOnly"):
+        return "On the Sheet, not in HubSpot"
+    if is_renewal_record(deal):
         return "renewal"
-    if "current agreement" in blob:
-        return "current agreement"
-    if close_date_passed(deal, today):
-        return "past close date"
-    return "excluded"
+    if pipeline_id(deal) != SALES_PIPELINE_ID:
+        return "not in the Sales Pipeline" if pipeline_id(deal) else "pipeline not recorded"
+    if "disqualif" in hubspot_stage_label(deal).lower():
+        return "Disqualified"
+    return "closed"
 
 
 def stage_display(stage):
@@ -814,6 +816,8 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
             "companyName": account_name((company or {}).get("name"), opp.get("dealName") or opp.get("name")) or company_name((company or {}).get("name") or opp.get("name")),
             "dealName": opp.get("dealName") or "",
             "pipeline": opp.get("pipeline") or "",
+            "hubspotStageLabel": hubspot_stage_label(opp),
+            "hubspotClosed": hubspot_closed(opp),
             "sheetClass": opp.get("sheetClass") or "",
             "onSheet": opp.get("onSheet") is True,
             "amount": opp.get("amount"),
@@ -849,7 +853,7 @@ def snapshot_metrics(verified, records, today=None, sheet_review=None):
         "today": today,
         "quarterStart": start,
         "quarterEnd": end,
-        "definition": "Open pipeline is the master sheet's active new-business rows. A past close date stays in the book and is flagged. On Hold is a separate line. HubSpot deals that are not on the sheet are not in the total.",
+        "definition": PIPELINE_DEF["definition"],
         "openCount": pipe["count"],
         "openAmount": round_half_up(pipe["openAmount"]),
         "weighted": weighted,
@@ -1054,6 +1058,8 @@ def commit_for_close_month(deals, month, today):
             "pipeline": deal.get("pipeline") or "",
             "sheetClass": deal.get("sheetClass") or "",
             "onSheet": deal.get("onSheet") is True,
+            "hubspotStageLabel": deal.get("hubspotStageLabel"),
+            "hubspotClosed": deal.get("hubspotClosed") is True,
         }
         if not is_open_pipeline(shaped, today):
             continue
