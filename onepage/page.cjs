@@ -223,9 +223,13 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
 
   function header(v, opts = {}) {
     const now = opts.now != null ? opts.now : Date.now();
-    const fresh = v.freshness.map((f) => f.ok
-      ? chip(`${f.label} ${f.lastOkAt ? dateTime(f.lastOkAt).replace(/^.*?, /, '') : DASH}`, 'ok', `${f.label}: last good ${dateTime(f.lastOkAt)}. ${f.detail || ''}`)
-      : chip(`${f.label} down · last good ${dateTime(f.lastOkAt)}`, 'alert', `${f.label} failed at ${dateTime(f.at)}: ${f.detail || ''}. The page shows its last good data.`)).join('');
+    // One chip per user-facing source (view.cjs freshnessChips); failing internal steps are named in its tooltip.
+    const parts = (f) => (f.failing || []).map((k) => ` ${f.label} ${k.label} failed at ${dateTime(k.at)} (last good ${dateTime(k.lastOkAt)}): ${k.detail || ''}.`).join('');
+    const fresh = v.freshness.map((f) => (f.level === 'alert' || !f.ok)
+      ? chip(`${f.label} down · last good ${dateTime(f.lastOkAt)}`, 'alert', `${f.label} failed at ${dateTime(f.at)}: ${f.detail || ''}. The page shows its last good data.${parts(f)}`)
+      : f.level === 'warn'
+        ? chip(`${f.label} ${f.lastOkAt ? dateTime(f.lastOkAt).replace(/^.*?, /, '') : DASH} · ${f.failing.map((k) => k.label).join(', ')} down`, 'warn', `${f.label}: last good ${dateTime(f.lastOkAt)}.${parts(f)} The page shows the last good data for ${f.failing.length === 1 ? 'it' : 'them'}.`)
+        : chip(`${f.label} ${f.lastOkAt ? dateTime(f.lastOkAt).replace(/^.*?, /, '') : DASH}`, 'ok', `${f.label}: last good ${dateTime(f.lastOkAt)}. ${f.detail || ''}`)).join('');
     const flags = v.flags.filter((f) => f.level !== 'alert').map((f) => chip(f.label, f.level, f.text)).join('');
     const live = v.live && v.live.problem ? chip(`Showing the last good data: ${LIVE_PROBLEMS[v.live.problem] || v.live.problem}`, 'alert', `Checked ${dateTime(v.live.checkedAt)}`) : '';
     return `<header class="top"><div class="top-in">

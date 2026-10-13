@@ -88,6 +88,7 @@ export function renderAppHtml() {
   return shell({ csp: "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'",
     header: page.loadingHeader(), main: '<p class="loading" id="loading">Loading the workspace…</p>', drawer: '', data: null,
     scripts: [readFileSync(join(HERE, '..', 'workspace', 'src', 'lost-reasons.js'), 'utf8'), readFileSync(join(HERE, '..', 'workspace', 'src', 'insights.js'), 'utf8'),
+      `window.GtmFreshnessSources = ${safeJson(JSON.parse(readFileSync(join(HERE, '..', 'config', 'freshness-sources.json'), 'utf8')))};`,
       asset('view.cjs'), asset('page.cjs')] });
 }
 

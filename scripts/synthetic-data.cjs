@@ -219,7 +219,10 @@ function brainFixture({ synced = false, scrub = SYNTHETIC_SCRUB } = {}) {
   table('sync_outcomes', ['source', 'at', 'ok', 'route', 'http', 'detail', 'last_ok_at']);
   add('sync_outcomes', ['hubspot', '2026-10-13T15:50:00Z', 1, null, null, 'synthetic', '2026-10-13T15:50:00Z'], ['sheets', '2026-10-13T15:45:00Z', 1, null, null, 'synthetic', '2026-10-13T15:45:00Z'],
     ['fathom', '2026-10-13T15:40:00Z', 1, null, null, 'synthetic', '2026-10-13T15:40:00Z'], ['lemlist', '2026-10-13T15:41:00Z', 1, null, null, 'synthetic', '2026-10-13T15:41:00Z'],
-    ['ga4', '2026-10-13T15:30:00Z', 1, null, null, 'synthetic', '2026-10-13T15:30:00Z'], ['otterly', '2026-10-13T13:19:05Z', 0, null, null, 'skipped: quota', '2026-10-03T13:18:31Z']);
+    ['ga4', '2026-10-13T15:30:00Z', 1, null, null, 'synthetic', '2026-10-13T15:30:00Z'], ['otterly', '2026-10-13T13:19:05Z', 0, null, null, 'skipped: quota', '2026-10-03T13:18:31Z'],
+    // Internal sync steps: no chip of their own, they roll up into HubSpot / Lemlist (config/freshness-sources.json).
+    ['hubspot_contact_backfill', '2026-10-13T14:10:00Z', 1, null, null, 'synthetic', '2026-10-13T14:10:00Z'], ['hubspot_forms', '2026-10-13T15:49:00Z', 1, null, null, 'synthetic', '2026-10-13T15:49:00Z'],
+    ['lemlist_leads', '2026-10-13T15:41:00Z', 1, null, null, 'synthetic', '2026-10-13T15:41:00Z']);
   table('ga4_reports', ['report_key', 'property_id', 'params_json', 'result_json', 'fetched_at']);
   add('ga4_reports', ['channels_90d', 'p1', '{}', { metricHeaders: [{ name: 'sessions' }], rows: [{ dimensionValues: [{ value: 'Unassigned' }], metricValues: [{ value: '400' }] }, { dimensionValues: [{ value: 'Direct' }], metricValues: [{ value: '600' }] }] }, '2026-10-13T15:30:00Z']);
 

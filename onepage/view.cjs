@@ -6,8 +6,8 @@
   'use strict';
 
   const libs = () => (typeof module === 'object' && module.exports
-    ? { lost: require('../workspace/src/lost-reasons.js'), insights: require('../workspace/src/insights.js') }
-    : { lost: root.GtmLostReasons, insights: root.GtmInsights });
+    ? { lost: require('../workspace/src/lost-reasons.js'), insights: require('../workspace/src/insights.js'), sources: require('../config/freshness-sources.json') }
+    : { lost: root.GtmLostReasons, insights: root.GtmInsights, sources: root.GtmFreshnessSources });
   const SALES = 'default';
   const TZ = 'America/Phoenix';
   const fmt = new Intl.DateTimeFormat('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -58,10 +58,42 @@
     return data;
   }
 
+  // Freshness chips (config/freshness-sources.json): one per listed source, in config order.
+  // Internal sync steps roll up into their parent: a failing child turns an ok parent amber
+  // ('warn') and is named in the chip's tooltip; a failing parent is red ('alert'). Unlisted
+  // rows named '<parent>_…' roll up too; any other unlisted row shows only while it fails.
+  function freshnessChips(rows, cfg) {
+    const list = (cfg && cfg.sources) || [];
+    const parentOf = {};
+    for (const p of list) for (const c of Object.keys(p.children || {})) parentOf[c] = p.source;
+    const listed = new Set(list.map((p) => p.source));
+    const byParent = {};
+    const out = [];
+    for (const r of rows || []) {
+      if (listed.has(r.source)) continue;
+      const parent = parentOf[r.source] || list.map((p) => p.source).find((p) => r.source.startsWith(p + '_'));
+      if (parent) (byParent[parent] = byParent[parent] || []).push(r);
+      else if (!r.ok) out.push({ ...r, level: 'alert', failing: [] });
+    }
+    const chips = [];
+    for (const p of list) {
+      const own = (rows || []).find((r) => r.source === p.source);
+      const kids = byParent[p.source] || [];
+      if (!own && !kids.length) continue;
+      const failing = kids.filter((k) => !k.ok).map((k) => ({ source: k.source, label: (p.children || {})[k.source] || k.label || k.source, at: k.at ?? null, lastOkAt: k.lastOkAt ?? null, detail: k.detail ?? null }));
+      // A parent with no row of its own stands for its children: ok only if all are, last good the oldest.
+      const base = own || { source: p.source, ok: kids.every((k) => k.ok), at: null, detail: null,
+        lastOkAt: kids.map((k) => k.lastOkAt).filter(Boolean).sort()[0] || null };
+      chips.push({ ...base, label: p.label, level: !base.ok ? 'alert' : failing.length ? 'warn' : 'ok', failing });
+    }
+    return chips.concat(out);
+  }
+
   // The view model the page renders.
   function buildView(data, refresh, textSha256) {
-    const { lost, insights } = libs();
+    const { lost, insights, sources } = libs();
     const v = applyStamps(structuredClone(data), refresh, textSha256);
+    v.freshness = freshnessChips(v.freshness, sources);
     v.meta.asOf = v.meta.asOf || v.meta.generatedAt;
     v.closed.reasons = v.closed.lost.length ? lostView(v.closed, lost) : null;
     const cat = {};
@@ -76,7 +108,7 @@
     return v;
   }
 
-  const api = { buildView, applyStamps };
+  const api = { buildView, applyStamps, freshnessChips };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.GtmView = api;
 })(typeof window !== 'undefined' ? window : this);

@@ -1,0 +1,31 @@
+{
+  "about": "Which sync_outcomes rows get a freshness chip in the one-page header (onepage/view.cjs). Only the sources listed here get a chip, in this order. A child row (an internal sync step) has no chip of its own: it rolls up into its parent, and a failing child turns the parent amber (red when the parent itself failed) and is named in the parent chip's tooltip. An unlisted row named '<parent>_…' rolls up into that parent. Any other unlisted row is hidden while it is ok and shown as its own red chip when it fails, so a failure never disappears. Rules only, no data.",
+  "sources": [
+    {
+      "source": "hubspot",
+      "label": "HubSpot",
+      "children": {
+        "hubspot_contact_backfill": "contact backfill",
+        "hubspot_meeting_backfill": "meeting backfill",
+        "hubspot_forms": "forms",
+        "hubspot_lists": "lists",
+        "hubspot_imports": "imports",
+        "hubspot_extras": "deal history"
+      }
+    },
+    { "source": "sheets", "label": "Sheets" },
+    { "source": "fathom", "label": "Fathom" },
+    { "source": "ga4", "label": "GA4" },
+    {
+      "source": "lemlist",
+      "label": "Lemlist",
+      "children": {
+        "lemlist_activities": "activities",
+        "lemlist_leads": "leads"
+      }
+    },
+    { "source": "otterly", "label": "Otterly" },
+    { "source": "reddit", "label": "Reddit" },
+    { "source": "spend", "label": "Spend" }
+  ]
+}
