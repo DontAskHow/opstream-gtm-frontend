@@ -461,8 +461,16 @@ def finish_build(env):
 # HubSpot per-deal export for the preview (gtm-preview-refresh). It finds the
 # file by shape: {fetchedAt, pipes, stages, deals: [{id, properties}]}.
 LIVE_DEALS = "live_deals.json"
-DEAL_PROPERTIES = ("amount", "closedate", "createdate", "dealname", "dealstage", "hs_deal_stage_probability",
-                   "hs_forecast_probability", "hs_is_closed", "hs_is_closed_won", "hubspot_owner_id", "pipeline")
+# The shape of gtm-ws scripts/hubspot-recon-export.py (88ff273): the deal
+# properties it requests, plus hs_object_id, which HubSpot always returns.
+DEAL_PROPERTIES = ("dealname", "pipeline", "dealstage", "amount", "hs_deal_stage_probability", "hs_forecast_probability",
+                   "closedate", "hubspot_owner_id", "hs_is_closed", "hs_is_closed_won", "createdate",
+                   "hs_lastmodifieddate", "closed_lost_reason", "hs_object_id")
+HUBSPOT_PORTAL_ID = os.environ.get("HUBSPOT_PORTAL_ID") or "21303277"
+SALES_PIPELINE = "default"
+OPEN_BOOK_DEFINITION = ("salesOpen = Sales Pipeline (default), stage not closed per pipeline metadata, not On Hold; "
+                        "salesOnHold = Sales Pipeline On Hold; allPipelinesOpen = every pipeline, stage not closed. "
+                        "weighted = amount x hs_deal_stage_probability.")
 
 
 def safe_write_live_deals(db_path, out, fallback=None):
@@ -473,13 +481,32 @@ def safe_write_live_deals(db_path, out, fallback=None):
         return None
 
 
+def _num(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _rows(con, table, sql, args=()):
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+        return []
+    return con.execute(sql, args).fetchall()
+
+
 def write_live_deals(db_path, out, fallback=None):
     """Write live_deals.json from brain.db. No HubSpot call.
 
+    Same shape as gtm-ws scripts/hubspot-recon-export.py: pipes, stages
+    {pipe, label, closed, prob}, deals [{id, properties, createdAt, updatedAt,
+    archived, url, companyIds, ownerHistory, derived}], companies {id: {name,
+    domain}}, owners {id: {name, email, archived}}, openBook. fetchedAt (last
+    good HubSpot sync) is extra; the preview Lambda reads it.
+
     Stage isClosed and probability come from hubspot_pipelines. When they are
-    missing (the table predates them, or an older sync rewrote it), fallback's
-    stages are used, typically the previous snapshot's export. Without either,
-    no file is written rather than one that marks every deal open.
+    missing (an older sync rewrote the table), fallback's stages are used,
+    typically the previous snapshot's export. Without either, no file is
+    written rather than one that marks every deal open.
     """
     con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
     try:
@@ -490,7 +517,28 @@ def write_live_deals(db_path, out, fallback=None):
             "ORDER BY pipeline_id, display_order, stage_id" % meta).fetchall()
         deal_rows = con.execute(
             "SELECT hs_id, properties_json FROM hubspot_objects WHERE object_type='deals'").fetchall()
+        extras = {r[0]: (json.loads(r[1] or "[]"), json.loads(r[2] or "[]")) for r in _rows(
+            con, "hubspot_deal_extras", "SELECT deal_id, company_ids, owner_history FROM hubspot_deal_extras")}
+        assoc = {}
+        for deal_id, company_id in con.execute(
+                "SELECT from_id, to_id FROM hubspot_associations WHERE from_type='deals' AND to_type='companies' "
+                "ORDER BY from_id, to_id"):
+            assoc.setdefault(str(deal_id), []).append(str(company_id))
+        owner_cols = {r[1] for r in con.execute("PRAGMA table_info(hubspot_owners)")}
+        owner_rows = con.execute("SELECT id, first_name, last_name, email, %s FROM hubspot_owners ORDER BY id"
+                                 % ("archived" if "archived" in owner_cols else "NULL")).fetchall()
         fetched = con.execute("SELECT last_ok_at FROM sync_outcomes WHERE source='hubspot'").fetchone()
+        deal_ids = [str(r[0]) for r in deal_rows]
+        company_ids = sorted({c for d in deal_ids for c in (extras.get(d, (None,))[0] or assoc.get(d, []))},
+                             key=lambda x: (len(x), x))
+        companies = {}
+        for part in range(0, len(company_ids), 500):
+            ids = company_ids[part:part + 500]
+            for hs_id, raw in con.execute(
+                    "SELECT hs_id, properties_json FROM hubspot_objects WHERE object_type='companies' AND hs_id IN (%s)"
+                    % ",".join("?" * len(ids)), ids):
+                props = json.loads(raw or "{}")
+                companies[str(hs_id)] = {"name": props.get("name"), "domain": props.get("domain")}
     finally:
         con.close()
     pipes, stages = {}, {}
@@ -506,18 +554,68 @@ def write_live_deals(db_path, out, fallback=None):
         else:
             log("WARNING: live_deals: no stage isClosed metadata. Not writing " + LIVE_DEALS)
             return None
+    prev_owners = (fallback or {}).get("owners") or {}
+    owners = {}
+    for oid, first, last, email, archived in owner_rows:
+        name = " ".join(x for x in (first, last) if x).strip() or email or str(oid)
+        if archived is None:
+            archived = bool((prev_owners.get(str(oid)) or {}).get("archived"))
+        owners[str(oid)] = {"name": name, "email": email or None, "archived": bool(archived)}
+    for c in companies.values():
+        c["name"] = c["name"] or None
+        c["domain"] = c["domain"] or None
+
+    book = {k: {"count": 0, "amount": 0.0, "weighted": 0.0, "noAmount": 0}
+            for k in ("salesOpen", "salesOnHold", "allPipelinesOpen")}
     deals = []
     for hs_id, raw in deal_rows:
+        hs_id = str(hs_id)
         try:
-            props = json.loads(raw or "{}")
+            stored = json.loads(raw or "{}")
         except ValueError:
-            props = {}
-        deals.append({"id": str(hs_id), "properties": {k: props.get(k) for k in DEAL_PROPERTIES}})
+            stored = {}
+        p = {k: stored.get(k) for k in DEAL_PROPERTIES}
+        p["hs_object_id"] = p["hs_object_id"] or hs_id
+        cids, history = extras.get(hs_id, (assoc.get(hs_id, []), []))
+        st = stages.get(p.get("dealstage")) or {}
+        # isClosed comes from the pipeline stage metadata; hs_is_closed only when the stage is unknown.
+        closed = st["closed"] if st else str(p.get("hs_is_closed")).lower() == "true"
+        amount, prob = _num(p.get("amount")), _num(p.get("hs_deal_stage_probability"))
+        on_hold = (st.get("label") or "").strip().lower() == "on hold"
+        derived = {
+            "stageId": p.get("dealstage"), "stageLabel": (st.get("label") or "").strip() or None,
+            "pipelineId": p.get("pipeline"), "pipeline": pipes.get(p.get("pipeline")),
+            "amount": amount, "probability": prob,
+            "weighted": amount * prob if amount is not None and prob is not None else None,
+            "isClosed": closed, "onHold": on_hold,
+            "owner": (owners.get(str(p.get("hubspot_owner_id") or "")) or {}).get("name"),
+        }
+        deals.append({"id": hs_id, "properties": p, "createdAt": p.get("createdate"),
+                      "updatedAt": p.get("hs_lastmodifieddate"), "archived": False,
+                      "url": "https://app.hubspot.com/contacts/%s/record/0-3/%s" % (HUBSPOT_PORTAL_ID, hs_id),
+                      "companyIds": list(cids), "ownerHistory": list(history), "derived": derived})
+        if closed:
+            continue
+        keys = ["allPipelinesOpen"]
+        if p.get("pipeline") == SALES_PIPELINE:
+            keys.append("salesOnHold" if on_hold else "salesOpen")
+        for k in keys:
+            b = book[k]
+            b["count"] += 1
+            b["amount"] += amount or 0
+            b["weighted"] += derived["weighted"] or 0
+            b["noAmount"] += amount is None
     deals.sort(key=lambda d: (len(d["id"]), d["id"]))
+    open_book = {"definition": OPEN_BOOK_DEFINITION,
+                 **{k: {**v, "amount": round(v["amount"], 2), "weighted": round(v["weighted"], 2)} for k, v in book.items()}}
     doc = {"fetchedAt": fetched[0] if fetched and fetched[0] else None,
-           "pipes": dict(sorted(pipes.items())), "stages": stages, "deals": deals}
+           "pipes": dict(sorted(pipes.items())), "stages": stages, "deals": deals,
+           "companies": companies, "owners": owners, "openBook": open_book}
     (Path(out) / LIVE_DEALS).write_text(json.dumps(doc, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    log("live_deals: %d deals, %d pipelines, %d stages" % (len(deals), len(pipes), len(stages)))
+    log("live_deals: %d deals (%d with a company, %d with owner history), %d pipelines, %d stages, "
+        "%d companies, %d owners; sales open %d" % (
+            len(deals), sum(1 for d in deals if d["companyIds"]), sum(1 for d in deals if d["ownerHistory"]),
+            len(pipes), len(stages), len(companies), len(owners), book["salesOpen"]["count"]))
     return doc
 
 
@@ -868,12 +966,23 @@ def _sync_only(store, published, state_prefix, brain_key):
         log("step failed. Publishing nothing.")
         return int(exc.code or 1)
     snap = assert_real(out)
+    # The Lead Tracker rollup comes from the Sheets sync via sheet-review.py.
+    try:
+        lead_tracker = json.loads((out / "sheet-review.json").read_text(encoding="utf-8")).get("leadTracker")
+    except (OSError, ValueError):
+        lead_tracker = None
+    if not lead_tracker:
+        log("WARNING: sheet-review.json has no leadTracker rollup")
 
     new_hash = content_hash(tree_files(out))
     old_hash = latest.get("contentHash") or content_hash(published_files(store, latest["prefix"]))
     t_build = datetime.now(timezone.utc)
     timing = "sync %.0fs, build %.0fs" % ((t_sync - t0).total_seconds(), (t_build - t_sync).total_seconds())
-    code = EXIT_SYNC_FAILED if failed or exported is None else 0
+    # A source that failed or was skipped (needs a connection, secret missing)
+    # alerts: the page keeps showing its last good data, which goes stale.
+    if skipped:
+        log("WARNING: sources not synced: " + "; ".join(skipped))
+    code = EXIT_SYNC_FAILED if failed or skipped or exported is None or not lead_tracker else 0
     if new_hash == old_hash:
         log("no change (content %s matches %s). Published nothing. %s" % (new_hash[:12], latest.get("runId"), timing))
         return code

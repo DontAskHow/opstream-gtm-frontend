@@ -23,6 +23,7 @@ token, or a portal other than 21303277 exits 3 and does not move watermarks.
 """
 
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -65,7 +66,7 @@ OBJECT_TYPES = {
         "domain", "hs_lastmodifieddate", "hs_object_id", "hubspot_owner_id", "industry",
         "lifecyclestage", "name", "numberofemployees", "phone", "state"]),
     "deals": ("hs_lastmodifieddate", ["amount", "closedate", "createdate", "dealname",
-        "dealstage", "dealtype", "hs_deal_stage_probability", "hs_forecast_probability",
+        "closed_lost_reason", "dealstage", "dealtype", "hs_deal_stage_probability", "hs_forecast_probability",
         "hs_is_closed", "hs_is_closed_won", "hs_lastmodifieddate",
         "hs_object_id", "hubspot_owner_id", "pipeline"]),
     "emails": ("hs_lastmodifieddate", ["hs_createdate", "hs_email_direction",
@@ -92,7 +93,12 @@ OBJECT_TYPES = {
 
 # Deal properties added after the backfill. Rows fetched before then get them
 # once from backfill_deal_props().
-LATER_DEAL_PROPS = ("hs_forecast_probability", "hs_is_closed", "hs_is_closed_won")
+LATER_DEAL_PROPS = ("hs_forecast_probability", "hs_is_closed", "hs_is_closed_won", "closed_lost_reason")
+# Deal extras (companies primary first, owner history) are refreshed for
+# changed deals every run and for all deals this often, because an association
+# edit does not always move a deal's modified date.
+EXTRAS_FULL_HOURS = float(os.environ.get("HUBSPOT_EXTRAS_FULL_HOURS") or 6)
+PRIMARY_COMPANY_TYPE_ID = 5  # HUBSPOT_DEFINED deal -> company "Primary"
 
 # Association pairs observed in the backfill; used to enumerate which
 # to-types to query per changed object. Stored bidirectionally in DB.
@@ -218,6 +224,7 @@ def sync_owners(client, log):
                     str(row.get("firstName") or "").strip(),
                     str(row.get("lastName") or "").strip(),
                     str(row.get("email") or "").strip(),
+                    int(bool(row.get("archived", archived))),
                 )
             after = ((payload.get("paging") or {}).get("next") or {}).get("after")
             if not after or after in seen_after:
@@ -229,11 +236,14 @@ def sync_owners(client, log):
             "CREATE TABLE IF NOT EXISTS hubspot_owners ("
             "id TEXT PRIMARY KEY, first_name TEXT, last_name TEXT, email TEXT)"
         )
+        # Older code inserts without this column and leaves it NULL.
+        if "archived" not in {r[1] for r in con.execute("PRAGMA table_info(hubspot_owners)")}:
+            con.execute("ALTER TABLE hubspot_owners ADD COLUMN archived INTEGER")
         try:
             con.execute("BEGIN")
             con.execute("DELETE FROM hubspot_owners")
             con.executemany(
-                "INSERT INTO hubspot_owners(id, first_name, last_name, email) VALUES(?,?,?,?)",
+                "INSERT INTO hubspot_owners(id, first_name, last_name, email, archived) VALUES(?,?,?,?,?)",
                 list(collected.values()),
             )
             con.commit()
@@ -353,6 +363,75 @@ def backfill_deal_props(client, con, log):
     return seen
 
 
+def _chunks(xs, n):
+    for i in range(0, len(xs), n):
+        yield xs[i:i + n]
+
+
+def sync_deal_extras(client, con, changed_deal_ids, log):
+    """Store per-deal companyIds (primary first) and hubspot_owner_id history.
+
+    Two read-only batch endpoints: v4 deal->company associations (100 ids a call;
+    the association labels say which company is primary) and v3 deals batch read
+    with propertiesWithHistory (50 ids a call; search cannot return history).
+    Changed deals and deals without extras are read every run; all deals once
+    every EXTRAS_FULL_HOURS. A full pass over 600 deals is about 18 calls.
+    """
+    con.execute("CREATE TABLE IF NOT EXISTS hubspot_deal_extras ("
+                "deal_id TEXT PRIMARY KEY, company_ids TEXT, owner_history TEXT, refreshed_at TEXT)")
+    all_ids = [r[0] for r in con.execute("SELECT hs_id FROM hubspot_objects WHERE object_type='deals'")]
+    have = {r[0] for r in con.execute("SELECT deal_id FROM hubspot_deal_extras")}
+    last_full, _run, _note = get_sync_state("hubspot_extras")
+    full = True
+    try:
+        age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(last_full)).total_seconds() / 3600.0
+        full = age_h >= EXTRAS_FULL_HOURS
+    except (TypeError, ValueError):
+        pass
+    wanted = all_ids if full else sorted({str(i) for i in changed_deal_ids} | (set(all_ids) - have))
+    if not wanted:
+        log.info("deal extras: nothing to refresh")
+        return 0
+    companies = {}
+    for part in _chunks(wanted, 100):
+        status, payload = hs_request(client, "POST", client.api_base + "/crm/v4/associations/deals/companies/batch/read",
+                                     body={"inputs": [{"id": i} for i in part]})
+        if status not in (200, 207) or not isinstance(payload, dict):
+            raise RuntimeError("HubSpot deal->company associations returned HTTP %s" % status)
+        for row in payload.get("results") or []:
+            tos = row.get("to") or []
+            prim = [t for t in tos if any(x.get("typeId") == PRIMARY_COMPANY_TYPE_ID for x in t.get("associationTypes") or [])]
+            order = prim + [t for t in tos if t not in prim]
+            companies[str((row.get("from") or {}).get("id"))] = [str(t.get("toObjectId")) for t in order]
+    history = {}
+    for part in _chunks(wanted, 50):
+        status, payload = hs_request(client, "POST", client.api_base + "/crm/v3/objects/deals/batch/read",
+                                     body={"inputs": [{"id": i} for i in part], "properties": ["hubspot_owner_id"],
+                                           "propertiesWithHistory": ["hubspot_owner_id"]})
+        if status not in (200, 207) or not isinstance(payload, dict):
+            raise RuntimeError("HubSpot deals batch read returned HTTP %s" % status)
+        for row in payload.get("results") or []:
+            hist = (row.get("propertiesWithHistory") or {}).get("hubspot_owner_id") or []
+            entries = [{"value": h.get("value"), "timestamp": h.get("timestamp"), "sourceType": h.get("sourceType")}
+                       for h in hist]
+            entries.sort(key=lambda h: str(h.get("timestamp") or ""), reverse=True)
+            history[str(row.get("id"))] = entries
+    now = datetime.now(timezone.utc).isoformat()
+    for deal_id in wanted:
+        con.execute(
+            "INSERT INTO hubspot_deal_extras(deal_id, company_ids, owner_history, refreshed_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(deal_id) DO UPDATE SET company_ids=excluded.company_ids, "
+            "owner_history=excluded.owner_history, refreshed_at=excluded.refreshed_at",
+            (deal_id, json.dumps(companies.get(deal_id, [])), json.dumps(history.get(deal_id, [])), now))
+    con.commit()
+    if full:
+        set_sync_state("hubspot_extras", now, "full refresh of %d deals" % len(wanted))
+    log.info("deal extras: %s refresh of %d deals (%d with a company, %d with owner history)",
+             "full" if full else "incremental", len(wanted),
+             sum(1 for i in wanted if companies.get(i)), sum(1 for i in wanted if history.get(i)))
+    return len(wanted)
+
+
 def main_sync(log):
     client = HubSpotClient(log=log)
     client.prepare()
@@ -374,6 +453,7 @@ def main_sync(log):
     fetched_at = datetime.now(timezone.utc).isoformat()
     total_upserted = 0
     total_assoc = 0
+    changed_deals = []
     try:
         for otype, (modfield, props) in OBJECT_TYPES.items():
             since_iso = watermarks.get(otype, "2020-01-01T00:00:00+00:00")
@@ -398,6 +478,8 @@ def main_sync(log):
                 mod = properties.get(modfield)
                 if mod and mod > max_seen:
                     max_seen = mod
+            if otype == "deals":
+                changed_deals = list(changed_ids)
             # Refresh associations for changed objects only.
             assoc_written = 0
             for hs_id in changed_ids:
@@ -409,6 +491,7 @@ def main_sync(log):
             log.info("%s: %d changed objects, %d association rows rewritten, watermark -> %s",
                      otype, count, assoc_written, max_seen)
         backfill_deal_props(client, con, log)
+        sync_deal_extras(client, con, changed_deals, log)
     finally:
         con.close()
 

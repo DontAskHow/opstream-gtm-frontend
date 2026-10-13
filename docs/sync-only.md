@@ -44,34 +44,54 @@ between the 6-hourly full refresh runs without calling OpenAI.
    deletes the new run or the run it copied from. The carried files are
    copied before pruning.
 10. Exit codes: 0 for a publish, `no change`, the lock held, or a skip window.
-    4 when a source sync failed or `live_deals.json` could not be written (the
-    run still publishes the rest). Any
+    4 when a source sync failed or was skipped (needs a connection, secret
+    missing), when `live_deals.json` could not be written, or when
+    `sheet-review.json` has no `leadTracker` rollup. The run still publishes
+    the rest. Any
     other non-zero code means a build step failed and nothing was published.
 
 ## HubSpot deal export (`live_deals.json`)
 
 Both modes write `live_deals.json` into the snapshot from brain.db, with no
-HubSpot call:
-`{fetchedAt, pipes: {pipelineId: label}, stages: {stageId: {pipe, label, closed, prob}}, deals: [{id, properties}]}`.
-The deal properties are amount, closedate, createdate, dealname, dealstage,
-hs_deal_stage_probability, hs_forecast_probability, hs_is_closed,
-hs_is_closed_won, hubspot_owner_id, and pipeline. hs_lastmodifieddate is
-left out so the file only changes when deal data does. `fetchedAt` is the
-last good HubSpot sync. The preview Lambda `gtm-preview-refresh` finds the
-file by this shape.
+HubSpot call, in the shape of gtm-ws `scripts/hubspot-recon-export.py` (88ff273):
 
-- Stage `closed` and `prob` come from `hubspot_pipelines.is_closed` and
-  `probability`. `hubspot_sync.py` stores them from the
-  `GET /crm/v3/pipelines/deals` call it already makes.
-- Older sync code rewrites that table without those columns. When they are
-  NULL, the stages are taken from the previous snapshot's export. With no
-  previous export either, the file is not written and the run exits 4.
-- hs_forecast_probability, hs_is_closed, and hs_is_closed_won are now
-  fetched with deals. Deals stored before that get them once from a paged
-  search (about 6 calls), with no association refresh and no watermark
-  change.
-- Deals archived in HubSpot are not tracked, so a deal stays in the export
-  until the sync sees it change.
+- `pipes {id: label}` and `stages {id: {pipe, label, closed, prob}}`. `closed` and
+  `prob` come from HubSpot pipeline metadata, which `hubspot_sync.py` stores in
+  `hubspot_pipelines.is_closed` and `probability`.
+- `deals[]` has `id`, `properties`, `createdAt`, `updatedAt`, `archived`, `url`,
+  `companyIds` (primary company first), `ownerHistory`, and `derived`.
+  - `properties` is dealname, pipeline, dealstage, amount,
+    hs_deal_stage_probability, hs_forecast_probability, closedate,
+    hubspot_owner_id, hs_is_closed, hs_is_closed_won, createdate,
+    hs_lastmodifieddate, closed_lost_reason, and hs_object_id.
+  - `ownerHistory` is the `hubspot_owner_id` history, newest first:
+    `{value, timestamp, sourceType}`.
+  - `derived` is stage, pipeline, amount, probability, weighted, isClosed
+    from stage metadata, onHold, and the owner name.
+- `companies {id: {name, domain}}` for every associated company, and
+  `owners {id: {name, email, archived}}` including archived owners.
+- `openBook` sums salesOpen, salesOnHold, and allPipelinesOpen.
+- `fetchedAt` (last good HubSpot sync) is an extra key; the preview Lambda reads it.
+
+How `hubspot_sync.py` collects these, paced under the limits above:
+
+- `closed_lost_reason` and the other later deal properties come with the
+  incremental deal search. Deals stored before then get them once from a
+  paged search (about 6 calls).
+- Owners are stored with an `archived` flag.
+- Company order and owner history go in `hubspot_deal_extras`. They come from
+  two read-only batch endpoints: v4 deal→company associations (100 a call;
+  label type 5 = primary) and v3 deals batch read with
+  `propertiesWithHistory=hubspot_owner_id` (50 a call). Changed deals are read
+  every run (about 2 calls), all deals every `HUBSPOT_EXTRAS_FULL_HOURS`
+  (default 6, about 12 calls for 578 deals). The read-only guard in
+  `common.py` allows only these `…/batch/read` POSTs besides CRM search.
+
+Older sync code (the 6-hourly job) rewrites `hubspot_pipelines` and
+`hubspot_owners` without the new columns. When `closed` metadata is NULL, the
+export uses the previous snapshot's stages. With no previous export either,
+no file is written and the run exits 4. Deals archived in HubSpot are not
+tracked, so a deal stays until the sync sees it change.
 
 ## GA4
 
