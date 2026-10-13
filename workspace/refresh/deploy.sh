@@ -236,8 +236,10 @@ fi
 # Live one-page workspace: run the updated function once so workspace.json is in place, then swap index.html.
 if [ "$ONEPAGE_APP" = 1 ]; then
   # --cli-read-timeout above the function's 120 s timeout, so a slow run is not retried (run twice) by the CLI.
+  # AWS CLI v1 has no --cli-binary-format (it sends --payload as raw JSON already).
+  BINFMT=(); aws --version 2>&1 | grep -q '^aws-cli/2' && BINFMT=(--cli-binary-format raw-in-base64-out)
   for i in 1 2 3 4 5 6; do
-    aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out --cli-read-timeout 150 --payload '{}' \
+    aws lambda invoke --function-name "$FN" "${BINFMT[@]}" --cli-read-timeout 150 --payload '{}' \
       "$TMP/invoke.json" >"$TMP/invoke-meta.json" 2>"$TMP/invoke.err" && break
     grep -q "TooManyRequests" "$TMP/invoke.err" && [ "$i" -lt 6 ] && { sleep 20; continue; }
     cat "$TMP/invoke.err" >&2; echo "the function did not run; index.html NOT uploaded (the live page is unchanged)" >&2; exit 1
