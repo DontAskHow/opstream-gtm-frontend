@@ -44,8 +44,34 @@ between the 6-hourly full refresh runs without calling OpenAI.
    deletes the new run or the run it copied from. The carried files are
    copied before pruning.
 10. Exit codes: 0 for a publish, `no change`, the lock held, or a skip window.
-    4 when a source sync failed (the run still publishes the rest). Any
+    4 when a source sync failed or `live_deals.json` could not be written (the
+    run still publishes the rest). Any
     other non-zero code means a build step failed and nothing was published.
+
+## HubSpot deal export (`live_deals.json`)
+
+Both modes write `live_deals.json` into the snapshot from brain.db, with no
+HubSpot call:
+`{fetchedAt, pipes: {pipelineId: label}, stages: {stageId: {pipe, label, closed, prob}}, deals: [{id, properties}]}`.
+The deal properties are amount, closedate, createdate, dealname, dealstage,
+hs_deal_stage_probability, hs_forecast_probability, hs_is_closed,
+hs_is_closed_won, hubspot_owner_id, and pipeline. hs_lastmodifieddate is
+left out so the file only changes when deal data does. `fetchedAt` is the
+last good HubSpot sync. The preview Lambda `gtm-preview-refresh` finds the
+file by this shape.
+
+- Stage `closed` and `prob` come from `hubspot_pipelines.is_closed` and
+  `probability`. `hubspot_sync.py` stores them from the
+  `GET /crm/v3/pipelines/deals` call it already makes.
+- Older sync code rewrites that table without those columns. When they are
+  NULL, the stages are taken from the previous snapshot's export. With no
+  previous export either, the file is not written and the run exits 4.
+- hs_forecast_probability, hs_is_closed, and hs_is_closed_won are now
+  fetched with deals. Deals stored before that get them once from a paged
+  search (about 6 calls), with no association refresh and no watermark
+  change.
+- Deals archived in HubSpot are not tracked, so a deal stays in the export
+  until the sync sees it change.
 
 ## GA4
 

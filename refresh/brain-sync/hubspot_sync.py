@@ -65,7 +65,8 @@ OBJECT_TYPES = {
         "domain", "hs_lastmodifieddate", "hs_object_id", "hubspot_owner_id", "industry",
         "lifecyclestage", "name", "numberofemployees", "phone", "state"]),
     "deals": ("hs_lastmodifieddate", ["amount", "closedate", "createdate", "dealname",
-        "dealstage", "dealtype", "hs_deal_stage_probability", "hs_lastmodifieddate",
+        "dealstage", "dealtype", "hs_deal_stage_probability", "hs_forecast_probability",
+        "hs_is_closed", "hs_is_closed_won", "hs_lastmodifieddate",
         "hs_object_id", "hubspot_owner_id", "pipeline"]),
     "emails": ("hs_lastmodifieddate", ["hs_createdate", "hs_email_direction",
         "hs_email_from_email", "hs_email_subject", "hs_email_text", "hs_email_to_email",
@@ -88,6 +89,10 @@ OBJECT_TYPES = {
         "hs_lastmodifieddate", "hs_object_id", "hs_product_id", "name", "price", "quantity"]),
 }
 # NOTE: tickets deliberately excluded (outside registered scope).
+
+# Deal properties added after the backfill. Rows fetched before then get them
+# once from backfill_deal_props().
+LATER_DEAL_PROPS = ("hs_forecast_probability", "hs_is_closed", "hs_is_closed_won")
 
 # Association pairs observed in the backfill; used to enumerate which
 # to-types to query per changed object. Stored bidirectionally in DB.
@@ -264,7 +269,12 @@ def sync_pipelines(client, log):
                 order = int(order)
             except (TypeError, ValueError):
                 order = None
-            rows.append((pid, plabel, sid, str(stage.get("label") or "").strip(), order))
+            meta = stage.get("metadata") or {}
+            closed = meta.get("isClosed")
+            closed = None if closed is None else int(closed is True or str(closed).lower() == "true")
+            prob = meta.get("probability")
+            prob = None if prob in (None, "") else str(prob)
+            rows.append((pid, plabel, sid, str(stage.get("label") or "").strip(), order, closed, prob))
     for pid in ("686463412", "855205465"):
         label = labels.get(pid)
         if label and not re.search(r"renew|customer|success", label, flags=re.I):
@@ -281,12 +291,18 @@ def sync_pipelines(client, log):
             "pipeline_id TEXT, pipeline_label TEXT, stage_id TEXT, stage_label TEXT, "
             "display_order INTEGER, PRIMARY KEY (pipeline_id, stage_id))"
         )
+        # Stage metadata for the deal export. Older code inserts without these
+        # columns and leaves them NULL until this sync runs again.
+        have = {r[1] for r in con.execute("PRAGMA table_info(hubspot_pipelines)")}
+        for col, kind in (("is_closed", "INTEGER"), ("probability", "TEXT")):
+            if col not in have:
+                con.execute("ALTER TABLE hubspot_pipelines ADD COLUMN %s %s" % (col, kind))
         try:
             con.execute("BEGIN")
             con.execute("DELETE FROM hubspot_pipelines")
             con.executemany(
-                "INSERT INTO hubspot_pipelines(pipeline_id, pipeline_label, stage_id, stage_label, display_order) "
-                "VALUES(?,?,?,?,?)",
+                "INSERT INTO hubspot_pipelines(pipeline_id, pipeline_label, stage_id, stage_label, display_order, "
+                "is_closed, probability) VALUES(?,?,?,?,?,?,?)",
                 rows,
             )
             con.commit()
@@ -297,6 +313,44 @@ def sync_pipelines(client, log):
         con.close()
     log.info("pipelines: %d stages across %d pipelines", len(rows), len(labels))
     return len(rows), labels
+
+
+def backfill_deal_props(client, con, log):
+    """Fill LATER_DEAL_PROPS on deals stored before they were fetched.
+
+    One paged search over all deals (about 6 calls for 600 deals) that returns only
+    those properties. It touches no associations and no watermark, and it runs only
+    while a stored deal still lacks them. A deal the search does not return gets
+    nulls so it is not asked for again.
+    """
+    rows = con.execute("SELECT hs_id, properties_json FROM hubspot_objects WHERE object_type='deals'").fetchall()
+    stored = {}
+    for hs_id, raw in rows:
+        try:
+            props = json.loads(raw or "{}")
+        except ValueError:
+            props = {}
+        if any(k not in props for k in LATER_DEAL_PROPS):
+            stored[str(hs_id)] = props
+    if not stored:
+        return 0
+    seen = 0
+    for obj in search_objects(client, "deals", "hs_lastmodifieddate", ["hs_object_id", *LATER_DEAL_PROPS], 0):
+        hs_id = str(obj.get("id", ""))
+        if hs_id not in stored:
+            continue
+        got = obj.get("properties") or {}
+        stored[hs_id].update({k: got.get(k) for k in LATER_DEAL_PROPS})
+        seen += 1
+    for hs_id, props in stored.items():
+        for k in LATER_DEAL_PROPS:
+            props.setdefault(k, None)
+        con.execute("UPDATE hubspot_objects SET properties_json=? WHERE object_type='deals' AND hs_id=?",
+                    (json.dumps(props, ensure_ascii=False), hs_id))
+    con.commit()
+    log.info("deals: backfilled %s for %d deals (%d not returned by HubSpot search)",
+             ", ".join(LATER_DEAL_PROPS), seen, len(stored) - seen)
+    return seen
 
 
 def main_sync(log):
@@ -354,6 +408,7 @@ def main_sync(log):
             total_assoc += assoc_written
             log.info("%s: %d changed objects, %d association rows rewritten, watermark -> %s",
                      otype, count, assoc_written, max_seen)
+        backfill_deal_props(client, con, log)
     finally:
         con.close()
 

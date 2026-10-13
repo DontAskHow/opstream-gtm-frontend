@@ -458,6 +458,69 @@ def finish_build(env):
         log("WARNING: evidence-renderer.mjs is not in the image. Skipping the renderer.")
 
 
+# HubSpot per-deal export for the preview (gtm-preview-refresh). It finds the
+# file by shape: {fetchedAt, pipes, stages, deals: [{id, properties}]}.
+LIVE_DEALS = "live_deals.json"
+DEAL_PROPERTIES = ("amount", "closedate", "createdate", "dealname", "dealstage", "hs_deal_stage_probability",
+                   "hs_forecast_probability", "hs_is_closed", "hs_is_closed_won", "hubspot_owner_id", "pipeline")
+
+
+def safe_write_live_deals(db_path, out, fallback=None):
+    try:
+        return write_live_deals(db_path, out, fallback)
+    except Exception as exc:
+        log("WARNING: live_deals export failed (%s: %s)" % (type(exc).__name__, str(exc)[:200]))
+        return None
+
+
+def write_live_deals(db_path, out, fallback=None):
+    """Write live_deals.json from brain.db. No HubSpot call.
+
+    Stage isClosed and probability come from hubspot_pipelines. When they are
+    missing (the table predates them, or an older sync rewrote it), fallback's
+    stages are used, typically the previous snapshot's export. Without either,
+    no file is written rather than one that marks every deal open.
+    """
+    con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(hubspot_pipelines)")}
+        meta = "is_closed, probability" if {"is_closed", "probability"} <= cols else "NULL, NULL"
+        stage_rows = con.execute(
+            "SELECT pipeline_id, pipeline_label, stage_id, stage_label, %s FROM hubspot_pipelines "
+            "ORDER BY pipeline_id, display_order, stage_id" % meta).fetchall()
+        deal_rows = con.execute(
+            "SELECT hs_id, properties_json FROM hubspot_objects WHERE object_type='deals'").fetchall()
+        fetched = con.execute("SELECT last_ok_at FROM sync_outcomes WHERE source='hubspot'").fetchone()
+    finally:
+        con.close()
+    pipes, stages = {}, {}
+    for pid, plabel, sid, slabel, closed, prob in stage_rows:
+        pipes[str(pid)] = plabel or ""
+        stages[str(sid)] = {"pipe": plabel or "", "label": slabel or "",
+                            "closed": None if closed is None else bool(closed),
+                            "prob": None if prob in (None, "") else str(prob)}
+    if not stages or any(st["closed"] is None for st in stages.values()):
+        if fallback and fallback.get("stages"):
+            log("live_deals: stage metadata missing in brain.db, using the previous export's stages")
+            pipes, stages = dict(fallback.get("pipes") or {}), dict(fallback["stages"])
+        else:
+            log("WARNING: live_deals: no stage isClosed metadata. Not writing " + LIVE_DEALS)
+            return None
+    deals = []
+    for hs_id, raw in deal_rows:
+        try:
+            props = json.loads(raw or "{}")
+        except ValueError:
+            props = {}
+        deals.append({"id": str(hs_id), "properties": {k: props.get(k) for k in DEAL_PROPERTIES}})
+    deals.sort(key=lambda d: (len(d["id"]), d["id"]))
+    doc = {"fetchedAt": fetched[0] if fetched and fetched[0] else None,
+           "pipes": dict(sorted(pipes.items())), "stages": stages, "deals": deals}
+    (Path(out) / LIVE_DEALS).write_text(json.dumps(doc, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    log("live_deals: %d deals, %d pipelines, %d stages" % (len(deals), len(pipes), len(stages)))
+    return doc
+
+
 def assert_real(out_dir):
     verified = json.loads((out_dir / "verified.json").read_text(encoding="utf-8"))
     records = json.loads((out_dir / "records.json").read_text(encoding="utf-8"))
@@ -543,6 +606,7 @@ def main():
         if env.get("OPENAI_API_KEY"):
             run_step([py, str(ROOT / "scripts" / "agent-brief.py")], env, ROOT)
             run_step([py, str(ROOT / "scripts" / "heartbeat.py")], env, ROOT)
+        safe_write_live_deals(db_path, out)
         finish_build(env)
     except SystemExit as exc:
         log("step failed. Publishing nothing.")
@@ -794,6 +858,11 @@ def _sync_only(store, published, state_prefix, brain_key):
         carried, run_id = carry_forward_ai(store, latest, out)
         log("carried forward from %s: %s (stamped %s)" % (
             latest.get("runId"), ", ".join(carried) or "none (facts-only copies kept)", run_id))
+        try:
+            previous = json.loads(store.get_bytes(latest["prefix"] + LIVE_DEALS).decode("utf-8"))
+        except (FileNotFoundError, ValueError):
+            previous = None
+        exported = safe_write_live_deals(db_path, out, fallback=previous)
         finish_build(env)
     except SystemExit as exc:
         log("step failed. Publishing nothing.")
@@ -804,7 +873,7 @@ def _sync_only(store, published, state_prefix, brain_key):
     old_hash = latest.get("contentHash") or content_hash(published_files(store, latest["prefix"]))
     t_build = datetime.now(timezone.utc)
     timing = "sync %.0fs, build %.0fs" % ((t_sync - t0).total_seconds(), (t_build - t_sync).total_seconds())
-    code = EXIT_SYNC_FAILED if failed else 0
+    code = EXIT_SYNC_FAILED if failed or exported is None else 0
     if new_hash == old_hash:
         log("no change (content %s matches %s). Published nothing. %s" % (new_hash[:12], latest.get("runId"), timing))
         return code
