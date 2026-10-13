@@ -524,6 +524,8 @@ HUBSPOT_REGION = "us-east-2"
 _HUBSPOT_SEARCH = re.compile(r"^/crm/v3/objects/[^/]+/search$")
 # Read-only batch endpoints that take their ids in a POST body.
 _HUBSPOT_BATCH_READ = re.compile(r"^/crm/v3/objects/[^/]+/batch/read$|^/crm/v4/associations/[^/]+/[^/]+/batch/read$")
+# Lists search takes its filters in a POST body and changes nothing.
+_HUBSPOT_LISTS_SEARCH = re.compile(r"^/crm/v3/lists/search$")
 _HUBSPOT_FIELDS = (
     "portal_id", "client_id", "client_secret", "refresh_token", "token_endpoint", "api_base",
 )
@@ -539,7 +541,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def assert_hubspot_read(method, url):
-    """Allow GET, and POST only for CRM search and batch reads. Every other call fails."""
+    """Allow GET, and POST only for CRM search, lists search, and batch reads. Every other call fails."""
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or (parsed.hostname or "") != "api.hubapi.com":
         raise NeedsConnection("refusing to send a HubSpot credential to this host")
@@ -549,10 +551,11 @@ def assert_hubspot_read(method, url):
     verb = (method or "").upper()
     if verb == "GET":
         return
-    if verb == "POST" and (_HUBSPOT_SEARCH.match(path) or _HUBSPOT_BATCH_READ.match(path)):
+    if verb == "POST" and (_HUBSPOT_SEARCH.match(path) or _HUBSPOT_BATCH_READ.match(path)
+                           or _HUBSPOT_LISTS_SEARCH.match(path)):
         return
     raise RuntimeError(
-        "refusing HubSpot %s %s; only GET, CRM search, and batch reads are allowed" % (verb, path)
+        "refusing HubSpot %s %s; only GET, CRM search, lists search, and batch reads are allowed" % (verb, path)
     )
 
 
@@ -635,7 +638,8 @@ class HubSpotClient:
 
     The access token stays in memory and is refreshed two minutes before
     expires_in. A new refresh token is written back to Secrets Manager
-    immediately. CRM calls are GET, plus POST /crm/v3/objects/{type}/search.
+    immediately. CRM calls are GET, plus the read-only POSTs that
+    assert_hubspot_read allows.
     """
 
     def __init__(self, store=None, http=None, clock=None, log=None, portal_id=HUBSPOT_PORTAL_ID):
@@ -775,7 +779,8 @@ class HubSpotClient:
         status, raw = self.http(method.upper(), url, headers, data)
         text = raw.decode("utf-8", errors="replace") if raw else ""
         if status in (401, 403):
-            raise NeedsConnection("HubSpot returned %s. Not touching watermarks." % status)
+            raise SourceRefused("api.hubapi.com", "%s %s" % (method.upper(), urllib.parse.urlparse(url).path),
+                                status, "Not touching watermarks.")
         try:
             parsed = json.loads(text) if text.strip() else {}
         except json.JSONDecodeError:

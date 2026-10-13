@@ -18,10 +18,22 @@ Auth: Secrets Manager opstream-gtm/hubspot-oauth, the existing privately
 distributed Opstream Marketing Dashboard app (portal 21303277). The JSON
 holds portal_id, client_id, client_secret, refresh_token, token_endpoint,
 and api_base. This script refreshes that grant. It does not start a consent
-flow. Calls are GET, plus CRM search POST. A missing secret, a rejected
-token, or a portal other than 21303277 exits 3 and does not move watermarks.
+flow. Calls are GET, plus the CRM search, lists search, and batch read POSTs.
+A missing secret, a rejected token, or a portal other than 21303277 exits 3
+and does not move watermarks.
+
+After the objects, four extra pulls run. Each records its own sync_outcomes
+row and a failure in one (a missing scope, say) does not fail the sync or
+stop the others:
+  hubspot_forms             forms (archived too) and their submissions
+  hubspot_lists             list catalog; contact list memberships at most
+                            every LIST_MIN_INTERVAL_MIN minutes (default 360)
+  hubspot_imports           the import log
+  hubspot_contact_backfill  only with HUBSPOT_CONTACT_BACKFILL=1 (or restart):
+                            re-reads every contact's properties once
 """
 
+import hashlib
 import json
 import os
 import re
@@ -32,14 +44,19 @@ from common import (
     HubSpotClient,
     NeedsConnection,
     RateLimiter,
+    SourceError,
+    SourceRefused,
     db_connect,
     get_sync_state,
+    record_outcome,
     run_main,
     set_sync_state,
     truncate_props,
+    truncate_value,
 )
 
 SOURCE = "hubspot"
+HOST = "api.hubapi.com"
 # HubSpot API: 110 requests per 10 seconds -> 0.15 s is about 67, which
 # leaves room for the dashboard's own HubSpot calls.
 pace = RateLimiter(0.15)
@@ -61,7 +78,17 @@ def hs_request(client, method, url, body=None, search=False):
 OBJECT_TYPES = {
     "contacts": ("lastmodifieddate", ["city", "company", "country", "createdate", "email",
         "firstname", "hs_lead_status", "hs_object_id", "hubspot_owner_id", "jobtitle",
-        "lastmodifieddate", "lastname", "lifecyclestage", "phone", "state"]),
+        "lastmodifieddate", "lastname", "lifecyclestage", "phone", "state",
+        # Source attribution, conversions, and lifecycle dates. Contacts stored
+        # before these were added get them from HUBSPOT_CONTACT_BACKFILL=1.
+        "hs_analytics_source", "hs_analytics_source_data_1", "hs_analytics_source_data_2",
+        "hs_latest_source", "hs_latest_source_data_1", "hs_latest_source_data_2",
+        "first_conversion_event_name", "first_conversion_date",
+        "recent_conversion_event_name", "recent_conversion_date", "num_conversion_events",
+        "hs_object_source", "hs_object_source_label", "hs_object_source_detail_1",
+        "hs_google_click_id", "hs_lifecyclestage_lead_date",
+        "hs_lifecyclestage_marketingqualifiedlead_date",
+        "hs_lifecyclestage_salesqualifiedlead_date", "hs_lifecyclestage_customer_date"]),
     "companies": ("hs_lastmodifieddate", ["annualrevenue", "city", "country", "createdate",
         "domain", "hs_lastmodifieddate", "hs_object_id", "hubspot_owner_id", "industry",
         "lifecyclestage", "name", "numberofemployees", "phone", "state"]),
@@ -90,6 +117,8 @@ OBJECT_TYPES = {
         "hs_lastmodifieddate", "hs_object_id", "hs_product_id", "name", "price", "quantity"]),
 }
 # NOTE: tickets deliberately excluded (outside registered scope).
+# Portal-defined contact properties fetched when the portal has them.
+CUSTOM_CONTACT_PROP = re.compile(r"^(paid_touch_campaign|utm_\w+)$", re.I)
 
 # Deal properties added after the backfill. Rows fetched before then get them
 # once from backfill_deal_props().
@@ -432,6 +461,373 @@ def sync_deal_extras(client, con, changed_deal_ids, log):
     return len(wanted)
 
 
+# ---------------------------------------------------------------- extra pulls
+# Each one records its own sync_outcomes row (run_part) and fails alone.
+
+FORMS_ROUTE = "GET /marketing/v3/forms"
+SUBMISSIONS_ROUTE = "GET /form-integrations/v1/submissions/forms/{formGuid}"
+LISTS_ROUTE = "POST /crm/v3/lists/search"
+MEMBERSHIPS_ROUTE = "GET /crm/v3/lists/{listId}/memberships"
+IMPORTS_ROUTE = "GET /crm/v3/imports"
+CONTACT_SEARCH_ROUTE = "POST /crm/v3/objects/contacts/search"
+CONTACT_LIST_TYPE = "0-1"
+LIST_MIN_INTERVAL_MIN = float(os.environ.get("LIST_MIN_INTERVAL_MIN") or 360)
+BACKFILL_PAGE = 200  # CRM search maximum
+
+
+# Created before the first call, so readers find the tables even when a pull fails.
+EXTRA_TABLES = (
+    "CREATE TABLE IF NOT EXISTS hubspot_forms(form_id TEXT PRIMARY KEY, name TEXT, form_type TEXT, "
+    "created_at TEXT, updated_at TEXT, archived INTEGER, raw_json TEXT, fetched_at TEXT)",
+    "CREATE TABLE IF NOT EXISTS hubspot_form_submissions(form_id TEXT, conversion_id TEXT, submitted_at TEXT, "
+    "contact_email TEXT, page_url TEXT, page_title TEXT, values_json TEXT, fetched_at TEXT, "
+    "PRIMARY KEY(form_id, conversion_id))",
+    "CREATE TABLE IF NOT EXISTS hubspot_lists(list_id TEXT PRIMARY KEY, name TEXT, processing_type TEXT, "
+    "object_type TEXT, size INTEGER, created_at TEXT, updated_at TEXT, raw_json TEXT, fetched_at TEXT)",
+    "CREATE TABLE IF NOT EXISTS hubspot_list_memberships(list_id TEXT, record_id TEXT, added_at TEXT, "
+    "PRIMARY KEY(list_id, record_id))",
+    "CREATE TABLE IF NOT EXISTS hubspot_imports(import_id TEXT PRIMARY KEY, name TEXT, state TEXT, "
+    "created_at TEXT, raw_json TEXT, fetched_at TEXT)",
+)
+
+
+def hs_call(client, method, url, route, body=None, search=False):
+    """hs_request that raises SourceError/SourceRefused with a route template, not ids."""
+    try:
+        status, payload = hs_request(client, method, url, body=body, search=search)
+    except SourceRefused as e:
+        raise SourceRefused(HOST, route, e.status, "missing scope or credential rejected") from None
+    if status != 200 or not isinstance(payload, dict):
+        raise SourceError(HOST, route, status, str(payload)[:200])
+    return payload
+
+
+def hs_pages(client, url_for, route, max_pages=500):
+    """Yield GET pages, following paging.next.after."""
+    after = None
+    seen = set()
+    for _page in range(max_pages):
+        payload = hs_call(client, "GET", url_for(after), route)
+        yield payload
+        after = ((payload.get("paging") or {}).get("next") or {}).get("after")
+        if not after or after in seen:
+            return
+        seen.add(after)
+
+
+def _iso_ms(value):
+    try:
+        return datetime.fromtimestamp(int(value) / 1000.0, timezone.utc).isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def run_part(name, fn, log):
+    """Run one extra pull and record its outcome. Returns True on success; never raises."""
+    try:
+        detail = fn()
+    except Exception as e:
+        log.warning("%s failed (the rest of the sync continues): %s", name, e)
+        record_outcome(name, False, getattr(e, "route", None), getattr(e, "status", None),
+                       "%s: %s" % (type(e).__name__, str(e)[:200]))
+        return False
+    log.info("%s: %s", name, detail)
+    record_outcome(name, True, None, None, detail)
+    return True
+
+
+def discover_contact_props(client, log):
+    """Custom paid_touch_campaign / utm_* contact properties, when the portal has them."""
+    try:
+        payload = hs_call(client, "GET", client.api_base + "/crm/v3/properties/contacts",
+                          "GET /crm/v3/properties/contacts")
+    except Exception as e:
+        log.warning("contact properties not listed (%s); custom attribution properties skipped", e)
+        return []
+    names = sorted({str(p.get("name") or "") for p in payload.get("results") or []
+                    if isinstance(p, dict) and CUSTOM_CONTACT_PROP.match(str(p.get("name") or ""))})
+    log.info("contact properties: custom attribution properties %s", ", ".join(names) or "none")
+    return names
+
+
+def sync_forms(client, log):
+    """Forms (active and archived) and their submissions.
+
+    Submissions come newest first. A form with a watermark (newest submittedAt
+    seen, in ms) is read until a page reaches older submissions; a form without
+    one is read in full. Archived forms are read once. A failing form keeps its
+    watermark and is counted; the others go on.
+    """
+    forms = {}
+    for archived in (False, True):
+        def url_for(after, archived=archived):
+            q = ["limit=100", "formTypes=all"]
+            if archived:
+                q.append("archived=true")
+            if after:
+                q.append("after=" + _query_value(after))
+            return client.api_base + "/marketing/v3/forms?" + "&".join(q)
+        for page in hs_pages(client, url_for, FORMS_ROUTE):
+            for f in page.get("results") or []:
+                fid = str((f or {}).get("id") or "").strip()
+                if fid and not (archived and fid in forms):
+                    forms[fid] = dict(f, archived=bool(f.get("archived", archived)))
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    raw, _run, _note = get_sync_state("hubspot_forms")
+    try:
+        marks = json.loads(raw) if raw else {}
+        if not isinstance(marks, dict):
+            marks = {}
+    except ValueError:
+        marks = {}
+    con = db_connect()
+    new_total = 0
+    failed = []
+    try:
+        for fid, f in forms.items():
+            con.execute(
+                "INSERT INTO hubspot_forms(form_id, name, form_type, created_at, updated_at, archived, raw_json, "
+                "fetched_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(form_id) DO UPDATE SET name=excluded.name, "
+                "form_type=excluded.form_type, created_at=excluded.created_at, updated_at=excluded.updated_at, "
+                "archived=excluded.archived, raw_json=excluded.raw_json, fetched_at=excluded.fetched_at",
+                (fid, truncate_value(str(f.get("name") or "")), f.get("formType"), f.get("createdAt"),
+                 f.get("updatedAt"), int(f["archived"]), json.dumps(f, ensure_ascii=False), fetched_at))
+        con.commit()
+        for fid, f in forms.items():
+            if f["archived"] and fid in marks:
+                continue
+            mark = marks.get(fid)
+            newest = int(mark or 0)
+            new = 0
+
+            def url_for(after, fid=fid):
+                url = client.api_base + "/form-integrations/v1/submissions/forms/%s?limit=50" % _query_value(fid)
+                return url + ("&after=" + _query_value(after) if after else "")
+            try:
+                for page in hs_pages(client, url_for, SUBMISSIONS_ROUTE, max_pages=2000):
+                    reached = False
+                    for sub in page.get("results") or []:
+                        ms = int(sub.get("submittedAt") or 0)
+                        if mark is not None and ms < int(mark):
+                            reached = True
+                            break
+                        values = sub.get("values") or []
+                        email = next((v.get("value") for v in values
+                                      if isinstance(v, dict) and str(v.get("name") or "").lower() == "email"), None)
+                        key = str(sub.get("conversionId") or "") or "sha1:" + hashlib.sha1(json.dumps(
+                            [sub.get("submittedAt"), sub.get("pageUrl"), values], sort_keys=True).encode()).hexdigest()
+                        cur = con.execute(
+                            "INSERT INTO hubspot_form_submissions(form_id, conversion_id, submitted_at, contact_email, "
+                            "page_url, page_title, values_json, fetched_at) VALUES(?,?,?,?,?,?,?,?) "
+                            "ON CONFLICT(form_id, conversion_id) DO NOTHING",
+                            (fid, key, _iso_ms(sub.get("submittedAt")), email, sub.get("pageUrl"),
+                             sub.get("pageTitle"), json.dumps(values, ensure_ascii=False), fetched_at))
+                        new += cur.rowcount
+                        newest = max(newest, ms)
+                    if reached:
+                        break
+            except SourceRefused:
+                raise  # the forms scope is missing: every form would answer the same
+            except SourceError as e:
+                con.rollback()
+                if f["archived"] and e.status == 404:
+                    marks[fid] = 0
+                    continue
+                log.warning("form %s submissions: %s", fid, e)
+                failed.append(e)
+                continue
+            con.commit()
+            marks[fid] = newest
+            new_total += new
+            set_sync_state("hubspot_forms", json.dumps(marks, sort_keys=True), "per-form newest submittedAt (ms)")
+    finally:
+        con.close()
+    detail = "%d forms (%d archived), %d new submissions" % (
+        len(forms), sum(1 for f in forms.values() if f["archived"]), new_total)
+    if failed:
+        raise SourceError(HOST, SUBMISSIONS_ROUTE, failed[-1].status,
+                          "%s; submissions failed for %d forms" % (detail, len(failed)))
+    return detail
+
+
+def sync_lists(client, log):
+    """List catalog every run; contact list memberships every LIST_MIN_INTERVAL_MIN."""
+    lists = []
+    offset = 0
+    for _page in range(100):
+        payload = hs_call(client, "POST", client.api_base + "/crm/v3/lists/search", LISTS_ROUTE, body={
+            "offset": offset, "count": 500, "query": "", "listIds": [],
+            "processingTypes": ["MANUAL", "DYNAMIC", "SNAPSHOT"], "additionalProperties": ["hs_list_size"]})
+        lists.extend(x for x in payload.get("lists") or [] if isinstance(x, dict) and x.get("listId") is not None)
+        nxt = payload.get("offset")
+        if not payload.get("hasMore") or not isinstance(nxt, int) or nxt <= offset:
+            break
+        offset = nxt
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for x in lists:
+        size = (x.get("additionalProperties") or {}).get("hs_list_size", x.get("size"))
+        try:
+            size = int(size)
+        except (TypeError, ValueError):
+            size = None
+        rows.append((str(x["listId"]), truncate_value(str(x.get("name") or "")), x.get("processingType"),
+                     x.get("objectTypeId"), size, x.get("createdAt"), x.get("updatedAt"),
+                     json.dumps(x, ensure_ascii=False), fetched_at))
+    contact_ids = [r[0] for r in rows if r[3] == CONTACT_LIST_TYPE]
+    con = db_connect()
+    try:
+        # The table mirrors HubSpot: a deleted list goes, with its memberships.
+        con.execute("DELETE FROM hubspot_lists")
+        con.executemany("INSERT INTO hubspot_lists(list_id, name, processing_type, object_type, size, created_at, "
+                        "updated_at, raw_json, fetched_at) VALUES(?,?,?,?,?,?,?,?,?)", rows)
+        con.execute("DELETE FROM hubspot_list_memberships WHERE list_id NOT IN (%s)"
+                    % ",".join("?" * len(contact_ids)), contact_ids)
+        con.commit()
+    finally:
+        con.close()
+    detail = "%d lists (%d contact lists)" % (len(rows), len(contact_ids))
+    last, _run, _note = get_sync_state("hubspot_lists")
+    try:
+        age_min = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() / 60.0
+    except (TypeError, ValueError):
+        age_min = None
+    if age_min is not None and age_min < LIST_MIN_INTERVAL_MIN:
+        return detail + "; memberships %.0f min old, next refresh after %.0f" % (age_min, LIST_MIN_INTERVAL_MIN)
+    members = 0
+    failed = []
+    con = db_connect()
+    try:
+        for list_id in contact_ids:
+            def url_for(after, list_id=list_id):
+                url = client.api_base + "/crm/v3/lists/%s/memberships?limit=250" % _query_value(list_id)
+                return url + ("&after=" + _query_value(after) if after else "")
+            got = []
+            try:
+                for page in hs_pages(client, url_for, MEMBERSHIPS_ROUTE, max_pages=4000):
+                    for m in page.get("results") or []:
+                        if isinstance(m, dict):
+                            got.append((list_id, str(m.get("recordId")), m.get("membershipTimestamp")))
+                        elif m is not None:
+                            got.append((list_id, str(m), None))
+            except SourceRefused:
+                raise
+            except SourceError as e:
+                log.warning("list %s memberships: %s", list_id, e)
+                failed.append(e)
+                continue
+            con.execute("DELETE FROM hubspot_list_memberships WHERE list_id=?", (list_id,))
+            con.executemany("INSERT OR REPLACE INTO hubspot_list_memberships(list_id, record_id, added_at) "
+                            "VALUES(?,?,?)", got)
+            con.commit()
+            members += len(got)
+    finally:
+        con.close()
+    detail += "; memberships refreshed: %d rows" % members
+    set_sync_state("hubspot_lists", datetime.now(timezone.utc).isoformat(), detail)
+    if failed:
+        raise SourceError(HOST, MEMBERSHIPS_ROUTE, failed[-1].status,
+                          "%s; memberships failed for %d lists" % (detail, len(failed)))
+    return detail
+
+
+def sync_imports(client, log):
+    def url_for(after):
+        return client.api_base + "/crm/v3/imports?limit=100" + ("&after=" + _query_value(after) if after else "")
+    rows = []
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    for page in hs_pages(client, url_for, IMPORTS_ROUTE, max_pages=100):
+        for imp in page.get("results") or []:
+            if isinstance(imp, dict) and imp.get("id") is not None:
+                rows.append((str(imp["id"]), truncate_value(str(imp.get("importName") or "")), imp.get("state"),
+                             imp.get("createdAt"), json.dumps(imp, ensure_ascii=False), fetched_at))
+    con = db_connect()
+    try:
+        con.executemany(
+            "INSERT INTO hubspot_imports(import_id, name, state, created_at, raw_json, fetched_at) VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(import_id) DO UPDATE SET name=excluded.name, state=excluded.state, "
+            "created_at=excluded.created_at, raw_json=excluded.raw_json, fetched_at=excluded.fetched_at", rows)
+        con.commit()
+    finally:
+        con.close()
+    return "%d imports" % len(rows)
+
+
+def backfill_contacts(client, props, log):
+    """Re-read every contact's properties once (HUBSPOT_CONTACT_BACKFILL=1).
+
+    Keyset paging: each search asks for hs_object_id > the last id stored, so
+    the 10,000-result cap of one search does not apply. sync_state
+    'hubspot_contact_backfill' holds that id after every page, so a run that
+    stops resumes there. When done it says so and later runs skip it;
+    HUBSPOT_CONTACT_BACKFILL=restart starts over. Properties are merged into
+    the stored ones; associations and the contacts watermark are untouched.
+    """
+    raw, _run, _note = get_sync_state("hubspot_contact_backfill")
+    try:
+        state = json.loads(raw) if raw else {}
+        if not isinstance(state, dict):
+            state = {}
+    except ValueError:
+        state = {}
+    if os.environ.get("HUBSPOT_CONTACT_BACKFILL", "").strip().lower() == "restart":
+        state = {}
+    if state.get("done"):
+        return "already complete (%s contacts, %s); HUBSPOT_CONTACT_BACKFILL=restart runs it again" % (
+            state.get("count"), state.get("finishedAt"))
+    after_id = int(state.get("afterId") or 0)
+    count = int(state.get("count") or 0)
+    state.setdefault("startedAt", datetime.now(timezone.utc).isoformat())
+    con = db_connect()
+    pages = 0
+    try:
+        while True:
+            pages += 1
+            payload = hs_call(client, "POST", client.api_base + "/crm/v3/objects/contacts/search",
+                              CONTACT_SEARCH_ROUTE, search=True, body={
+                                  "filterGroups": [{"filters": [{"propertyName": "hs_object_id", "operator": "GT",
+                                                                 "value": str(after_id)}]}],
+                                  "sorts": [{"propertyName": "hs_object_id", "direction": "ASCENDING"}],
+                                  "properties": props, "limit": BACKFILL_PAGE})
+            results = payload.get("results") or []
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            last_id = after_id
+            for obj in results:
+                try:
+                    hs_id = int(obj.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                last_id = max(last_id, hs_id)
+                row = con.execute("SELECT properties_json FROM hubspot_objects WHERE object_type='contacts' AND hs_id=?",
+                                  (str(hs_id),)).fetchone()
+                try:
+                    merged = json.loads(row[0]) if row and row[0] else {}
+                except ValueError:
+                    merged = {}
+                merged.update(truncate_props(obj.get("properties") or {}))
+                con.execute(
+                    "INSERT INTO hubspot_objects(object_type, hs_id, properties_json, fetched_at) VALUES(?,?,?,?) "
+                    "ON CONFLICT(object_type, hs_id) DO UPDATE SET properties_json=excluded.properties_json, "
+                    "fetched_at=excluded.fetched_at",
+                    ("contacts", str(hs_id), json.dumps(merged, ensure_ascii=False), fetched_at))
+            con.commit()
+            count += len(results)
+            more = bool(((payload.get("paging") or {}).get("next") or {}).get("after")) and last_id > after_id
+            after_id = last_id
+            state.update(afterId=str(after_id), count=count)
+            if not more:
+                state.update(done=True, finishedAt=fetched_at)
+            set_sync_state("hubspot_contact_backfill", json.dumps(state, sort_keys=True),
+                           "done" if not more else "in progress")
+            if not more:
+                break
+            if pages % 25 == 0:
+                log.info("contact backfill: %d contacts so far", count)
+    finally:
+        con.close()
+    return "%d contacts re-read with %d properties" % (count, len(props))
+
+
 def main_sync(log):
     client = HubSpotClient(log=log)
     client.prepare()
@@ -450,12 +846,24 @@ def main_sync(log):
         log.info("legacy watermark %r; seeding per-type watermarks at %s", watermark_raw, seed)
 
     con = db_connect()
+    try:
+        for ddl in EXTRA_TABLES:
+            con.execute(ddl)
+        con.commit()
+    finally:
+        con.close()
+    contact_props = OBJECT_TYPES["contacts"][1] + [
+        p for p in discover_contact_props(client, log) if p not in OBJECT_TYPES["contacts"][1]]
+
+    con = db_connect()
     fetched_at = datetime.now(timezone.utc).isoformat()
     total_upserted = 0
     total_assoc = 0
     changed_deals = []
     try:
         for otype, (modfield, props) in OBJECT_TYPES.items():
+            if otype == "contacts":
+                props = contact_props
             since_iso = watermarks.get(otype, "2020-01-01T00:00:00+00:00")
             since_ms = _to_ms(since_iso)
             changed_ids = []
@@ -499,7 +907,16 @@ def main_sync(log):
             f"{owner_rows} owners, {pipeline_rows} pipeline stages; tickets excluded (outside registered scope); "
             f"long text truncated at 8000 chars")
     set_sync_state(SOURCE, json.dumps(watermarks), note)
-    return note
+
+    parts = [
+        ("hubspot_forms", lambda: sync_forms(client, log)),
+        ("hubspot_lists", lambda: sync_lists(client, log)),
+        ("hubspot_imports", lambda: sync_imports(client, log)),
+    ]
+    if os.environ.get("HUBSPOT_CONTACT_BACKFILL", "").strip().lower() in ("1", "true", "yes", "restart"):
+        parts.append(("hubspot_contact_backfill", lambda: backfill_contacts(client, contact_props, log)))
+    failed = [name for name, fn in parts if not run_part(name, fn, log)]
+    return note + ("; failed: " + ", ".join(failed) if failed else "")
 
 
 if __name__ == "__main__":
