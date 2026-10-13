@@ -254,10 +254,18 @@ test('lead → MQL (90 days, proposed): hidden without its inputs, computed with
   assert.equal(fig(base.html, 'lead-mql-90'), null);
   const main = page.renderPage(base.view, {}).main;
   assert.ok(!/Lead → MQL/.test(main) && !base.html.includes(RULES.mql.label), 'no tile, no column, no placeholder');
+  // With its inputs it is computed (ben booked via the book-a-demo page; ana and gus filled lead forms) but stays
+  // hidden while config/lead-rules.json says show: false (MQL-VALIDATION.md); the figures stay in the file.
   const f = synced.data.mqlFunnel;
-  assert.deepEqual([f.available, f.numerator, f.denominator, f.formBasis], [true, 1, 2, 'hubspot_form_submissions']);
-  assert.equal(fig(synced.html, 'lead-mql-90'), '50.0%');
-  assert.ok(synced.html.includes(RULES.mql.label));
+  assert.equal(RULES.mql.show, false);
+  assert.deepEqual([f.available, f.reason, f.computed.numerator, f.computed.denominator, f.computed.bookersWithoutForm], [false, RULES.mql.hiddenBecause, 1, 3, 1]);
+  assert.equal(fig(synced.html, 'lead-mql-90'), null);
+  assert.ok(!synced.html.includes(RULES.mql.label), 'hidden entirely');
+  // Shown (show: true): the tile, with its numerator and denominator.
+  const shown = buildView({ ...synced.data, mqlFunnel: { available: true, ...f.computed, label: RULES.mql.label } }, null);
+  const leads = page.renderPage(shown, {}).main;
+  assert.match(leads, /data-fig="lead-mql-90"><div class="tile-l">Lead → MQL \(book-a-demo\), 90 days \(proposed\)<\/div><div class="tile-v num">33\.3%/);
+  assert.match(leads, /1<\/span> booked via book-a-demo ÷ <span class="num">3<\/span> lead-form fillers and bookers/);
 });
 
 test('ad platforms: platform-reported events, not leads, with spend days and how each counts', () => {

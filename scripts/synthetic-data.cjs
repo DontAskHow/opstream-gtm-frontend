@@ -30,6 +30,8 @@ for(const [name,value]of Object.entries({verified,records,evidence,'draft-seeds'
 // synced: true adds the tables and contact fields the parallel sync change adds.
 // The scrub pattern the synthetic data plants (tests pass it as WORKSPACE_SCRUB_PATTERNS).
 const SYNTHETIC_SCRUB = 'quill';
+// The book-a-demo scheduling page id the rules match (an id, not a name).
+const BOOK_A_DEMO_PAGE = require('../config/lead-rules.json').mql.bookingLinkIds[0];
 function brainFixture({ synced = false, scrub = SYNTHETIC_SCRUB } = {}) {
   const path = require('node:path');
   const scope = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'shared', 'workspace-scope.json'), 'utf8'));
@@ -107,13 +109,14 @@ function brainFixture({ synced = false, scrub = SYNTHETIC_SCRUB } = {}) {
   }
 
   const mtg = (id, start, owner, title, contactKeys = [], extra = {}) => {
-    const booking = synced && extra.booking ? { hs_meeting_source: 'MEETINGS_PUBLIC', hs_meeting_booking_link: extra.booking, hs_createdate: '2026-10-01T15:00:00Z' } : {};
+    // A scheduling-page booking: extra.booking is the page id (config/lead-rules.json mql.bookingLinkIds is the book-a-demo page).
+    const booking = synced && extra.booking ? { hs_meeting_source: 'MEETINGS_PUBLIC', hs_created_by_scheduling_page: extra.booking, hs_createdate: '2026-10-01T15:00:00Z' } : {};
     obj('meetings', id, { hs_meeting_title: title, hs_meeting_start_time: start, hs_timestamp: start, hs_meeting_outcome: 'SCHEDULED', hubspot_owner_id: owner, ...booking });
     for (const k of contactKeys) link('meetings', id, 'contacts', K[k]);
     if (extra.deal) link('meetings', id, 'deals', extra.deal);
   };
   mtg('8001', '2026-10-05T17:00:00Z', '101', `Northstar intro with ${hiddenFirst}`, ['ana']);
-  mtg('8002', '2026-10-20T17:00:00Z', '102', 'Cedar demo', ['ben'], { booking: 'https://meetings.example.com/team/book-a-demo' });
+  mtg('8002', '2026-10-20T17:00:00Z', '102', 'Cedar demo', ['ben'], { booking: BOOK_A_DEMO_PAGE });
   mtg('8003', '2026-10-21T17:00:00Z', '103', 'Northstar security review', ['ana']);
   mtg('8004', '2026-10-06T17:00:00Z', '76564046', 'Northstar CS check-in', ['ana']);
   mtg('8005', '2026-10-07T17:00:00Z', '101', 'Juniper QBR', ['cara']);
@@ -121,7 +124,7 @@ function brainFixture({ synced = false, scrub = SYNTHETIC_SCRUB } = {}) {
   mtg('8007', '2026-10-09T17:00:00Z', '101', 'Orchid check-in', ['gus']);
   mtg('8008', '2026-10-02T17:00:00Z', '101', 'Pine evaluation', ['fay']);
   mtg('8009', '2026-10-08T18:00:00Z', '101', 'Pine kickoff', ['fay']);
-  mtg('8010', '2026-10-10T17:00:00Z', '102', 'Maple intro', ['eli'], { booking: 'https://meetings.example.com/team/intro' });
+  mtg('8010', '2026-10-10T17:00:00Z', '102', 'Maple intro', ['eli'], { booking: '1000001' });
   if (synced) link('deals', '7001', 'contacts', K.ana);
   mtg('8011', '2026-10-11T17:00:00Z', '102', 'Weekly sync');
   mtg('8012', '2026-10-12T17:00:00Z', '102', 'Bluebird Systems onboarding session');

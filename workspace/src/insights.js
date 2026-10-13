@@ -193,8 +193,8 @@
       const priced = xs.filter((x) => num(x.amount) != null);
       out.commit_stage_amount = !xs.length ? 0 : priced.length ? priced.reduce((a, x) => a + x.amount, 0) : null;
     }
-    // Lead Tracker rows: unowned leads only. lead_to_mql_rate (r12) is per contact: book-a-demo bookings ÷
-    // form-filling contacts over 90 days, from d.mqlFunnel; unknown (hidden) until those inputs are synced.
+    // Lead Tracker rows: unowned leads only. lead_to_mql_rate (r12) is per contact: book-a-demo bookers ÷
+    // lead-form fillers and bookers over 90 days, from d.mqlFunnel; unknown while it is hidden (config mql.show, inputs).
     const lt = d.leadTracker;
     if (lt && num(lt.total) != null) out.unowned_lead_count = num(lt.unowned);
     const f = d.mqlFunnel;

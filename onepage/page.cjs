@@ -325,7 +325,7 @@ ${NAV}
     const lastLabel = week ? weekWindow(clockOf(v), 1).label : '';
     const f = v.mqlFunnel;
     // The r12 lead → MQL rate shows only when its inputs exist; otherwise there is no tile at all.
-    const funnel = f && f.available ? tile(f.label, pct(f.rate), `<span class="num">${int(f.numerator)}</span> booked via book-a-demo ÷ <span class="num">${int(f.denominator)}</span> form-filling contacts`, ' data-fig="lead-mql-90"') : '';
+    const funnel = f && f.available ? tile(f.label, pct(f.rate), `<span class="num">${int(f.numerator)}</span> booked via book-a-demo ÷ <span class="num">${int(f.denominator)}</span> lead-form fillers and bookers`, ' data-fig="lead-mql-90"') : '';
     const tiles = `<div class="tiles">${tile('Leads', int(items.length), week ? weekDelta(items.length, last.length, lastLabel) : 'companies on the Lead Tracker', ' data-fig="leads"')}${tile('Source from HubSpot', int(items.filter((l) => l.sourceBasis === 'hubspot').length), `of ${int(items.length)}; the rest fall back to the Lead Tracker`, ' data-fig="hubspot-sourced"')}${tile('Sheet MQL (incl. SQL)', int(mql), week ? weekDelta(mql, last.filter((l) => l.mql).length, lastLabel) : `${int(items.filter((l) => l.sql).length)} SQL · Lead Tracker dates`, ' data-fig="mql"')}${funnel}</div>`;
     const max = Math.max(1, ...L.sources.map((src) => items.filter((l) => l.source === src).length));
     const rows = L.sources.map((src) => {

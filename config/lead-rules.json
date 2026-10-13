@@ -26,23 +26,36 @@
   },
   "mql": {
     "metric": "lead_to_mql_rate",
-    "label": "Lead → MQL, 90 days (proposed)",
-    "definition": "Distinct contacts who booked through the book-a-demo HubSpot meeting link (meeting source MEETINGS_PUBLIC and a booking-link match, via meeting → contact associations) ÷ distinct contacts with at least one form submission, trailing 90 days in PT.",
+    "label": "Lead → MQL (book-a-demo), 90 days (proposed)",
+    "definition": "Distinct external contacts who booked through the website book-a-demo HubSpot scheduling page (meeting source MEETINGS_PUBLIC and hs_created_by_scheduling_page in bookingLinkIds, via meeting → contact associations, meeting created in the window) ÷ distinct external contacts who filled a lead form (every form except those lead-sources.json marks not a lead source, i.e. careers) or booked, trailing 90 days. External: email domain not an owner's domain (free-mail domains are never internal). Narrower than the Lead Tracker's MQL date, which also counts Outbound and Events first meetings.",
     "windowDays": 90,
     "meetingSourceProperty": "hs_meeting_source",
     "meetingSourceValue": "MEETINGS_PUBLIC",
-    "bookingLinkProperties": [
-      "hs_meeting_booking_link",
-      "hs_booking_link",
-      "hs_meeting_source_id",
-      "hs_meeting_external_url",
-      "hs_meeting_location"
+    "bookingLinkProperty": "hs_created_by_scheduling_page",
+    "bookingLinkIds": [
+      "12536147"
     ],
-    "bookingLinkPattern": "book-a-demo",
+    "bookingLinkEvidence": "Validated Oct 13 2026 (MQL-VALIDATION.md, outside the repo): every contact whose conversion event is the website-book-a-demo meetings link that has a scheduling-page meeting booked it through this page, and the page maps to no other link; fixed meeting title, first booking the day the website's booking form stopped.",
+    "denominatorIncludesBookers": true,
+    "excludeInternalContacts": true,
+    "freeMailDomains": [
+      "gmail.com",
+      "googlemail.com",
+      "yahoo.com",
+      "hotmail.com",
+      "outlook.com",
+      "live.com",
+      "icloud.com",
+      "aol.com",
+      "proton.me",
+      "protonmail.com"
+    ],
     "formContactProperties": [
       "first_conversion_date",
       "num_conversion_events"
     ],
+    "show": false,
+    "hiddenBecause": "Hidden after validation (Oct 13 2026): the HubSpot cross-check is not possible (hs_lifecyclestage_marketingqualifiedlead_date is not synced), and incremental meeting syncs drop hs_meeting_source / hs_created_by_scheduling_page from meetings re-read after the backfill, so bookings silently fall out of the numerator. Computed figures stay in workspace.json (mqlFunnel.computed) for monitoring; set show to true once both are fixed and the cross-check agrees.",
     "hideWhenUnavailable": true
   },
   "ads": {

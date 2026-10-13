@@ -150,3 +150,88 @@ class LeadRules(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MqlFunnel(unittest.TestCase):
+    """lead_to_mql_rate (config/lead-rules.json "mql"): book-a-demo bookers / lead-form fillers plus bookers."""
+    AS_OF = datetime(2026, 10, 13, 20, 0, tzinfo=timezone.utc)
+    PAGE = wd.RULES['mql']['bookingLinkIds'][0]
+
+    def make(self, meetings, subs):
+        import sqlite3
+        import tempfile
+        path = os.path.join(tempfile.mkdtemp(), 'b.db')
+        con = sqlite3.connect(path)
+        con.execute('CREATE TABLE hubspot_objects (object_type TEXT, hs_id TEXT, properties_json TEXT, fetched_at TEXT)')
+        con.execute('CREATE TABLE hubspot_associations (from_type TEXT, from_id TEXT, to_type TEXT, to_id TEXT)')
+        for mid, props, contacts in meetings:
+            con.execute('INSERT INTO hubspot_objects VALUES (?,?,?,?)', ('meetings', mid, json.dumps(props), ''))
+            for c in contacts:
+                con.execute('INSERT INTO hubspot_associations VALUES (?,?,?,?)', ('meetings', mid, 'contacts', c))
+        con.commit()
+        con.close()
+        brain = wd.Brain(path)
+        contacts = {cid: {'id': cid, 'email': email} for cid, email in
+                    [('1', 'a@buyer.example'), ('2', 'b@buyer.example'), ('3', 'me@ours.example'), ('4', 'c@gmail.com'), ('5', 'job@seeker.example')]}
+        ls = wd.LeadSources({'forms': [{'id': 'f-demo', 'bucket': 'demo_request'}, {'id': 'f-jobs', 'bucket': 'not_a_lead_source'}]})
+        submissions = {}
+        for email, form, at in subs:
+            submissions.setdefault(email, []).append({'formId': form, 'at': at})
+        ctx = {'assoc': wd.Assoc(brain), 'contacts': contacts, 'contact_by_email': {c['email']: c for c in contacts.values()},
+               'submissions': submissions, 'internal_domains': {'ours.example', 'gmail.com'}, 'ls': ls}
+        return brain, ctx
+
+    def booking(self, page, created='2026-10-01T15:00:00Z', source='MEETINGS_PUBLIC'):
+        return {'hs_meeting_source': source, 'hs_created_by_scheduling_page': page, 'hs_createdate': created}
+
+    def run_with(self, show, meetings, subs):
+        brain, ctx = self.make(meetings, subs)
+        old = wd.RULES['mql'].get('show')
+        wd.RULES['mql']['show'] = show
+        try:
+            return wd.mql_funnel(brain, ctx, self.AS_OF)
+        finally:
+            wd.RULES['mql']['show'] = old
+
+    def meetings(self):
+        return [('m1', self.booking(self.PAGE), ['1']),                              # external booker via book-a-demo
+                ('m2', self.booking(self.PAGE), ['3']),                              # internal tester: excluded
+                ('m3', self.booking('999'), ['2']),                                  # another scheduling page: not book-a-demo
+                ('m4', self.booking(self.PAGE, created='2026-06-01T15:00:00Z'), ['4']),  # outside 90 days
+                ('m5', {'hs_meeting_source': 'CRM_UI', 'hs_created_by_scheduling_page': '', 'hs_createdate': '2026-10-02T00:00:00Z'}, [])]
+
+    SUBS = [('b@buyer.example', 'f-demo', '2026-09-01T00:00:00Z'),    # lead form: in the denominator
+            ('job@seeker.example', 'f-jobs', '2026-09-01T00:00:00Z'),  # careers: not a lead
+            ('me@ours.example', 'f-demo', '2026-09-01T00:00:00Z'),     # internal
+            ('c@gmail.com', 'f-demo', '2026-09-02T00:00:00Z')]         # free-mail is never internal
+
+    def test_definition(self):
+        f = self.run_with(True, self.meetings(), self.SUBS)
+        self.assertTrue(f['available'])
+        # bookers {1}; fillers {2, 4}; denominator = fillers + bookers.
+        self.assertEqual((f['numerator'], f['denominator'], f['formFillers'], f['bookersWithoutForm']), (1, 3, 2, 1))
+        self.assertAlmostEqual(f['rate'], 1 / 3)
+        self.assertEqual(f['schedulingPageBookings'], 3)
+
+    def test_hidden_by_config_keeps_the_computed_figures(self):
+        f = self.run_with(False, self.meetings(), self.SUBS)
+        self.assertFalse(f['available'])
+        self.assertEqual(f['reason'], wd.RULES['mql']['hiddenBecause'])
+        self.assertEqual((f['computed']['numerator'], f['computed']['denominator']), (1, 3))
+
+    def test_page_ids_that_match_nothing_hide_it_instead_of_showing_zero(self):
+        ms = [(m, dict(p, hs_created_by_scheduling_page='999') if p.get('hs_created_by_scheduling_page') == self.PAGE else p, c)
+              for m, p, c in self.meetings()]
+        f = self.run_with(True, ms, self.SUBS)
+        self.assertFalse(f['available'])
+        self.assertIn('match none', f['reason'])
+
+    def test_missing_inputs(self):
+        ms = [('m1', {'hs_meeting_source': 'MEETINGS_PUBLIC', 'hs_createdate': '2026-10-01T15:00:00Z'}, ['1'])]
+        f = self.run_with(True, ms, self.SUBS)
+        self.assertFalse(f['available'])
+        self.assertIn('hs_created_by_scheduling_page', f['reason'])
+
+    def test_meetings_without_source_are_counted(self):
+        ms = self.meetings() + [('m6', {'hs_createdate': '2026-10-05T00:00:00Z'}, ['2'])]
+        self.assertEqual(self.run_with(True, ms, self.SUBS)['meetingsWithoutSource'], 1)

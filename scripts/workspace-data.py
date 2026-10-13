@@ -1374,52 +1374,61 @@ def paid_deals_view(paid, deal_by_id, comp_name):
 
 
 def mql_funnel(brain, ctx, as_of):
-    """r12 lead_to_mql_rate: book-a-demo bookings / form-filling contacts, trailing window. None when the data isn't there."""
+    """r12 lead_to_mql_rate (config/lead-rules.json "mql"): external contacts who booked through the book-a-demo
+    scheduling page / external contacts who filled a lead form or booked, trailing window. Unavailable (the page
+    hides it) when its inputs are missing, when the page ids match no booking while scheduling-page bookings exist,
+    or while the config says show: false; the computed figures are kept in 'computed' for monitoring."""
     cfg = RULES['mql']
     since = as_of - timedelta(days=cfg['windowDays'])
-    src_prop = cfg['meetingSourceProperty']
+    in_window = lambda t: t is not None and since <= t <= as_of
+    src_prop, link_prop = cfg['meetingSourceProperty'], cfg['bookingLinkProperty']
     has = lambda kind, prop: bool(brain.q("SELECT 1 FROM hubspot_objects WHERE object_type=? AND json_type(properties_json, '$.%s') IS NOT NULL LIMIT 1" % prop, (kind,)))
-    link_props = [x for x in cfg['bookingLinkProperties'] if has('meetings', x)]
     missing = []
     if not has('meetings', src_prop):
         missing.append('meeting source (%s)' % src_prop)
-    if not link_props:
-        missing.append('meeting booking link')
-    form_props = [x for x in cfg['formContactProperties'] if x in ctx['contact_props']]
-    if ctx['submissions'] is None and not form_props:
+    if not has('meetings', link_prop):
+        missing.append('meeting scheduling page (%s)' % link_prop)
+    if ctx['submissions'] is None:
         missing.append('form submissions')
     if missing:
         return {'available': False, 'reason': 'not derivable from brain.db: no %s' % ', '.join(missing)}
-    pat = re.compile(cfg['bookingLinkPattern'], re.I)
-    booked = set()
-    fields = [src_prop, 'hs_createdate', 'hs_meeting_start_time'] + link_props
+    free = {d.lower() for d in cfg.get('freeMailDomains') or []}
+    internal = (set(ctx['internal_domains']) - free) if cfg.get('excludeInternalContacts') else set()
+    external = lambda c: bool(c) and domain_of(c['email']) not in internal
+    ids = {str(i) for i in cfg['bookingLinkIds']}
+    booked, public, no_source = set(), 0, 0
+    fields = [src_prop, link_prop, 'hs_createdate', 'hs_meeting_start_time']
     for row in brain.objects('meetings', fields):
         mid, vals = str(row[0]), dict(zip(fields, row[1:]))
-        if str(vals.get(src_prop) or '').upper() != cfg['meetingSourceValue']:
+        if not in_window(parse_time(vals.get('hs_createdate') or vals.get('hs_meeting_start_time'))):
             continue
-        if not any(pat.search(str(vals.get(k) or '')) for k in link_props):
+        source = str(vals.get(src_prop) or '').upper()
+        if not source:
+            no_source += 1
+        if source != cfg['meetingSourceValue']:
             continue
-        t = parse_time(vals.get('hs_createdate') or vals.get('hs_meeting_start_time'))
-        if t and since <= t <= as_of:
-            booked |= set(ctx['assoc'].get('meetings', mid, 'contacts'))
+        public += 1
+        if str(vals.get(link_prop) or '') in ids:
+            booked |= {cid for cid in ctx['assoc'].get('meetings', mid, 'contacts') if external(ctx['contacts'].get(cid))}
+    ls = ctx['ls']
     filled = set()
-    if ctx['submissions'] is not None:
-        for email, subs in ctx['submissions'].items():
-            c = ctx['contact_by_email'].get(email)
-            if c and any((lambda t: t and since <= t <= as_of)(parse_time(x['at'])) for x in subs):
-                filled.add(c['id'])
-        basis = 'hubspot_form_submissions'
-    else:
-        for c in ctx['contacts'].values():
-            t = parse_time(c['props'].get('first_conversion_date'))
-            if t and since <= t <= as_of:
-                filled.add(c['id'])
-        basis = 'contact first_conversion_date'
-    if not filled:
-        return {'available': False, 'reason': 'no form-filling contacts in the window'}
-    return {'available': True, 'numerator': len(booked), 'denominator': len(filled), 'rate': len(booked) / len(filled),
-            'windowDays': cfg['windowDays'], 'label': cfg['label'], 'definition': cfg['definition'], 'formBasis': basis,
-            'since': iso(since)}
+    for email, subs in ctx['submissions'].items():
+        c = ctx['contact_by_email'].get(email)
+        if external(c) and any(in_window(parse_time(x['at'])) and ls.form_is_lead(ls.forms.get(x['formId'])) for x in subs):
+            filled.add(c['id'])
+    leads = filled | booked if cfg.get('denominatorIncludesBookers') else filled
+    computed = {'numerator': len(booked), 'denominator': len(leads), 'rate': (len(booked) / len(leads)) if leads else None,
+                'formFillers': len(filled), 'bookersWithoutForm': len(booked - filled), 'schedulingPageBookings': public,
+                'meetingsWithoutSource': no_source, 'windowDays': cfg['windowDays']}  # no window start: it moves every run and would change the content hash
+    if not leads:
+        return {'available': False, 'reason': 'no form-filling or booking contacts in the window', 'computed': computed}
+    if not booked and public:
+        return {'available': False, 'reason': 'the book-a-demo page ids match none of the %d scheduling-page bookings in the window: '
+                'check bookingLinkIds' % public, 'computed': computed}
+    if not cfg.get('show', True):
+        return {'available': False, 'reason': cfg.get('hiddenBecause') or 'hidden by config', 'computed': computed}
+    return {'available': True, **computed, 'label': cfg['label'], 'definition': cfg['definition'],
+            'formBasis': 'hubspot_form_submissions'}
 
 
 def load_call_classification(path, warn):
@@ -1905,7 +1914,8 @@ def audit_lines(d):
             l['total'], l['hubspotSourced'], l['total'] - l['hubspotSourced'], l['mql'], l['reviewLeads'], l['conflicts']))
     f = d['mqlFunnel']
     lines.append('lead -> MQL (90 days, proposed): ' + ('%d / %d = %.1f%%' % (f['numerator'], f['denominator'], 100 * f['rate'])
-                                                         if f['available'] else 'hidden (%s)' % f['reason']))
+                                                         if f['available'] else 'hidden (%s)%s' % (f['reason'][:120], '; computed %d / %d' % (
+                                                             f['computed']['numerator'], f['computed']['denominator']) if f.get('computed') else '')))
     o = d['outbound']
     lines.append('outbound reply rate: %d / %d = %.1f%% over %d campaigns' % (o['replies'], o['sends'], 100 * (o['rate'] or 0), o['count']))
     p = d['paidDeals']
