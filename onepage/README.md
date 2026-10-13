@@ -117,4 +117,11 @@ node --test test/onepage-live.test.mjs     # the Lambda's copy / skip / keep-las
 node --test test/onepage-deploy.test.mjs   # deploy-check, refusals before AWS, and the invoke -> check -> upload sequence against a fake aws
 ```
 
-The real-data run reads `BRAIN_DB`, `GTM_INPUTS_DIR` (the inputs directory, including `scrub-patterns.txt`), `GTM_PRIOR_EXPORT`, `GTM_CURRENT_PAGE`, `GTM_REFRESH_JSON` and `GTM_LEMLIST_SNAPSHOT` (defaults under `/workspace`), builds into a temp dir, checks the headline against an independent SQL computation, checks the file passes the Lambda's checks and hashes the same across runs, and prints PASS/FAIL per audited figure. The synthetic tests use the made-up pattern from `scripts/synthetic-data.cjs` (`SYNTHETIC_SCRUB`).
+The real-data run reads `BRAIN_DB`, `GTM_INPUTS_DIR` (the inputs directory, including `scrub-patterns.txt`), `GTM_PRIOR_EXPORT`, `GTM_CURRENT_PAGE`, `GTM_REFRESH_JSON` and `GTM_LEMLIST_SNAPSHOT` (defaults under `/workspace`), builds into a temp dir and prints PASS/FAIL per figure. It hard-codes no counts, because brain.db and the inputs drift with every sync. Each figure is either recomputed independently or checked as an invariant:
+
+- **Recomputed from SQL over brain.db:** the headline and On Hold, closed-not-won by stage, the Lemlist sums, and the failing sync sources.
+- **Recomputed from the Lead Tracker rows:** leads (distinct companies) and Sheet MQL.
+- **Recomputed from the input files:** calls (`records.jsonl` audiences over the brain.db recordings), review rows, paid deals, lead insights, and the lost-reasons file coverage.
+- **Invariants:** categories sum to totals, lists stay subsets, and flags follow their causes.
+
+It also checks that the file passes the Lambda's checks and hashes the same across runs. Fixed values live only in the synthetic tests. The synthetic tests use the made-up pattern from `scripts/synthetic-data.cjs` (`SYNTHETIC_SCRUB`).
