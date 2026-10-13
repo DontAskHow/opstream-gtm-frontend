@@ -140,7 +140,7 @@ def merge_duplicate_companies(companies):
 
 
 def person_name(value):
-    """Fathom can store a host as 'maya graff'. People are named the same way everywhere."""
+    """Fathom can store a host as 'robin vale'. People are named the same way everywhere."""
     raw = " ".join(str(value or "").split())
     if raw and raw == raw.lower() and "@" not in raw:
         raw = " ".join(w[:1].upper() + w[1:] for w in raw.split())
