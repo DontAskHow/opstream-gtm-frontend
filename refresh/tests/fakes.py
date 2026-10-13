@@ -138,13 +138,15 @@ class HubSpotFake:
                 "hs_meeting_source": "MEETINGS_PUBLIC", "hs_meeting_source_id": "src-%d" % i,
                 "hs_meeting_external_url": "https://example.com/meet/%d" % i, "hs_meeting_location": "Online",
                 "hs_activity_type": "Discovery", "test_booking_page_url": "https://example.com/book/test",
-                "hs_internal_meeting_notes": "Test internal note",
+                "hs_internal_meeting_notes": "Test internal note", "hs_scheduled_tasks": "{}",
             }
         # name, label: one property matches by name, one by label only; the others must not be requested.
         self.meeting_properties = [
             ("hs_meeting_title", "Meeting name"), ("hs_meeting_source", "Meeting source"),
             ("test_booking_page_url", "Test page URL"), ("test_link_used", "Meetings link used"),
-            ("hs_internal_meeting_notes", "Internal meeting notes"), ("favorite_room", "Favorite room")]
+            ("hs_internal_meeting_notes", "Internal meeting notes"), ("favorite_room", "Favorite room"),
+            ("hs_scheduled_tasks", "Scheduled tasks"), ("hs_meeting_location", "Location"),
+            ("hs_meeting_external_url", "External URL")]
         self.meeting_properties_status = 200
         self.forms = []
         self.submissions = {}

@@ -35,8 +35,10 @@ import fakes  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 SYNC_SRC = ROOT / "refresh" / "brain-sync"
 
-MEETING_PROPS = ("hs_meeting_source", "hs_meeting_source_id", "hs_meeting_external_url", "hs_meeting_location",
-                 "hs_activity_type")
+MEETING_PROPS = ("hs_meeting_source", "hs_meeting_source_id", "hs_activity_type")
+# Never requested or stored: free text, internal bookkeeping, conference links that can carry passcodes.
+MEETING_PROPS_NEVER = ("hs_internal_meeting_notes", "hs_scheduled_tasks", "hs_meeting_location",
+                       "hs_meeting_external_url")
 
 # Read-only POSTs the HubSpot sync may send; everything else must be GET.
 HUBSPOT_POSTS = re.compile(r"^(/oauth/v1/token|/crm/v3/objects/[^/]+/search|/crm/v3/lists/search"
@@ -163,13 +165,14 @@ class SyncE2E(unittest.TestCase):
         body = next(r.json() for r in reqs if r.path == "/crm/v3/objects/meetings/search")
         for prop in MEETING_PROPS + ("test_booking_page_url", "test_link_used"):
             self.assertIn(prop, body["properties"])
-        for prop in ("hs_internal_meeting_notes", "favorite_room"):
+        for prop in MEETING_PROPS_NEVER + ("favorite_room",):
             self.assertNotIn(prop, body["properties"])
         props = json.loads(self.q("SELECT properties_json FROM hubspot_objects WHERE object_type='meetings' "
                                   "AND hs_id='7001'")[0][0])
         self.assertEqual((props["hs_meeting_source"], props["test_booking_page_url"]),
                          ("MEETINGS_PUBLIC", "https://example.com/book/test"))
-        self.assertNotIn("hs_internal_meeting_notes", props)
+        for prop in MEETING_PROPS_NEVER:
+            self.assertNotIn(prop, props)
         self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_objects WHERE object_type='meetings'")[0][0], 2)
         props = json.loads(self.q("SELECT properties_json FROM hubspot_objects WHERE object_type='contacts' "
                                   "AND hs_id='101'")[0][0])
@@ -406,15 +409,16 @@ class SyncE2E(unittest.TestCase):
             self.assertGreater(json.loads(self.state("hubspot_lists"))["refreshed"]["12"], before["12"])
 
     def test_hubspot_meeting_backfill(self):
-        """HUBSPOT_MEETING_BACKFILL=1 re-reads every meeting once, merging, resumable; property listing may fail."""
+        """HUBSPOT_MEETING_BACKFILL=1 re-reads every meeting once: merged, page-capped, resumable."""
         hub = self.world.hubspot
         with self.fresh_db("meetings.db") as db:
-            # Meetings stored before the source and booking link properties were fetched.
+            # Meetings stored before the source and booking link properties were fetched, with a
+            # location stored by older code.
             con = sqlite3.connect(str(db))
             for i in hub.meetings:
                 con.execute("INSERT INTO hubspot_objects VALUES('meetings', ?, ?, '2026-01-01T00:00:00+00:00')",
                             (str(i), json.dumps({"hs_object_id": str(i), "hs_meeting_title": "Stored title",
-                                                 "seed_only": "kept"})))
+                                                 "seed_only": "kept", "hs_meeting_location": "Stored room"})))
             con.commit()
             con.close()
 
@@ -426,26 +430,36 @@ class SyncE2E(unittest.TestCase):
                 return json.loads(self.q("SELECT properties_json FROM hubspot_objects WHERE object_type='meetings' "
                                          "AND hs_id=?", str(hs_id))[0][0])
 
-            # Run 1: the second page fails. The first 200 are merged; the failure is recorded alone.
+            # Run 1: one page per run (HUBSPOT_BACKFILL_MAX_PAGES=1). The first 200 are merged, the
+            # stored location is removed, and the outcome is ok with "resuming next run".
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1, HUBSPOT_BACKFILL_MAX_PAGES=1)
+            self.assert_hubspot_read_only(reqs)
+            self.assertEqual([b["filterGroups"][0]["filters"][0]["value"] for b in keyset(reqs)], ["0"])
+            self.assertIn("test_booking_page_url", keyset(reqs)[0]["properties"])
+            ok, _route, _http, detail = self.outcome("hubspot_meeting_backfill")
+            self.assertEqual(ok, 1)
+            self.assertIn("HUBSPOT_BACKFILL_MAX_PAGES reached, resuming next run", detail)
+            bf = json.loads(self.state("hubspot_meeting_backfill"))
+            self.assertEqual((bf["afterId"], bf["count"], bf.get("done")), ("7200", 200, None))
+            m = stored(7100)
+            self.assertEqual((m["seed_only"], m["hs_meeting_source"]), ("kept", "MEETINGS_PUBLIC"))  # merged
+            for prop in MEETING_PROPS_NEVER:
+                self.assertNotIn(prop, m)
+            self.assertNotIn("hs_meeting_source", stored(7250))
+            self.assertEqual(stored(7250)["hs_meeting_location"], "Stored room")   # not reached yet
+
+            # Run 2: the next page fails; the failure is recorded alone and the position kept.
             hub.fail_meeting_backfill_after = 7200
             reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1)
-            self.assert_hubspot_read_only(reqs)
             self.assertEqual(self.outcome("hubspot")[0], 1)
             self.assertEqual(self.outcome("hubspot_meeting_backfill")[:3],
                              (0, "POST /crm/v3/objects/meetings/search", 500))
             self.assertIn("EXTRA_PULL_FAILED hubspot_meeting_backfill POST /crm/v3/objects/meetings/search 500", out)
             self.assertFalse(self.q("SELECT 1 FROM sync_outcomes WHERE source='hubspot_contact_backfill'"))
-            self.assertEqual([b["filterGroups"][0]["filters"][0]["value"] for b in keyset(reqs)], ["0", "7200"])
-            self.assertIn("test_booking_page_url", keyset(reqs)[0]["properties"])
-            bf = json.loads(self.state("hubspot_meeting_backfill"))
-            self.assertEqual((bf["afterId"], bf["count"], bf.get("done")), ("7200", 200, None))
-            m = stored(7100)
-            self.assertEqual((m["seed_only"], m["hs_meeting_source"], m["hs_meeting_external_url"]),
-                             ("kept", "MEETINGS_PUBLIC", "https://example.com/meet/7100"))    # merged
-            self.assertNotIn("hs_internal_meeting_notes", m)
-            self.assertNotIn("hs_meeting_source", stored(7250))
+            self.assertEqual([b["filterGroups"][0]["filters"][0]["value"] for b in keyset(reqs)], ["7200"])
+            self.assertEqual(json.loads(self.state("hubspot_meeting_backfill"))["afterId"], "7200")
 
-            # Run 2: meeting properties cannot be listed (403). The sync goes on with the fixed
+            # Run 3: meeting properties cannot be listed (403). The sync goes on with the fixed
             # properties, and the backfill resumes after 7200 and finishes.
             hub.fail_meeting_backfill_after = None
             hub.meeting_properties_status = 403
@@ -460,11 +474,12 @@ class SyncE2E(unittest.TestCase):
             self.assertEqual((bf["afterId"], bf["count"], bf["done"]), ("7250", 250, True))
             self.assertEqual(self.outcome("hubspot_meeting_backfill")[0], 1)
             self.assertEqual(stored(7250)["hs_meeting_source"], "MEETINGS_PUBLIC")
+            self.assertNotIn("hs_meeting_location", stored(7250))
             self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_objects WHERE object_type='meetings' AND "
                                     "json_extract(properties_json, '$.hs_activity_type')='Discovery'")[0][0],
                              len(hub.meetings))
 
-            # Run 3: a finished backfill is not repeated.
+            # Run 4: a finished backfill is not repeated.
             hub.meeting_properties_status = 200
             reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1)
             self.assertFalse(keyset(reqs))
@@ -579,8 +594,12 @@ class SyncE2E(unittest.TestCase):
             def stored():
                 return self.q("SELECT COUNT(*) FROM lemlist_activities WHERE type='emailsOpened'")[0][0]
 
-            # Budget 7: five calls for the other types, two pages of opens per run.
-            reqs, _out = self.run_sync("lemlist_sync.py", LEMLIST_ACTIVITY_MAX_CALLS=7)
+            def exports(reqs):
+                return [r.path.split("/")[4] for r in reqs if r.path.endswith("/export/leads")]
+
+            # Budget 7: five calls for the other types, two pages of opens per run. One leads export
+            # a run (LEMLIST_LEADS_MAX_EXPORTS=1): the first campaign now, the second next run.
+            reqs, _out = self.run_sync("lemlist_sync.py", LEMLIST_ACTIVITY_MAX_CALLS=7, LEMLIST_LEADS_MAX_EXPORTS=1)
             first = open_calls(reqs)
             self.assertEqual([r.query["offset"] for r in first], ["0", "100"])
             self.assertEqual(stored(), 200)
@@ -589,18 +608,22 @@ class SyncE2E(unittest.TestCase):
             ok, _route, _http, detail = self.outcome("lemlist_activities")
             self.assertEqual(ok, 1)
             self.assertIn("resuming next run (emailsOpened behind)", detail)
-            self.assertEqual(sum(1 for r in reqs if r.path.endswith("/export/leads")), 2)
+            self.assertEqual(exports(reqs), ["cam_test1"])
+            self.assertIn("1 due campaigns wait for a later run", self.outcome("lemlist_leads")[3])
+            self.assertEqual(self.q("SELECT DISTINCT campaign_id FROM lemlist_leads"), [("cam_test1",)])
 
-            # Run 2: the same window, from offset 200. Leads are not exported again.
-            reqs, _out = self.run_sync("lemlist_sync.py", LEMLIST_ACTIVITY_MAX_CALLS=7)
+            # Run 2: the same window, from offset 200. Only the campaign still due is exported.
+            reqs, _out = self.run_sync("lemlist_sync.py", LEMLIST_ACTIVITY_MAX_CALLS=7, LEMLIST_LEADS_MAX_EXPORTS=1)
             calls = open_calls(reqs)
             self.assertEqual([r.query["offset"] for r in calls], ["200", "300"])
             for r in calls:
                 self.assertEqual((r.query["minDate"], r.query["maxDate"]),
                                  (first[0].query["minDate"], first[0].query["maxDate"]))
             self.assertEqual(stored(), 400)
-            self.assertFalse([r for r in reqs if "/leads" in r.path])
-            self.assertIn("skipped", self.outcome("lemlist_leads")[3])
+            self.assertEqual(exports(reqs), ["cam_test2"])
+            self.assertIn("1 campaigns skipped", self.outcome("lemlist_leads")[3])
+            refreshed = json.loads(self.state("lemlist_leads"))
+            self.assertLess(refreshed["cam_test1"], refreshed["cam_test2"])           # spread over runs
 
             # Run 3: the window finishes and the watermark moves on; leads are due with the interval at 0.
             reqs, _out = self.run_sync("lemlist_sync.py", LEMLIST_ACTIVITY_MAX_CALLS=7,
@@ -610,7 +633,7 @@ class SyncE2E(unittest.TestCase):
             self.assertGreater(fakes.parse_iso(json.loads(self.state("lemlist_activities"))["emailsOpened"]), now)
             self.assertEqual(json.loads(self.state("lemlist_activities_resume")), {})
             self.assertNotIn("resuming", self.outcome("lemlist_activities")[3])
-            self.assertEqual(sum(1 for r in reqs if r.path.endswith("/export/leads")), 2)
+            self.assertEqual(exports(reqs), ["cam_test1", "cam_test2"])
 
 
 if __name__ == "__main__":

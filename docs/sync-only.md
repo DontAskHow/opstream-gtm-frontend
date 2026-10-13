@@ -104,15 +104,17 @@ Custom `paid_touch_campaign` and `utm_*` properties are added when
 fails, the sync goes on without them. The incremental search reads these
 properties for contacts that changed.
 
-Meetings carry `hs_meeting_source`, `hs_meeting_source_id`,
-`hs_meeting_external_url`, `hs_meeting_location`, and `hs_activity_type`.
-They also carry any meeting property that names the booking link, if
-`GET /crm/v3/properties/meetings` lists one. A property matches when its name
-contains `booking`, `meeting_link`/`meetings_link`, `scheduling_page`, or
-`scheduled_tasks`, or when its label contains "booking", "meeting link",
-"meetings link", or "scheduling page". `hs_internal_meeting_notes` is never
-fetched. When that call fails, meetings are read without the booking link
-properties.
+Meetings carry `hs_meeting_source`, `hs_meeting_source_id`, and
+`hs_activity_type`. They also carry any meeting property that names the
+booking link, if `GET /crm/v3/properties/meetings` lists one. A property
+matches when its name contains `booking`, `meeting_link`/`meetings_link`, or
+`scheduling_page`, or when its label contains "booking", "meeting link",
+"meetings link", or "scheduling page". `hs_internal_meeting_notes` and
+`hs_scheduled_tasks` are never fetched. `hs_meeting_location` and
+`hs_meeting_external_url` are never stored, because they can hold conference
+links with passcodes; the meeting backfill removes them from meetings already
+stored. When the properties call fails, meetings are read without the booking
+link properties.
 
 `HUBSPOT_CONTACT_BACKFILL=1` re-reads every contact's properties once and
 merges them into `hubspot_objects`. Each search asks for `hs_object_id` above
@@ -123,7 +125,8 @@ done and later runs skip it. `HUBSPOT_CONTACT_BACKFILL=restart` starts over
 once: the value is recorded in that `sync_state` row, so leaving it set does
 not restart every run. Set a new value (`restart:2`, say) to start over again.
 It leaves associations and the contacts watermark alone. 10,000 contacts take
-about 50 searches. `HUBSPOT_MEETING_BACKFILL=1` (or `restart`) does the same
+about 50 searches. Each backfill reads at most `HUBSPOT_BACKFILL_MAX_PAGES`
+pages a run (default 150, so 30,000 objects) and resumes next run. `HUBSPOT_MEETING_BACKFILL=1` (or `restart`) does the same
 for meetings, so meetings stored before the source and booking link
 properties existed get them. Its state is in `sync_state`
 `hubspot_meeting_backfill`, and it records its own `sync_outcomes` row of the
@@ -193,13 +196,16 @@ Reply activities keep their full `raw_json` (message preview and text), so
 later code can tell auto-replies. Other types drop the nested `lead` object.
 
 `lemlist_leads` has one row per lead per campaign from
-`GET /api/v2/campaigns/{id}/export/leads?state=all&format=json`. A campaign's
-rows are replaced at most every `LEMLIST_LEADS_MIN_INTERVAL_MIN` (default 360;
-0 exports every run). `sync_state` `lemlist_leads` holds the time of each
-campaign's last complete export, so a campaign that failed is tried again next
-run. When that
+`GET /api/v2/campaigns/{id}/export/leads?state=all&format=json`. When that
 is refused, the rows come from `GET /api/campaigns/{id}/leads/`, paged by
-`offset` (or by `next` cursor). That route has no email or domain.
+`offset` (or by `next` cursor). That route has no email or domain. A
+campaign's rows are replaced at most every `LEMLIST_LEADS_MIN_INTERVAL_MIN`
+(default 360; 0 exports every run), and a run exports at most
+`LEMLIST_LEADS_MAX_EXPORTS` campaigns (default 8). Campaigns never exported go
+first, then those with the oldest export, so refresh times spread over
+several runs instead of all falling due together. `sync_state`
+`lemlist_leads` holds the time of each campaign's last complete export, so a
+campaign that failed is tried again next run.
 `contacted_at`, `opened_at`, `clicked_at`, `replied_at`, and
 `meeting_booked_at` are the first matching activity for that lead id in that
 campaign, updated every run from the stored activities.
@@ -214,11 +220,13 @@ Incremental extra calls per run: HubSpot about 4 plus one per active form
 (at 0.15 s each, 50 forms add about 8 s), and each list's memberships every
 6 h at one call per 250 members, at most `LIST_MEMBERSHIP_MAX_CALLS` (400,
 about 1 min) a run. Lemlist adds about 6 activity calls, and every 6 h one
-export per campaign (each can take up to its 120 s timeout). The one-off pulls
+export per campaign, at most 8 a run (each can take up to its 120 s timeout,
+so 16 min at worst). The one-off pulls
 are capped per run and resume: the first submission pull at
 `FORM_SUBMISSION_MAX_CALLS` (200 pages of 50, about 30 s), the first activity
-pull at `LEMLIST_ACTIVITY_MAX_CALLS`. The contact backfill runs only with its
-variable set.
+pull at `LEMLIST_ACTIVITY_MAX_CALLS`. The contact and meeting backfills run
+only with their variables set, at most `HUBSPOT_BACKFILL_MAX_PAGES` pages each
+a run.
 
 ## Tests
 
@@ -235,7 +243,8 @@ with no lists, a list whose memberships fail, a non-numeric `submittedAt`,
 the per-run caps on submissions, memberships and activities (including one
 window larger than the budget) resuming, the leads interval, a one-time
 backfill restart, the meeting source and booking link properties (and a 403
-when listing meeting properties), the resumable meeting backfill, the `EXTRA_PULL_FAILED` lines, and that only GETs and the
+when listing meeting properties), the resumable and page-capped meeting
+backfill, the per-run leads export cap, the `EXTRA_PULL_FAILED` lines, and that only GETs and the
 read-only POSTs were sent.
 
     python3 -m unittest discover -s refresh/tests -v

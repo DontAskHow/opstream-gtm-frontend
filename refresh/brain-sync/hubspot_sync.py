@@ -22,9 +22,10 @@ flow. Calls are GET, plus the CRM search, lists search, and batch read POSTs.
 A missing secret, a rejected token, or a portal other than 21303277 exits 3
 and does not move watermarks.
 
-Meetings also carry their source (hs_meeting_source*, external URL, location,
-activity type) and any property naming the booking link that
-GET /crm/v3/properties/meetings lists; when that call fails they go without.
+Meetings also carry their source (hs_meeting_source*, activity type) and any
+property naming the booking link that GET /crm/v3/properties/meetings lists;
+when that call fails they go without. Location and external URL are never
+stored (they can hold conference passcodes).
 
 After the objects, up to five extra pulls run. Each records its own sync_outcomes
 row and a failure in one (a missing scope, say) does not fail the sync or
@@ -40,7 +41,9 @@ stop the others:
   hubspot_contact_backfill  only with HUBSPOT_CONTACT_BACKFILL=1 (or restart,
                             which starts over once per value): re-reads
                             every contact's properties once
-  hubspot_meeting_backfill  the same for meetings, with HUBSPOT_MEETING_BACKFILL
+  hubspot_meeting_backfill  the same for meetings, with HUBSPOT_MEETING_BACKFILL;
+                            each backfill reads at most HUBSPOT_BACKFILL_MAX_PAGES
+                            (default 150) pages a run and resumes next run
 A failed extra pull also logs `EXTRA_PULL_FAILED <name> <route> <status>` to
 stdout; the exit code does not change.
 """
@@ -125,9 +128,9 @@ OBJECT_TYPES = {
         "hubspot_owner_id",
         # Where the meeting came from (booked through a meetings link, a calendar
         # sync, ...). Meetings stored before these were added get them from
-        # HUBSPOT_MEETING_BACKFILL=1.
-        "hs_meeting_source", "hs_meeting_source_id", "hs_meeting_external_url",
-        "hs_meeting_location", "hs_activity_type"]),
+        # HUBSPOT_MEETING_BACKFILL=1. Location and external URL are not fetched:
+        # they can hold conference links with passcodes (MEETING_PROPS_DROPPED).
+        "hs_meeting_source", "hs_meeting_source_id", "hs_activity_type"]),
     "products": ("hs_lastmodifieddate", ["createdate", "description", "hs_createdate",
         "hs_lastmodifieddate", "hs_object_id", "hs_sku", "name", "price"]),
     "line_items": ("hs_lastmodifieddate", ["amount", "createdate", "hs_createdate",
@@ -138,10 +141,14 @@ OBJECT_TYPES = {
 CUSTOM_CONTACT_PROP = re.compile(r"^(paid_touch_campaign|utm_\w+)$", re.I)
 # Meeting properties naming the booking (meetings) link, by name or label,
 # fetched when GET /crm/v3/properties/meetings lists them.
-MEETING_LINK_NAME = re.compile(r"booking|meetings?_link|scheduling_page|scheduled_tasks", re.I)
+MEETING_LINK_NAME = re.compile(r"booking|meetings?_link|scheduling_page", re.I)
 MEETING_LINK_LABEL = re.compile(r"booking|meetings? link|scheduling page", re.I)
-# Not wanted, whatever the pattern says: internal notes are free text.
-MEETING_PROPS_SKIPPED = {"hs_internal_meeting_notes"}
+# Never stored, and removed from stored meetings by the meeting backfill:
+# conference links and locations can carry passcodes.
+MEETING_PROPS_DROPPED = {"hs_meeting_location", "hs_meeting_external_url"}
+# Not wanted, whatever the pattern says: internal notes are free text, and
+# hs_scheduled_tasks is HubSpot's internal task/reminder bookkeeping.
+MEETING_PROPS_SKIPPED = {"hs_internal_meeting_notes", "hs_scheduled_tasks"} | MEETING_PROPS_DROPPED
 
 # Deal properties added after the backfill. Rows fetched before then get them
 # once from backfill_deal_props().
@@ -500,6 +507,8 @@ LIST_MIN_INTERVAL_MIN = float(os.environ.get("LIST_MIN_INTERVAL_MIN") or 360)
 LIST_MEMBERSHIP_MAX_CALLS = int(os.environ.get("LIST_MEMBERSHIP_MAX_CALLS") or 400)
 FORM_SUBMISSION_MAX_CALLS = int(os.environ.get("FORM_SUBMISSION_MAX_CALLS") or 200)
 BACKFILL_PAGE = 200  # CRM search maximum
+# Searches per backfill per run; the backfill resumes next run.
+BACKFILL_MAX_PAGES = int(os.environ.get("HUBSPOT_BACKFILL_MAX_PAGES") or 150)
 
 
 # Created before the first call, so readers find the tables even when a pull fails.
@@ -949,7 +958,9 @@ def backfill_objects(client, otype, props, log):
     Keyset paging: each search asks for hs_object_id > the last id stored, so
     the 10,000-result cap of one search does not apply. sync_state
     'hubspot_<type>_backfill' holds that id after every page, so a run that
-    stops resumes there. When done it says so and later runs skip it.
+    stops resumes there. A run reads at most HUBSPOT_BACKFILL_MAX_PAGES pages
+    (default 150) and the next run carries on. When done it says so and later
+    runs skip it.
     =restart starts over once: the value is recorded as restartKey, so
     leaving it set resumes instead of restarting every run. Another value
     starting with "restart" (restart:2, say) starts over again. Properties
@@ -997,6 +1008,9 @@ def backfill_objects(client, otype, props, log):
                 except ValueError:
                     merged = {}
                 merged.update(truncate_props(obj.get("properties") or {}))
+                if otype == "meetings":
+                    for k in MEETING_PROPS_DROPPED:
+                        merged.pop(k, None)
                 con.execute(
                     "INSERT INTO hubspot_objects(object_type, hs_id, properties_json, fetched_at) VALUES(?,?,?,?) "
                     "ON CONFLICT(object_type, hs_id) DO UPDATE SET properties_json=excluded.properties_json, "
@@ -1012,6 +1026,9 @@ def backfill_objects(client, otype, props, log):
             set_sync_state(source, json.dumps(state, sort_keys=True), "done" if not more else "in progress")
             if not more:
                 break
+            if pages >= BACKFILL_MAX_PAGES:
+                return "%d %s re-read so far with %d properties; HUBSPOT_BACKFILL_MAX_PAGES reached, " \
+                       "resuming next run" % (count, otype, len(props))
             if pages % 25 == 0:
                 log.info("%s backfill: %d %s so far", kind, count, otype)
     finally:

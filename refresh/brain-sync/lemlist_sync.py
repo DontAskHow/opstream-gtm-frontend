@@ -24,7 +24,9 @@ and a failure in one does not fail the sync or stop the other:
   lemlist_leads       one row per lead per campaign from the v2 leads export
                       (JSON), or the paged campaign leads route when the export
                       is refused, at most every LEMLIST_LEADS_MIN_INTERVAL_MIN
-                      (default 360) per campaign. contacted/opened/clicked/
+                      (default 360) per campaign and LEMLIST_LEADS_MAX_EXPORTS
+                      (default 8) exports a run, oldest refresh first, so
+                      refreshes spread over runs. contacted/opened/clicked/
                       replied/meeting times are the first matching activity and
                       are updated every run. raw_json keeps the export row;
                       reply activities keep their full raw_json so later code
@@ -75,6 +77,9 @@ ACTIVITY_OVERLAP = timedelta(hours=1)
 ACTIVITY_MAX_CALLS = int(os.environ.get("LEMLIST_ACTIVITY_MAX_CALLS") or 300)
 # A campaign's leads are exported again at most this often (0: every run).
 LEADS_MIN_INTERVAL_MIN = float(os.environ.get("LEMLIST_LEADS_MIN_INTERVAL_MIN") or 360)
+# Exports per run (each can take up to its 120 s timeout). Due campaigns go
+# oldest refresh first, so their refresh times spread over several runs.
+LEADS_MAX_EXPORTS = int(os.environ.get("LEMLIST_LEADS_MAX_EXPORTS") or 8)
 LEAD_TIMES = (("contacted_at", ("emailsSent",)), ("opened_at", ("emailsOpened",)),
               ("clicked_at", ("emailsClicked",)), ("replied_at", REPLY_TYPES),
               ("meeting_booked_at", ("meetingBooked",)))
@@ -341,20 +346,26 @@ def sync_leads(campaigns, log):
     total = 0
     done = fresh = 0
     failed = []
+    # Never-exported campaigns first, then the oldest refresh; at most LEADS_MAX_EXPORTS a run.
+    due = []
+    for c in campaigns:
+        cid = str(c.get("_id") or c.get("id") or "")
+        if not cid:
+            continue
+        last = _parse(refreshed.get(cid))
+        if last and (now - last).total_seconds() < LEADS_MIN_INTERVAL_MIN * 60:
+            fresh += 1
+        else:
+            due.append((last or datetime.min.replace(tzinfo=timezone.utc), cid))
+    due.sort(key=lambda x: x[0])
+    waiting = max(0, len(due) - LEADS_MAX_EXPORTS)
     con = db_connect()
     try:
         con.execute("CREATE TABLE IF NOT EXISTS lemlist_leads(campaign_id TEXT, lead_id TEXT, email TEXT, "
                     "company_domain TEXT, state TEXT, status TEXT, email_status TEXT, contacted_at TEXT, "
                     "replied_at TEXT, opened_at TEXT, clicked_at TEXT, meeting_booked_at TEXT, raw_json TEXT, "
                     "fetched_at TEXT, PRIMARY KEY(campaign_id, lead_id))")
-        for c in campaigns:
-            cid = str(c.get("_id") or c.get("id") or "")
-            if not cid:
-                continue
-            last = _parse(refreshed.get(cid))
-            if last and (now - last).total_seconds() < LEADS_MIN_INTERVAL_MIN * 60:
-                fresh += 1
-                continue
+        for _last, cid in due[:LEADS_MAX_EXPORTS]:
             try:
                 leads = _campaign_leads(cid)
             except NeedsConnection:
@@ -400,6 +411,9 @@ def sync_leads(campaigns, log):
     if fresh:
         detail += "; %d campaigns skipped, refreshed within LEMLIST_LEADS_MIN_INTERVAL_MIN (%.0f min)" % (
             fresh, LEADS_MIN_INTERVAL_MIN)
+    if waiting:
+        detail += "; %d due campaigns wait for a later run (LEMLIST_LEADS_MAX_EXPORTS=%d)" % (
+            waiting, LEADS_MAX_EXPORTS)
     if failed:
         raise SourceError(HOST, failed[-1].route, failed[-1].status,
                           "%s; leads failed for %d campaigns" % (detail, len(failed)))
