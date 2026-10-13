@@ -137,14 +137,58 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     return `<section class="sec" id="${id}" aria-labelledby="${id}-h"><header class="sec-head"><div><h2 id="${id}-h">${esc(title)}</h2>${sub ? `<p class="sub">${sub}</p>` : ''}</div>${right || ''}</header>${body}</section>`;
   }
 
+  // Each section's ranges; "This week" (with its dates) is the default everywhere.
+  const RANGES = {
+    lp: [['week'], ['month', 'This month'], ['90', '90 days'], ['ytd', 'This year'], ['all', 'All time']],
+    mp: [['week'], ['month', 'This month'], ['upcoming', 'Upcoming'], ['30', '30 days'], ['90', '90 days']],
+    cp: [['week'], ['month', 'This month'], ['30', '30 days'], ['90', '90 days']],
+  };
+  const DEFAULT_RANGE = 'week';
+  const rangeOf = (s, key) => (RANGES[key].some(([k]) => k === s[key]) ? s[key] : DEFAULT_RANGE);
+  const rangeOptions = (key, v) => RANGES[key].map(([k, l]) => [k, k === 'week' ? `This week · ${weekWindow(v.meta.asOf).label}` : l]);
+
+  // "+2 vs last week (Oct 5–6: 3)"; a percentage only when both weeks have at least 5.
+  function weekDelta(cur, prev, label) {
+    const d = cur - prev;
+    const sign = d > 0 ? '+' : d < 0 ? '−' : '±';
+    const p = cur >= 5 && prev >= 5 ? ` · ${d >= 0 ? '+' : '−'}${Math.round((Math.abs(d) / prev) * 100)}%` : '';
+    const small = cur < 5 || prev < 5 ? ' <span class="muted">(n&lt;5: no %)</span>' : '';
+    return `<span class="delta">${sign}${int(Math.abs(d))} vs last week (${esc(label)}: ${int(prev)})${p}</span>${small}`;
+  }
+
   function periodPicker(key, value, options) {
     return `<div class="seg" role="group" aria-label="Period">${options.map(([v, label]) => `<button type="button" data-set="${esc(key)}=${esc(v)}" aria-pressed="${String(value === v)}">${esc(label)}</button>`).join('')}</div>`;
   }
 
   // ---------- periods ----------
+  // ---------- the week: Monday 00:00 to the end of today, America/Phoenix (no DST: UTC-7) ----------
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const ymdParts = (d) => d.split('-').map(Number);
+  const ymdShift = (d, days) => { const [y, m, dd] = ymdParts(d); return new Date(Date.UTC(y, m - 1, dd + days)).toISOString().slice(0, 10); };
+  const ymdLabel = (d) => { const [, m, dd] = ymdParts(d); return `${MONTHS[m - 1]} ${dd}`; };
+  function rangeLabel(a, b) {
+    if (a === b) return ymdLabel(a);
+    return a.slice(0, 7) === b.slice(0, 7) ? `${ymdLabel(a)}–${ymdParts(b)[2]}` : `${ymdLabel(a)} – ${ymdLabel(b)}`;
+  }
+  // back = 0: this week (Monday to today); back = 1: last week, Monday to the same weekday.
+  function weekWindow(asOf, back = 0) {
+    const today = F_YMD.format(parseT(asOf));
+    const [y, m, d] = ymdParts(today);
+    const sinceMonday = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
+    const startYmd = ymdShift(today, -sinceMonday - 7 * back);
+    const endYmd = ymdShift(today, -7 * back);
+    return { startYmd, endYmd, start: Date.parse(startYmd + 'T00:00:00-07:00'), end: Date.parse(endYmd + 'T23:59:59.999-07:00'), label: rangeLabel(startYmd, endYmd) };
+  }
+
   function inPeriod(iso, period, asOf) {
     const t = parseT(iso);
     if (!t) return false;
+    if (period === 'week' || period === 'lastweek') {
+      const w = weekWindow(asOf, period === 'lastweek' ? 1 : 0);
+      // A date (no time) belongs to its own day; a time is compared as an instant.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso >= w.startYmd && iso <= w.endYmd;
+      return t.getTime() >= w.start && t.getTime() <= w.end;
+    }
     const now = parseT(asOf);
     const ym = F_YM.format(now);
     switch (period) {
@@ -261,19 +305,21 @@ ${NAV}
   }
 
   // ---------- leads ----------
-  const LEAD_PERIODS = [['all', 'All time'], ['ytd', 'This year'], ['90', '90 days'], ['month', 'This month']];
   function leadsIn(v, period) { return v.leads.items.filter((l) => period === 'all' || inPeriod(l.leadDate, period, v.meta.asOf)); }
 
   function leadsSection(v, s) {
     const L = v.leads;
     if (!L.connected) return section('leads', 'Leads', esc(L.reason || 'The Lead Tracker is not in the data.'), '');
-    const period = s.lp || 'all';
+    const period = rangeOf(s, 'lp');
     const items = leadsIn(v, period);
     const mql = items.filter((l) => l.mql).length;
+    const week = period === 'week' ? weekWindow(v.meta.asOf) : null;
+    const last = week ? leadsIn(v, 'lastweek') : null;
+    const lastLabel = week ? weekWindow(v.meta.asOf, 1).label : '';
     const f = v.mqlFunnel;
     // The r12 lead → MQL rate shows only when its inputs exist; otherwise there is no tile at all.
     const funnel = f && f.available ? tile(f.label, pct(f.rate), `<span class="num">${int(f.numerator)}</span> booked via book-a-demo ÷ <span class="num">${int(f.denominator)}</span> form-filling contacts`, ' data-fig="lead-mql-90"') : '';
-    const tiles = `<div class="tiles">${tile('Leads', int(items.length), 'companies on the Lead Tracker', ' data-fig="leads"')}${tile('Source from HubSpot', int(items.filter((l) => l.sourceBasis === 'hubspot').length), `of ${int(items.length)}; the rest fall back to the Lead Tracker`, ' data-fig="hubspot-sourced"')}${tile('Sheet MQL (incl. SQL)', int(mql), `${int(items.filter((l) => l.sql).length)} SQL · Lead Tracker dates`, ' data-fig="mql"')}${funnel}</div>`;
+    const tiles = `<div class="tiles">${tile('Leads', int(items.length), week ? weekDelta(items.length, last.length, lastLabel) : 'companies on the Lead Tracker', ' data-fig="leads"')}${tile('Source from HubSpot', int(items.filter((l) => l.sourceBasis === 'hubspot').length), `of ${int(items.length)}; the rest fall back to the Lead Tracker`, ' data-fig="hubspot-sourced"')}${tile('Sheet MQL (incl. SQL)', int(mql), week ? weekDelta(mql, last.filter((l) => l.mql).length, lastLabel) : `${int(items.filter((l) => l.sql).length)} SQL · Lead Tracker dates`, ' data-fig="mql"')}${funnel}</div>`;
     const max = Math.max(1, ...L.sources.map((src) => items.filter((l) => l.source === src).length));
     const rows = L.sources.map((src) => {
       const xs = items.filter((l) => l.source === src);
@@ -287,10 +333,17 @@ ${NAV}
       };
     });
     const cols = [{ label: 'Source' }, { label: 'Leads', num: true }, { label: 'From HubSpot', num: true, opt: true }, { label: 'Sheet MQL', num: true }, { label: 'With a deal', num: true, opt: true }, { label: 'Open pipeline', num: true, opt: true }, { label: 'To review', num: true, opt: true }];
-    const tbl = table(cols, rows, { foot: ['All sources', int(items.length), int(items.filter((l) => l.sourceBasis === 'hubspot').length), int(mql), int(items.filter((l) => l.deals.length).length), usd(items.reduce((a, l) => a + (l.openAmount || 0), 0)), int(items.filter((l) => l.review).length)] });
+    if (week) {
+      cols.splice(2, 0, { label: `Last week (${esc(lastLabel)})`, num: true, opt: true });
+      rows.forEach((r, i) => r.cells.splice(2, 0, int(last.filter((l) => l.source === L.sources[i]).length)));
+    }
+    const foot = ['All sources', int(items.length), int(items.filter((l) => l.sourceBasis === 'hubspot').length), int(mql), int(items.filter((l) => l.deals.length).length), usd(items.reduce((a, l) => a + (l.openAmount || 0), 0)), int(items.filter((l) => l.review).length)];
+    if (week) foot.splice(2, 0, int(last.length));
+    const tbl = (items.length ? '' : `<p class="empty" data-empty="leads">No leads yet ${week ? `this week (${esc(week.label)})` : 'in this range'}.${week ? ` Last week (${esc(lastLabel)}): ${int(last.length)}.` : ''}</p>`) +
+      (items.length || !week ? table(cols, rows, { foot }) : '');
     const ns = v.meta.notSynced.length ? `<p class="muted small">${chip('not yet synced', 'info')} ${esc(v.meta.notSynced.join(', '))}: until they sync, most leads fall back to the Lead Tracker Source. ${esc(L.definition)}</p>` : `<p class="muted small">${esc(L.definition)}</p>`;
     return section('leads', 'Leads', `${esc(L.sheet.tab)} companies; Source from HubSpot first (where the conversion happened), else the Lead Tracker. Rules: lead-sources.json + answers of ${esc(dateTime(v.rules.answeredAt))} ${chip(v.meta.provisional, 'warn')}`,
-      `${tiles}${tbl}${ns}${reviewBlock(v, s)}${paidDealsBlock(v, s)}${platformBlock(v)}${outboundBlock(v, s)}`, periodPicker('lp', period, LEAD_PERIODS));
+      `${tiles}${tbl}${ns}${reviewBlock(v, s)}${paidDealsBlock(v, s)}${platformBlock(v)}${outboundBlock(v, s)}`, periodPicker('lp', period, rangeOptions('lp', v)));
   }
 
   function sourceDetail(v, s, src, xs) {
@@ -391,15 +444,22 @@ ${NAV}
   }
 
   // ---------- meetings ----------
-  const MEETING_PERIODS = [['month', 'This month'], ['upcoming', 'Upcoming'], ['30', '30 days'], ['90', '90 days']];
   const BUCKETS = [['matched', 'Matched', (m) => m.matched], ['unmatched', 'Unmatched', (m) => !m.matched && m.linked], ['nolink', 'No contact linked', (m) => !m.linked]];
   const bucketOf = (m) => BUCKETS.find((b) => b[2](m))[0];
   function meetingsSection(v, s) {
     const M = v.meetings;
-    const period = s.mp || 'month';
+    const period = rangeOf(s, 'mp');
     const xs = M.items.filter((m) => inPeriod(m.start, period, v.meta.asOf));
     const sub = (c) => `matched · +${int(c.unmatched)} unmatched · +${int(c.noContact)} no contact`;
-    const tiles = `<div class="tiles">${tile('This month', int(M.thisMonth.matched), sub(M.thisMonth), ' data-fig="meetings-month"')}${tile('Upcoming', int(M.upcoming.matched), sub(M.upcoming), ' data-fig="meetings-upcoming"')}</div>`;
+    const week = period === 'week' ? weekWindow(v.meta.asOf) : null;
+    let weekTile = '';
+    if (week) {
+      const lw = weekWindow(v.meta.asOf, 1);
+      const prev = M.items.filter((m) => inPeriod(m.start, 'lastweek', v.meta.asOf));
+      const n = xs.filter((m) => m.matched).length;
+      weekTile = tile(`This week · ${week.label}`, int(n), `matched · ${weekDelta(n, prev.filter((m) => m.matched).length, lw.label)}`, ' data-fig="meetings-week"');
+    }
+    const tiles = `<div class="tiles">${weekTile}${tile('This month', int(M.thisMonth.matched), sub(M.thisMonth), ' data-fig="meetings-month"')}${tile('Upcoming', int(M.upcoming.matched), sub(M.upcoming), ' data-fig="meetings-upcoming"')}</div>`;
     const owners = [...new Set(xs.map((m) => m.owner))].sort((a, b) => xs.filter((m) => m.owner === b).length - xs.filter((m) => m.owner === a).length || a.localeCompare(b));
     const max = Math.max(1, ...owners.map((o) => xs.filter((m) => m.owner === o).length));
     const cellBtn = (n, spec, label) => (n ? `<button type="button" class="lnk num" data-set="${esc(spec)}" aria-label="${esc(label)}">${int(n)}</button>` : '0');
@@ -418,8 +478,9 @@ ${NAV}
     const sc = M.scope;
     const scope = `<p class="muted small">${esc(M.definition)} Not counted: ${int(sc.cs)} CS-owner meetings, ${int(sc.customer)} customer meetings, ${int(sc.internal)} internal-only, of ${int(sc.total)} HubSpot meetings. Lists cover ${esc(date(M.windowStart))} onward.</p>`;
     return section('meetings', 'Meetings', 'Sales owners only. Matched = the contact\'s company has a Sales Pipeline deal.',
-      tiles + table([{ label: 'Owner' }, { label: 'Meetings', num: true }, { label: 'Matched', num: true }, { label: 'Unmatched', num: true }, { label: 'No contact', num: true }], rows) + scope,
-      periodPicker('mp', period, MEETING_PERIODS));
+      tiles + (xs.length ? table([{ label: 'Owner' }, { label: 'Meetings', num: true }, { label: 'Matched', num: true }, { label: 'Unmatched', num: true }, { label: 'No contact', num: true }], rows)
+        : `<p class="empty" data-empty="meetings">No meetings ${week ? `this week (${esc(week.label)})` : 'in this range'}.</p>`) + scope,
+      periodPicker('mp', period, rangeOptions('mp', v)));
   }
 
   const when = (iso) => { const t = parseT(iso); return t ? `${esc(F_DAY.format(t))}<div class="muted small">${esc(F_TIME.format(t))} PT</div>` : DASH; };
@@ -428,21 +489,22 @@ ${NAV}
     const b = s.mb || 'all';
     const xs = b === 'all' ? ms : ms.filter((m) => bucketOf(m) === b);
     const seg = `<div class="seg" role="group" aria-label="Matched or unmatched">${[['all', 'All', () => true], ...BUCKETS].map(([k, l, f]) => `<button type="button" data-set="mb=${k === 'all' ? '' : k}" aria-pressed="${String(b === k)}">${l} <b class="num">${int(ms.filter(f).length)}</b></button>`).join('')}</div>`;
-    return seg + list('mtg-' + (s.mo || '') + '-' + b + '-' + (s.mp || 'month'), [
+    return seg + list('mtg-' + (s.mo || '') + '-' + b + '-' + rangeOf(s, 'mp'), [
       { key: 'start', label: 'When', cell: (m) => when(m.start) },
       { key: 'title', label: 'Meeting', cell: (m) => esc(m.title) + (m.companies[0] ? `<div class="muted small">${esc(m.companies[0].name)}</div>` : '') },
       { key: 'owner', label: 'Owner', opt: true, cell: (m) => esc(m.owner) },
       { key: 'matched', label: 'Match', sortVal: (m) => (m.matched ? 2 : m.linked ? 1 : 0), cell: (m) => (m.matched ? '<span class="tag tag-ok">matched</span>' : `<span class="tag">${m.linked ? 'unmatched' : 'no contact'}</span><div class="muted small opt">${esc(m.reason || '')}</div>`) },
-    ], xs, { sort: 'start', dir: s.mp === 'upcoming' ? 'asc' : 'desc', noun: 'meetings', noun1: 'meeting', target: (m) => 'mtg=' + m.id, active: (m) => s.mtg === m.id, text: (m) => [m.title, m.owner, m.companies.map((c) => c.name).join(' '), m.contacts.map((c) => c.name).join(' ')].join(' ') });
+    ], xs, { sort: 'start', dir: rangeOf(s, 'mp') === 'upcoming' ? 'asc' : 'desc', noun: 'meetings', noun1: 'meeting', target: (m) => 'mtg=' + m.id, active: (m) => s.mtg === m.id, text: (m) => [m.title, m.owner, m.companies.map((c) => c.name).join(' '), m.contacts.map((c) => c.name).join(' ')].join(' ') });
   }
 
   // ---------- calls ----------
-  const CALL_PERIODS = [['month', 'This month'], ['30', '30 days'], ['90', '90 days']];
   function callsSection(v, s) {
     const C = v.calls;
-    const period = s.cp || '90';
+    const period = rangeOf(s, 'cp');
     const xs = C.items.filter((c) => inPeriod(c.start, period, v.meta.asOf));
-    const tiles = `<div class="tiles">${tile('Prospect calls', int(xs.length), 'Fathom, sales and prospect only', ' data-fig="calls"')}${tile('At a Sales Pipeline company', int(xs.filter((c) => c.matched).length))}${tile('With a summary', int(xs.filter((c) => c.summary).length))}</div>`;
+    const week = period === 'week' ? weekWindow(v.meta.asOf) : null;
+    const prevCalls = week ? C.items.filter((c) => inPeriod(c.start, 'lastweek', v.meta.asOf)) : null;
+    const tiles = `<div class="tiles">${tile(week ? `Prospect calls · ${week.label}` : 'Prospect calls', int(xs.length), week ? weekDelta(xs.length, prevCalls.length, weekWindow(v.meta.asOf, 1).label) : 'Fathom, sales and prospect only', ' data-fig="calls"')}${tile('At a Sales Pipeline company', int(xs.filter((c) => c.matched).length))}${tile('With a summary', int(xs.filter((c) => c.summary).length))}</div>`;
     const recs = [...new Set(xs.map((c) => c.recorder))].sort((a, b) => xs.filter((c) => c.recorder === b).length - xs.filter((c) => c.recorder === a).length || a.localeCompare(b));
     const max = Math.max(1, ...recs.map((r) => xs.filter((c) => c.recorder === r).length));
     const rows = recs.map((r) => {
@@ -461,11 +523,12 @@ ${NAV}
     });
     const sc = C.scope;
     return section('calls', 'Calls', 'Fathom recordings, sales and prospect calls only.',
-      tiles + table([{ label: 'Recorded by' }, { label: 'Calls', num: true }, { label: 'Sales Pipeline company', num: true, opt: true }, { label: 'With summary', num: true, opt: true }], rows) +
+      tiles + (xs.length ? table([{ label: 'Recorded by' }, { label: 'Calls', num: true }, { label: 'Sales Pipeline company', num: true, opt: true }, { label: 'With summary', num: true, opt: true }], rows)
+        : `<p class="empty" data-empty="calls">No prospect calls yet ${week ? `this week (${esc(week.label)})` : 'in this range'}.</p>`) +
       (C.classification === 'strategy'
         ? `<p class="muted small">${esc(C.definition)} Of ${int(sc.total)} recordings: <span data-fig="calls-prospect">${int(sc.prospect)}</span> prospect, ${int(sc.customer)} customer, ${int(sc.internal)} internal, ${int(sc.partner_other)} partner/other${sc.unclassified ? `, ${int(sc.unclassified)} not in the classification` : ''}.</p>`
         : `<p class="small">${chip('call classification unavailable', 'warn')} ${esc(C.classificationNote || '')}</p><p class="muted small">${esc(C.definition)} Not counted: ${int(sc.internal)} internal-only, ${int(sc.cs)} recorded by CS owners, ${int(sc.customer)} customer calls, of ${int(sc.total)} recordings.</p>`),
-      periodPicker('cp', period, CALL_PERIODS));
+      periodPicker('cp', period, rangeOptions('cp', v)));
   }
 
   // ---------- analysis ----------
@@ -582,7 +645,7 @@ ${NAV}
 <p class="muted small">Withheld ${esc(dateTime(doc.meta && doc.meta.generatedAt))}. The page checks again every few minutes.</p></section>`;
   }
 
-  const api = { renderPage, renderMain, renderDrawer, header, loadingHeader, errorView, withheldView, STALE_MS, parseState, stateHash, applyChange, inPeriod, esc, usd, int, pct, dateTime, date, ymd };
+  const api = { renderPage, renderMain, renderDrawer, header, loadingHeader, errorView, withheldView, STALE_MS, parseState, stateHash, applyChange, inPeriod, weekWindow, weekDelta, RANGES, DEFAULT_RANGE, esc, usd, int, pct, dateTime, date, ymd };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.GtmPage = api;
 
@@ -593,7 +656,22 @@ ${NAV}
   const RECHECK_MS = 5 * 60e3;
   let V = null;
   let dataText = null;
-  let state = parseState(location.hash);
+  // The chosen range per section is sticky: the hash wins, else the last choice (localStorage), else "This week".
+  const RANGE_KEYS = Object.keys(RANGES);
+  function withStoredRanges(st) {
+    const out = { ...st };
+    for (const k of RANGE_KEYS) {
+      if (out[k]) continue;
+      let saved = null;
+      try { saved = localStorage.getItem('gtm-range-' + k); } catch { /* private mode */ }
+      if (saved && RANGES[k].some(([x]) => x === saved)) out[k] = saved;
+    }
+    return out;
+  }
+  function storeRanges(st) {
+    for (const k of RANGE_KEYS) if (st[k]) { try { localStorage.setItem('gtm-range-' + k, st[k]); } catch { /* private mode */ } }
+  }
+  let state = withStoredRanges(parseState(location.hash));
   const main = document.getElementById('main');
   const droot = document.getElementById('drawer-root');
   let lastFocus = null;
@@ -625,6 +703,7 @@ ${NAV}
     const opening = DRAWERS.some((k) => next[k] && next[k] !== state[k]);
     if (opening && !droot.innerHTML) lastFocus = document.activeElement;
     state = next;
+    storeRanges(state);
     const h = stateHash(state);
     if (h !== location.hash) history.replaceState(null, '', h || location.pathname + location.search);
     render(opening);
@@ -719,12 +798,12 @@ ${NAV}
     LISTS[id].q = e.target.value; LISTS[id].page = 0;
     e.target.closest('.list').querySelector('.list-body').innerHTML = listBody(id);
   });
-  window.addEventListener('hashchange', () => { state = parseState(location.hash); render(true); });
+  window.addEventListener('hashchange', () => { state = withStoredRanges(parseState(location.hash)); storeRanges(state); render(true); });
   const baked = document.getElementById('gtm-data');
   if (baked) {
     V = JSON.parse(baked.textContent);
     index(V);
-    if (location.hash) render(true); else hideDismissed();
+    if (location.hash || RANGE_KEYS.some((k) => state[k])) render(!!location.hash); else hideDismissed();
   } else {
     load(false);
     setInterval(() => { if (!document.hidden) load(true); }, RECHECK_MS);

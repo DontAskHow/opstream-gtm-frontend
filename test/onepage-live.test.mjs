@@ -297,11 +297,12 @@ with sync_playwright() as p:
     pg.goto(url + '#src=Paid&lead=' + lead); pg.wait_for_selector('#pipeline'); pg.wait_for_selector('.drawer')
     o = {'open': pg.inner_text('[data-fig="open-count"] .tile-v'), 'drawer': pg.inner_text('.drawer h2'),
          'updatedClass': pg.get_attribute('[data-updated]', 'class'), 'hash': pg.evaluate('location.hash')}
+    o['lpDefault'] = pg.get_attribute('[data-set="lp=week"]', 'aria-pressed')
     pg.keyboard.press('Escape'); o['closed'] = pg.locator('.drawer').count(); say(o)
     for cmd in sys.stdin:
         cmd = cmd.strip()
         if cmd == 'recheck':
-            pg.evaluate('location.hash = "#mo=*"'); pg.wait_for_selector('#meetings .ltable')
+            pg.evaluate('location.hash = "#mo=*&mp=90"'); pg.wait_for_selector('#meetings .ltable')
             pg.evaluate('GtmRecheck()'); pg.wait_for_timeout(500)
             say({'updated': pg.get_attribute('[data-updated]', 'data-updated'), 'updatedClass': pg.get_attribute('[data-updated]', 'class'),
                  'listStill': pg.locator('#meetings .ltable').count(), 'hash': pg.evaluate('location.hash')})
@@ -314,6 +315,12 @@ with sync_playwright() as p:
             pg.click('[data-retry]'); pg.wait_for_selector('#pipeline'); say({'retried': True})
         elif cmd == 'withheld':
             pg.goto(url); pg.wait_for_selector('.sec.withheld'); say({'withheld': pg.inner_text('.sec.withheld')})
+        elif cmd == 'sticky':
+            pg.goto(url); pg.wait_for_selector('#leads'); pg.click('[data-set="lp=90"]'); pg.wait_for_timeout(200)
+            hashAfter = pg.evaluate('location.hash')
+            pg.goto(url + '?again'); pg.wait_for_selector('#leads')
+            say({'hash': hashAfter, 'pressed': pg.get_attribute('[data-set="lp=90"]', 'aria-pressed'), 'stored': pg.evaluate('localStorage.getItem("gtm-range-lp")'),
+                 'mp90': pg.get_attribute('[data-set="mp=90"]', 'aria-pressed'), 'cpWeek': pg.get_attribute('[data-set="cp=week"]', 'aria-pressed')})
         elif cmd == 'done':
             say({'errors': errors}); break
     b.close()
@@ -344,6 +351,7 @@ with sync_playwright() as p:
   assert.match(a.updatedClass, /chip-ok/);
   assert.match(a.hash, /lead=/);
   assert.equal(a.closed, 0);
+  assert.equal(a.lpDefault, 'true', 'This week is the default');
   // Same file, newer times in refresh.json (keyed to this file's sha256): the open tab updates in place.
   const fresh = new Date(Date.now() + 60e3).toISOString();
   files['/refresh.json'] = JSON.stringify({ refreshedAt: fresh, workspace: { status: 'unchanged', stamps: { forTextSha256: textHash(files['/workspace.json']), generatedAt: fresh, freshness: [] } } });
@@ -351,7 +359,7 @@ with sync_playwright() as p:
   assert.equal(r.updated, fresh);
   assert.match(r.updatedClass, /chip-ok/);
   assert.equal(r.listStill, 1, 'the open list stays');
-  assert.equal(r.hash, '#mo=*');
+  assert.equal(r.hash, '#mo=*&mp=90');
   // Old data and a refresh.json that says the latest snapshot had none: amber + last-good banner.
   files['/workspace.json'] = restamp(WS, '2026-01-01T00:00:00Z');
   files['/refresh.json'] = JSON.stringify({ refreshedAt: new Date().toISOString(), workspace: { status: 'kept-last-good', problem: PROBLEMS.missing } });
@@ -368,5 +376,12 @@ with sync_playwright() as p:
   // A withheld document: a notice, no data.
   files['/workspace.json'] = withheldDoc();
   assert.match((await next('withheld')).withheld, /withheld/);
+  // A chosen range is sticky: in the hash, and (without a hash) from localStorage, per section.
+  files['/workspace.json'] = WS;
+  const st = await next('sticky');
+  assert.match(st.hash, /lp=90/);
+  assert.deepEqual([st.pressed, st.stored], ['true', '90']);
+  assert.equal(st.mp90, 'true', 'the meetings range chosen earlier in this session (mp=90) stuck too');
+  assert.equal(st.cpWeek, 'true', 'a section never changed keeps This week');
   assert.deepEqual((await next('done')).errors, []);
 });

@@ -151,3 +151,4 @@ body.has-drawer { overflow: hidden; }
 .sec.error h2 { color: var(--alert); }
 .brand .sub .chip { vertical-align: middle; }
 .sec.withheld { border-color: var(--warn-ink); }
+.delta { white-space: nowrap; }

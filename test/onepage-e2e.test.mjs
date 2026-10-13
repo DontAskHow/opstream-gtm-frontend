@@ -131,7 +131,7 @@ test('leads: Lead Tracker companies with their first lead date', () => {
   assert.equal(L.total, ex.leads.total);
   assert.equal(L.mql, ex.leads.mql);
   assert.equal(L.sql, ex.leads.sql);
-  assert.equal(fig(html, 'leads'), '10');
+  assert.equal(fig(page.renderPage(base.view, { lp: 'all' }).main, 'leads'), '10');
   const north = lead(base, 'Northstar Labs');
   assert.equal(north.leadDate, '2026-08-01', 'earliest of the duplicate rows');
   assert.deepEqual(north.rows, [4, 6]);
@@ -391,7 +391,7 @@ test('scope footer: what the redesign removes from the current page', () => {
 test('drill-down: source row -> lead list -> lead drawer, meetings -> list -> drawer, from the hash', () => {
   const v = base.view;
   const orchid = v.leads.items.find((l) => l.company === 'Orchid Retail');
-  const out = page.renderPage(v, page.parseState(`#src=Paid&lead=${orchid.id}`));
+  const out = page.renderPage(v, page.parseState(`#src=Paid&lp=all&lead=${orchid.id}`));
   assert.match(out.main, /aria-expanded="true"/);
   assert.match(out.main, /Search leads/);
   assert.match(out.drawer, /role="dialog"/);
@@ -406,7 +406,7 @@ test('drill-down: source row -> lead list -> lead drawer, meetings -> list -> dr
   assert.match(nd, /data-set="deal=7011"/, 'deal -> deal drawer');
   assert.match(nd, /Paid deal \(Pipeline export\)<\/b> <span class="muted small">\(evidence only\)/);
   assert.match(page.renderPage(v, { deal: '7011' }).drawer, /app\.hubspot\.com\/contacts\/12345\/record\/0-3\/7011/, 'deal link');
-  const m = page.renderPage(v, page.parseState('#mo=*&mb=unmatched&mtg=8001'));
+  const m = page.renderPage(v, page.parseState('#mo=*&mb=unmatched&mp=month&mtg=8001'));
   assert.match(m.main, /aria-pressed="true">Unmatched/);
   assert.match(m.drawer, /approvals are slow/, 'Fathom summary in the meeting drawer');
   assert.match(page.renderPage(v, { deal: '7008' }).drawer, /Went dark/);

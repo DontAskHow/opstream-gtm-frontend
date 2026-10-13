@@ -72,6 +72,8 @@ For local audits, `node onepage/build.mjs --data workspace.json --out DIR` build
 - **Calls**: Fathom prospect calls by recorder → list → call drawer.
 - **Analysis**: `insights.json`, validated with the existing validator.
 
+**Date ranges.** Leads, Meetings and Calls each have a range selector; **This week** is the default everywhere: Monday 00:00 to the end of today in America/Phoenix (UTC−7, no DST), labelled with its dates ("This week · Oct 12–13"). In this range each section compares with last week over the same Monday-to-weekday window ("+1 vs last week (Oct 5–6: 1)"): the absolute change always, a percentage only when both weeks have at least 5 (otherwise "n<5: no %"). An empty week says so ("No leads yet this week (Oct 12–13). Last week (Oct 5–6): 0."). The other ranges are unchanged (Leads: this month, 90 days, this year, all time; Meetings: this month, upcoming, 30 and 90 days; Calls: this month, 30 and 90 days). A chosen range sticks per section: it goes into the hash (`lp`, `mp`, `cp`) and into localStorage, which applies when a link has no range. The fixed tiles (meetings this month / upcoming) keep their own definitions.
+
 Every list: search, sort, 25 per page. The URL hash keeps the state (`#src=Paid&lead=L363`, `#mo=*&mb=unmatched&mtg=…`, `#lost=competitor&deal=…`, `#rv=1`, `#pd=Google%20Ads`, `#ot=job_changer`, `lp`/`mp`/`cp` periods), so a link opens the same view. Esc or the scrim closes the drawer.
 
 ## Lead sources
