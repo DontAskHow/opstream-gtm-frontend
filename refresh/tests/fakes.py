@@ -126,7 +126,9 @@ class HubSpotFake:
             }
         self.properties = ["email", "firstname", "lastmodifieddate", "hs_object_id", "hs_analytics_source",
                            "hs_analytics_source_data_1", "hs_latest_source", "utm_source", "utm_campaign",
-                           "paid_touch_campaign", "favorite_color"]
+                           "paid_touch_campaign", "favorite_color",
+                           # Standard first-touch properties: a search that asks for them returns null when unset.
+                           "hs_analytics_first_url", "hs_analytics_first_referrer"]
         # 250 meetings; 7001 and 7002 changed in the last hour.
         self.meetings = {}
         for i in range(7001, 7251):

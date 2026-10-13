@@ -307,7 +307,8 @@ def shape_deal(hs_id, p, stage_meta, owners, company_ids):
         'amount': num(p.get('amount')), 'probability': prob,
         'open': not closed, 'onHold': (not closed) and letters(label) in ON_HOLD, 'won': won, 'lost': closed and not won,
         'close': p.get('closedate'), 'created': p.get('createdate'), 'modified': p.get('hs_lastmodifieddate'),
-        'owner': owner, 'lostReason': p.get('closed_lost_reason') or None, 'companyIds': sorted(company_ids),
+        'owner': owner, 'ownerId': str(p.get('hubspot_owner_id') or ''), 'lostReason': p.get('closed_lost_reason') or None,
+        'companyIds': sorted(company_ids),
     }
 
 
@@ -527,6 +528,32 @@ def load_contacts(brain, owners, assoc):
         if email:
             by_email.setdefault(email, c)
     return contacts, by_email, present
+
+
+def reporting_fields_synced(brain, present):
+    """The reporting contact fields every stored contact has (config reporting.adLeads.contactFields): the contact
+    backfill finished, having started after the field was added to the sync, or at least minCoverage of contacts
+    carry the key. The sync stores requested-but-unset properties as JSON null, so one incremental run writes the
+    key onto the contacts it read; that alone is partial. Returns ({field: synced}, {field: coverage})."""
+    cfg = REPORTING['adLeads']['contactFields']
+    fields = [p for p in REPORTING_CONTACT_PROPS if p in present]
+    total, *have = brain.q("SELECT count(*)%s FROM hubspot_objects WHERE object_type='contacts'" % ''.join(
+        ", sum(json_type(properties_json, '$.%s') IS NOT NULL)" % p for p in fields))[0] if fields else (0,)
+    coverage = {p: round((n or 0) / total, 4) if total else 0.0 for p, n in zip(fields, have)}
+    state = {}
+    if brain.has('sync_state'):
+        row = brain.q("SELECT watermark FROM sync_state WHERE source='hubspot_contact_backfill'")
+        try:
+            state = json.loads(row[0][0]) if row and row[0][0] else {}
+        except (TypeError, ValueError):
+            state = {}
+    started = parse_time(state.get('startedAt')) if isinstance(state, dict) and state.get('done') else None
+    synced = {}
+    for p in REPORTING_CONTACT_PROPS:
+        added = parse_time(cfg['addedAt'].get(p)) if cfg['addedAt'].get(p) else None
+        by_backfill = bool(started and p in coverage and (added is None or started >= added))
+        synced[p] = by_backfill or coverage.get(p, 0.0) >= cfg['minCoverage']
+    return synced, coverage
 
 
 def discover_utm_props(brain):
@@ -1491,6 +1518,7 @@ class ReportingScope:
         self.internal = {d.lower() for d in co['internalDomains']} - self.free
         self.form_prefixes = [str(x).strip().casefold() for x in co['excludedFormNamePrefixes']]
         self.dropped_deals = {d['id'] for d in deals if d['pipeline'] in self.pipelines}
+        self.cs_deals = {d['id'] for d in deals if str(d.get('ownerId') or '') in self.cs_owners}
         self.companies = {i: self._customer(c['lifecycle'], c.get('ownerId'), 'company') for i, c in comps.items()}
         self.contacts = {}
         for i, c in contacts.items():
@@ -1515,6 +1543,11 @@ class ReportingScope:
 
     def contact(self, cid):
         return self.contacts.get(str(cid))
+
+    def customer_deal(self, did):
+        """'deal owned by customer success' for a deal with a customer-success owner, else None. A deal in an excluded
+        pipeline is only dropped: a booking on it still counts (its contacts and companies decide)."""
+        return 'deal owned by customer success' if str(did) in self.cs_deals else None
 
     def customer(self, cid):
         why = self.contacts.get(str(cid))
@@ -1614,7 +1647,7 @@ def booking_kind(mid, t, ctx):
     whether a Sales deal on it had no stage history to check, whether a Sales deal on it was On Hold then)."""
     cfg, scope, a = REPORTING['meetings'], ctx['scope'], ctx['assoc']
     whys = [scope.contact(cid) for cid in a.get('meetings', mid, 'contacts')]
-    if any(w and w[0] == 'customer' for w in whys):
+    if any(w and w[0] == 'customer' for w in whys) or any(scope.customer_deal(did) for did in a.get('meetings', mid, 'deals')):
         return 'customer', False, False
     unknown = on_hold = False
     for did in a.get('meetings', mid, 'deals'):
@@ -1759,7 +1792,8 @@ def ad_leads(ctx):
         r['ids'].append(c['id'])
     done = lambda r: {**r, 'excluded': dict(sorted(r['excluded'].items()))}
     return {'definition': cfg['about'], 'platformFigureLabel': cfg['platformFigureLabel'],
-            'firstUrlSynced': 'hs_analytics_first_url' in ctx['contact_props'],
+            'firstUrlSynced': ctx['reporting_synced']['hs_analytics_first_url'],
+            'firstUrlCoverage': ctx['reporting_coverage'].get('hs_analytics_first_url', 0.0),
             'platforms': [done(rows[p['name']]) for p in platforms], 'unnamed': done(unnamed), 'aiReferral': done(ai)}
 
 
@@ -2124,6 +2158,7 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
     attach_deals(comps, deals)
     contacts, contact_by_email, contact_props = load_contacts(brain, owners, assoc)
     source_props = [p for p in contact_props if p not in REPORTING_CONTACT_PROPS]
+    reporting_synced, reporting_coverage = reporting_fields_synced(brain, contact_props)
     # The scope step: the Oct 13 reporting rules, applied once; every count below reads it.
     scope = ReportingScope(contacts, comps, deals)
     fresh = freshness(brain, as_of)
@@ -2149,6 +2184,7 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
            'form_names': {str(i): n for i, n in brain.q('SELECT form_id, name FROM hubspot_forms')} if brain.has('hubspot_forms') else {},
            'campaign_names': {str(i): n for i, n in brain.q('SELECT campaign_id, name FROM lemlist_campaigns')},
            'lead_insights': lead_insights, 'contact_props': contact_props, 'scope': scope,
+           'reporting_synced': reporting_synced, 'reporting_coverage': reporting_coverage,
            'booked': booked_contacts(brain, assoc)}
     ctx['call_class'], ctx['call_class_reason'] = load_call_classification(args.call_classification, warn)
     review = load_review_list(args.review_list)
@@ -2214,7 +2250,7 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
                  'leadSourcesAt': (ls_doc or {}).get('generated_at'),
                  'notSynced': [label for t, label in NEW_SOURCES if not brain.has(t)] + ([] if source_props else ['HubSpot contact source fields']),
                  'contactSourceFields': source_props,
-                 'reportingContactFields': [p for p in contact_props if p in REPORTING_CONTACT_PROPS], 'leadInsights': len(lead_insights),
+                 'reportingContactFields': [p for p in contact_props if reporting_synced.get(p)], 'leadInsights': len(lead_insights),
                  'callClassification': (len(ctx['call_class']) if ctx['call_class'] is not None else None)},
         'freshness': fresh,
         'flags': staleness(fresh, ads, spend, ga4, brain, source_props, as_of) + ([{'key': 'calls', 'label': 'Call classification unavailable',

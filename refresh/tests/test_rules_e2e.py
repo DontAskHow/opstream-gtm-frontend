@@ -349,7 +349,9 @@ class RulesE2E(unittest.TestCase):
 
     def test_ad_platform_leads(self):
         a = self.data["adLeads"]
-        self.assertTrue(a["firstUrlSynced"])
+        self.assertTrue(a["firstUrlSynced"])  # every contact came from a search that asked for it
+        self.assertEqual(a["firstUrlCoverage"], 1.0)
+        self.assertIn("hs_analytics_first_url", self.data["meta"]["reportingContactFields"])
         by = {r["name"]: (r["leads"], r["contacts"], r["excluded"]) for r in a["platforms"]}
         self.assertEqual(by["OpenAI (ChatGPT) Ads"], (1, 1, {}))
         self.assertEqual(by["Google Ads"], (1, 2, {"customer": 1}))
@@ -363,6 +365,91 @@ class RulesE2E(unittest.TestCase):
         self.assertEqual((openai["hubspotLeads"]["leads"], openai["aiReferral"]["leads"]), (1, 2))
         self.assertEqual(openai["figureLabel"], "platform-reported events, not leads")
         self.assertNotIn("HubSpot leads:", self.html)  # the page is unchanged
+
+
+class DealExtrasMigration(unittest.TestCase):
+    """The live table predates stage_history: a 4-column hubspot_deal_extras with rows. An incremental run (no deal
+    changed, extras refreshed recently) adds the column and re-reads every old row once; a deal HubSpot no longer
+    returns gets "[]" so it is not re-read forever; the next run reads nothing; an old-image upsert (a rollback)
+    keeps the history."""
+    OLD = ["901", "902", "903", "904", "905", "906", "999"]  # 999: stored, but HubSpot returns nothing for it
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="extras-migration-"))
+        cls.world = fakes.FakeWorld(cls.tmp).start()
+        portal(cls.world.hubspot, cls.world.now)
+        sync_dir = cls.tmp / "brain-sync"
+        shutil.copytree(SYNC_SRC, sync_dir, ignore=shutil.ignore_patterns("logs", "__pycache__"))
+        cls.db = cls.tmp / "brain.db"
+        seed(cls.db, cls.world.now)
+        now = fakes.iso(cls.world.now)
+        con = sqlite3.connect(str(cls.db))
+        marks = json.loads(con.execute("SELECT watermark FROM sync_state WHERE source='hubspot'").fetchone()[0])
+        marks["deals"] = now  # no deal changed since
+        con.execute("UPDATE sync_state SET watermark=? WHERE source='hubspot'", (json.dumps(marks),))
+        con.execute("INSERT INTO sync_state VALUES('hubspot_extras', ?, ?, 'full refresh')", (now, now))  # incremental
+        deals = cls.world.hubspot.objects["deals"]
+        for i in cls.OLD:
+            props = deals.get(int(i)) or {"hs_object_id": i, "dealname": "Gone deal", "pipeline": "default"}
+            con.execute("INSERT INTO hubspot_objects VALUES('deals', ?, ?, ?)", (i, json.dumps(props), now))
+        con.execute("CREATE TABLE hubspot_deal_extras (deal_id TEXT PRIMARY KEY, company_ids TEXT, owner_history TEXT, "
+                    "refreshed_at TEXT)")
+        for i in cls.OLD:
+            con.execute("INSERT INTO hubspot_deal_extras VALUES(?, '[\"801\"]', '[]', ?)", (i, now))
+        con.commit()
+        con.close()
+        cls.env = cls.world.env(os.environ, cls.db)
+        cls.runs = []
+        for _ in range(2):
+            proc = subprocess.run([sys.executable, str(sync_dir / "hubspot_sync.py")], env=cls.env, cwd=str(cls.tmp),
+                                  capture_output=True, text=True, timeout=600)
+            cls.runs.append((proc, cls.world.take_requests()))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.world.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def q(self, sql, *args):
+        con = sqlite3.connect(str(self.db))
+        try:
+            return con.execute(sql, args).fetchall()
+        finally:
+            con.close()
+
+    def batch_ids(self, reqs):
+        return sorted(x["id"] for r in reqs if r.path == "/crm/v3/objects/deals/batch/read" for x in r.json()["inputs"])
+
+    def test_migration(self):
+        for proc, _ in self.runs:
+            self.assertEqual(proc.returncode, 0, proc.stdout[-3000:] + proc.stderr[-3000:])
+        cols = [r[1] for r in self.q("PRAGMA table_info(hubspot_deal_extras)")]
+        self.assertEqual(cols, ["deal_id", "company_ids", "owner_history", "refreshed_at", "stage_history"])
+        # Run 1: no deal changed, so the batch read is exactly the rows stored before the column existed.
+        first, second = (reqs for _, reqs in self.runs)
+        self.assertEqual(self.batch_ids(first), sorted(self.OLD))
+        rows = dict(self.q("SELECT deal_id, stage_history FROM hubspot_deal_extras"))
+        self.assertEqual(sorted(rows), sorted(self.OLD))
+        self.assertEqual([h["value"] for h in json.loads(rows["901"])], ["15879262", "943743501"])
+        self.assertEqual(rows["999"], "[]")  # not returned: empty, not NULL
+        self.assertNotIn(None, rows.values())
+        # Run 2: nothing to re-read.
+        self.assertEqual(self.batch_ids(second), [])
+        self.assertIn("deal extras: nothing to refresh", self.runs[1][0].stdout + self.runs[1][0].stderr)
+
+    def test_old_image_upsert_keeps_the_history(self):
+        con = sqlite3.connect(str(self.db))
+        try:  # the statement the previous image runs: it names four columns
+            con.execute("INSERT INTO hubspot_deal_extras(deal_id, company_ids, owner_history, refreshed_at) VALUES(?,?,?,?) "
+                        "ON CONFLICT(deal_id) DO UPDATE SET company_ids=excluded.company_ids, "
+                        "owner_history=excluded.owner_history, refreshed_at=excluded.refreshed_at",
+                        ("901", '["801"]', "[]", "later"))
+            con.commit()
+            hist = con.execute("SELECT stage_history FROM hubspot_deal_extras WHERE deal_id='901'").fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual([h["value"] for h in json.loads(hist)], ["15879262", "943743501"])
 
 
 if __name__ == "__main__":

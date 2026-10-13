@@ -147,7 +147,7 @@
     "about": "Oct 13 2026 reporting rules (lead-sources.json reporting_rules, approved Oct 13 2026). Rules only, no data. scripts/workspace-data.py applies them once, in its scope step (ReportingScope); form counts (forms), meeting bookings (meetings.bookings), ad-platform leads (adLeads, ads[].hubspotLeads) and lead -> MQL (mqlFunnel.computed.afterReportingRules) all read that scope. These are added workspace.json fields; existing fields keep their meaning.",
     "approvedAt": "2026-10-13",
     "customers": {
-      "about": "A contact is a customer when it, or a company it is associated with, has lifecyclestage customer or is owned by a customer-success owner. Deals in these pipelines are dropped.",
+      "about": "A contact is a customer when it, or a company it is associated with, has lifecyclestage customer or is owned by a customer-success owner. Deals in these pipelines are dropped. A meeting-link booking is a customer booking when a contact on it is a customer or a deal on it is owned by a customer-success owner (a deal in these pipelines is dropped, not a customer marker).",
       "lifecycleStages": [
         "customer"
       ],
@@ -266,6 +266,11 @@
           "chatgpt",
           "openai"
         ]
+      },
+      "contactFields": {
+        "about": "A reporting contact field (hs_analytics_first_url, say) counts as synced once every stored contact has it: when the contact backfill (sync_state hubspot_contact_backfill) is done and started after the field was added to the sync (addedAt), or when at least minCoverage of stored contacts carry the key. Until then adLeads.firstUrlSynced is false and meta.reportingContactFields leaves the field out.",
+        "minCoverage": 0.99,
+        "addedAt": {"hs_analytics_first_url": "2026-10-14T00:00:00Z", "hs_analytics_first_referrer": "2026-10-14T00:00:00Z"}
       },
       "platformFigureLabel": "platform-reported events, not leads"
     }

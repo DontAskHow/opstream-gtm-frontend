@@ -92,8 +92,10 @@ How `hubspot_sync.py` collects these, paced under the limits above:
   `propertiesWithHistory=hubspot_owner_id,dealstage` (50 a call). The dealstage
   history (`stage_history`, newest first) says which stage a deal was in when a
   meeting was booked. Changed deals, and deals stored before `stage_history`
-  existed, are read every run (about 2 calls), all deals every
-  `HUBSPOT_EXTRAS_FULL_HOURS` (default 6, about 12 calls for 578 deals). The read-only guard in
+  existed, are read every run (about 2 calls; the first run after
+  `stage_history` was added re-reads every deal once, about 18 calls), all
+  deals every `HUBSPOT_EXTRAS_FULL_HOURS` (default 6, about 12 calls for 578
+  deals). The read-only guard in
   `common.py` allows only these `…/batch/read` POSTs, CRM search, and
   `POST /crm/v3/lists/search` (a read); every other non-GET is refused.
 
@@ -112,7 +114,10 @@ fetches, with `scripts/workspace-data.py` (rules in
 reporting rules: customers, free-mail and internal addresses and careers forms
 out of the form counts, meeting-link bookings, ad-platform leads and a separate
 lead → MQL figure, applied once in the script's scope step and written to added
-fields only, so existing `workspace.json` fields keep their meaning). It reads brain.db and the data files under
+fields only, so existing `workspace.json` fields keep their meaning). A
+booking counts as a customer booking when a contact on it is a customer or a
+deal on it is owned by a customer-success owner; a deal in an excluded
+pipeline is only dropped, so a booking on it still counts. It reads brain.db and the data files under
 `state/gtm-inputs/`, all downloaded each run: `lead-sources.json`,
 `lead-source-review.csv`, `paid-deals.json`, `records.jsonl`,
 `lead-insights.json`, `lost-reasons.json`, `insights.json`, and
@@ -142,6 +147,12 @@ Contacts carry source attribution (`hs_analytics_source*`,
 (`hs_analytics_first_url`, `hs_analytics_first_referrer`), and the lead, MQL,
 SQL, and customer lifecycle dates. Contacts stored before the first-touch
 fields were added get them from a new `HUBSPOT_CONTACT_BACKFILL=restart:<n>`.
+Until that backfill is done, `workspace.json` `adLeads.firstUrlSynced` stays
+false: incremental runs store the key (null when unset) only on the contacts
+they read. It turns true when the contact backfill is done and started after
+the field's `addedAt` (`config/lead-rules.json` `reporting.adLeads.contactFields`),
+or when at least 99% of stored contacts carry the key;
+`adLeads.firstUrlCoverage` gives the share.
 Custom `paid_touch_campaign` and `utm_*` properties are added when
 `GET /crm/v3/properties/contacts` lists them; when they are absent, or the call
 fails, the sync goes on without them. The incremental search reads these

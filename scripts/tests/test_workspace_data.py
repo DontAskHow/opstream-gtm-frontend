@@ -342,5 +342,114 @@ class ReportingRules(unittest.TestCase):
         self.assertFalse(rows['s3']['probabilityMixed'])
 
 
+class ReportingNotYetSynced(unittest.TestCase):
+    """Before the new sync and the first-touch backfill: the flags stay false and the opportunity rule is unchecked."""
+    URL = 'https://www.example.com/p?utm_source=chatgpt&utm_medium=cpc'
+
+    def brain(self, contacts=(), backfill=None, meetings=(), assoc=()):
+        import sqlite3
+        import tempfile
+        path = os.path.join(tempfile.mkdtemp(), 'b.db')
+        con = sqlite3.connect(path)
+        con.execute('CREATE TABLE hubspot_objects (object_type TEXT, hs_id TEXT, properties_json TEXT, fetched_at TEXT)')
+        con.execute('CREATE TABLE hubspot_associations (from_type TEXT, from_id TEXT, to_type TEXT, to_id TEXT)')
+        con.execute('CREATE TABLE sync_state (source TEXT PRIMARY KEY, watermark TEXT, last_run TEXT, note TEXT)')
+        for kind, rows in (('contacts', contacts), ('meetings', meetings)):
+            for i, props in rows:
+                con.execute('INSERT INTO hubspot_objects VALUES (?,?,?,?)', (kind, i, json.dumps(props), ''))
+        for row in assoc:
+            con.execute('INSERT INTO hubspot_associations VALUES (?,?,?,?)', row)
+        if backfill is not None:
+            con.execute("INSERT INTO sync_state VALUES ('hubspot_contact_backfill', ?, '', '')", (json.dumps(backfill),))
+        con.commit()
+        con.close()
+        brain = wd.Brain(path)
+        self.addCleanup(brain.con.close)
+        return brain
+
+    def synced(self, brain):
+        present = [p for p in wd.REPORTING_CONTACT_PROPS if p != 'hs_analytics_first_referrer']
+        return wd.reporting_fields_synced(brain, present)
+
+    def test_first_url_partial_coverage_is_not_synced(self):
+        added = wd.REPORTING['adLeads']['contactFields']['addedAt']['hs_analytics_first_url']
+        before = '2026-10-13T18:00:00+00:00'
+        self.assertLess(wd.parse_time(before), wd.parse_time(added))
+        # One incremental run wrote the new key (JSON null when unset) onto 3 of 10 contacts; the older fields are on all.
+        contacts = [(str(i), {'num_conversion_events': '1', 'recent_conversion_event_name': None, 'recent_conversion_date': None,
+                              **({'hs_analytics_first_url': self.URL if i == 0 else None} if i < 3 else {})}) for i in range(10)]
+        cases = [
+            (None, False),                                                     # no backfill
+            ({'done': True, 'startedAt': before}, False),                      # the backfill before the field existed
+            ({'afterId': '5', 'startedAt': '2026-10-14T01:00:00+00:00'}, False),  # the first-touch backfill, still running
+            ({'done': True, 'startedAt': '2026-10-14T01:00:00+00:00'}, True),  # ... finished
+        ]
+        for backfill, want in cases:
+            synced, coverage = self.synced(self.brain(contacts, backfill))
+            self.assertIs(synced['hs_analytics_first_url'], want, backfill)
+            self.assertEqual(coverage['hs_analytics_first_url'], 0.3)
+            self.assertTrue(synced['num_conversion_events'])  # full coverage
+            self.assertFalse(synced['hs_analytics_first_referrer'])  # never stored
+        # Coverage alone: every contact carries the key (most of them as null).
+        full = [(i, dict(p, hs_analytics_first_url=p.get('hs_analytics_first_url'))) for i, p in contacts]
+        synced, coverage = self.synced(self.brain(full, {'done': True, 'startedAt': before}))
+        self.assertTrue(synced['hs_analytics_first_url'])
+        self.assertEqual(coverage['hs_analytics_first_url'], 1.0)
+        # 98 of 100 is below minCoverage (0.99).
+        many = [(str(i), {'hs_analytics_first_url': None} if i < 98 else {}) for i in range(100)]
+        synced, coverage = wd.reporting_fields_synced(self.brain(many), ['hs_analytics_first_url'])
+        self.assertEqual((synced['hs_analytics_first_url'], coverage['hs_analytics_first_url']), (False, 0.98))
+
+    def test_ad_leads_flag_follows_the_synced_check(self):
+        ls = wd.LeadSources(ReportingRules.LS)
+        c = {'id': '1', 'email': 'x@buyer.example', 'lifecycle': 'lead', 'ownerId': '', 'companies': [],
+             'props': {'hs_analytics_first_url': self.URL}}
+        ctx = {'ls': ls, 'contacts': {'1': c}, 'submissions': {}, 'booked': {'1'}, 'scope': wd.ReportingScope({'1': c}, {}, []),
+               'reporting_synced': {'hs_analytics_first_url': False}, 'reporting_coverage': {'hs_analytics_first_url': 0.3}}
+        ad = wd.ad_leads(ctx)
+        self.assertFalse(ad['firstUrlSynced'])
+        self.assertEqual(ad['firstUrlCoverage'], 0.3)
+        self.assertEqual(next(p['leads'] for p in ad['platforms'] if p['key'] == 'openai'), 1)  # counted, flagged partial
+
+    def booking(self, created='2026-10-01T15:00:00Z'):
+        return {'hs_meeting_source': 'MEETINGS_PUBLIC', 'hs_createdate': created}
+
+    def bookings(self, deals):
+        meetings = [(m, self.booking()) for m in ('m1', 'm2', 'm3', 'm4')]
+        assoc = [('meetings', m, 'contacts', '1') for m, _ in meetings] + [('meetings', m, 'deals', d) for m, d in
+                                                                             [('m1', 'd1'), ('m2', 'd2'), ('m3', 'd3')]]
+        brain = self.brain(meetings=meetings, assoc=assoc)
+        c = {'id': '1', 'email': 'a@buyer.example', 'lifecycle': 'lead', 'ownerId': '', 'companies': []}
+        ctx = {'assoc': wd.Assoc(brain), 'deal_by_id': {d['id']: d for d in deals}, 'scope': wd.ReportingScope({'1': c}, {}, deals)}
+        return wd.booking_counts(brain, ctx)
+
+    def test_bookings_before_stage_history_and_customer_deals(self):
+        cu, mt = wd.REPORTING['customers'], wd.REPORTING['meetings']
+        sales = mt['dealPipeline']
+        deals = [{'id': 'd1', 'pipeline': sales, 'ownerId': cu['ownerIds'][0], 'stageHistory': None},  # customer-success owned
+                 {'id': 'd2', 'pipeline': cu['dealPipelines'][0], 'ownerId': '7', 'stageHistory': None},  # a customer pipeline: counted
+                 {'id': 'd3', 'pipeline': sales, 'ownerId': '7', 'stageHistory': None}]                 # sales, history not synced
+        b = self.bookings(deals)
+        self.assertEqual((b['total'], b['customer'], b['opportunity'], b['afterRules']), (4, 1, 0, 3))
+        self.assertFalse(b['stageHistorySynced'])
+        self.assertEqual(b['opportunityUnchecked'], 1)
+        # Once synced, a past-Discovery stage at booking time takes the booking out.
+        deals[2]['stageHistory'] = [{'value': mt['pastDiscoveryStages'][0], 'timestamp': '2026-09-01T00:00:00Z'}]
+        b = self.bookings(deals)
+        self.assertEqual((b['customer'], b['opportunity'], b['afterRules'], b['opportunityUnchecked']), (1, 1, 2, 0))
+        self.assertTrue(b['stageHistorySynced'])
+
+    def test_scope_marks_customer_deals(self):
+        cu = wd.REPORTING['customers']
+        sc = wd.ReportingScope({}, {}, [{'id': 'd1', 'pipeline': 'default', 'ownerId': cu['ownerIds'][1]},
+                                        {'id': 'd2', 'pipeline': cu['dealPipelines'][2], 'ownerId': ''},
+                                        {'id': 'd3', 'pipeline': 'default', 'ownerId': '7'}])
+        self.assertIn('customer success', sc.customer_deal('d1'))
+        self.assertIsNone(sc.customer_deal('d2'))  # an excluded pipeline only drops the deal
+        self.assertIsNone(sc.customer_deal('d3'))
+        self.assertIsNone(sc.customer_deal('nope'))
+        self.assertEqual(sc.dropped_deals, {'d2'})
+
+
 if __name__ == '__main__':
     unittest.main()
