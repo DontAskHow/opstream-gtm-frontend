@@ -959,6 +959,12 @@ def build_workspace(store, state_prefix, work, out, db_path, previous, env):
         return False
 
 
+def sync_only_scripts():
+    """(source names, [(script, secret)]) a sync-only run syncs: SYNC_ONLY_SOURCES, default all but otterly."""
+    wanted = [x.strip() for x in os.environ.get("SYNC_ONLY_SOURCES", ",".join(SYNC_ONLY_SOURCES)).split(",") if x.strip()]
+    return wanted, [(script, secret) for script, secret in SYNC_SCRIPTS if script.replace("_sync.py", "") in wanted]
+
+
 def _sync_only(store, published, state_prefix, brain_key):
     t0 = datetime.now(timezone.utc)
     work = Path(os.environ.get("REFRESH_WORK") or "/tmp/gtm-refresh")
@@ -999,8 +1005,7 @@ def _sync_only(store, published, state_prefix, brain_key):
     except FileNotFoundError:
         pass
 
-    wanted = [x.strip() for x in os.environ.get("SYNC_ONLY_SOURCES", ",".join(SYNC_ONLY_SOURCES)).split(",") if x.strip()]
-    scripts = [(script, secret) for script, secret in SYNC_SCRIPTS if script.replace("_sync.py", "") in wanted]
+    wanted, scripts = sync_only_scripts()
     log("sync-only: sources " + ", ".join(s for s, _ in scripts) + " (otterly is left to the 6-hourly run)"
         if "otterly" not in wanted else "sync-only: sources " + ", ".join(s for s, _ in scripts))
     sync_dir = install_vendored_sync(os.environ.get("REFRESH_SYNC_DIR") or (work / "brain-sync"))

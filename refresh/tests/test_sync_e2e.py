@@ -16,6 +16,7 @@ Takes about three to four minutes, mostly the scripts' own request pacing.
 
 import contextlib
 import copy
+import io
 import json
 import math
 import os
@@ -28,6 +29,7 @@ import tempfile
 import unittest
 from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fakes  # noqa: E402
@@ -410,14 +412,22 @@ class SyncE2E(unittest.TestCase):
             self.assertGreater(json.loads(self.state("hubspot_lists"))["refreshed"]["12"], before["12"])
 
     def test_hubspot_forms_not_exportable(self):
-        """A form whose submissions can't be exported is marked and skipped, not a failure; re-checked weekly."""
+        """A form whose submissions can't be exported is skipped, not a failure; so are others of its
+        formType and of HUBSPOT_FORMS_SKIP_TYPES, without a request. Re-checked weekly."""
         hub = self.world.hubspot
         route = "GET /form-integrations/v1/submissions/forms/{formGuid}"
         refusal = (400, {"status": "error", "message": "Submissions can't be exported for this form.",
                          "errorType": "FORM_TYPE_NOT_SUPPORTED", "correlationId": "test"})
         with self.fresh_db("not-exportable.db") as db:
-            forms = [f["id"] for f in hub.forms]
-            f1, f2, f3, archived = forms
+            f1, f2, f3, archived = [f["id"] for f in hub.forms]
+            # f2 and the extra f5 are of a type HubSpot won't export; the archived form's type is
+            # listed in HUBSPOT_FORMS_SKIP_TYPES.
+            f5 = "f0000000-0000-4000-8000-000000000005"
+            hub.forms.append(dict(hub.forms[1], id=f5, name="Test form 5"))
+            hub.submissions[f5] = [hub._submission(f5, k, self.world.now - timedelta(hours=3 + k)) for k in range(2)]
+            hub.forms[1]["formType"] = hub.forms[4]["formType"] = "captured"
+            hub.forms[3]["formType"] = "flow"
+            env = {"HUBSPOT_FORMS_SKIP_TYPES": " flow, test-unused "}
             # hubspot_forms as older code created it, without submissions_exportable.
             con = sqlite3.connect(str(db))
             con.execute("CREATE TABLE hubspot_forms(form_id TEXT PRIMARY KEY, name TEXT, form_type TEXT, "
@@ -429,64 +439,118 @@ class SyncE2E(unittest.TestCase):
             def exportable():
                 return dict(self.q("SELECT form_id, submissions_exportable FROM hubspot_forms"))
 
-            def not_exportable():
-                return json.loads(self.state("hubspot_forms_progress")).get("notExportable", {})
+            def progress():
+                return json.loads(self.state("hubspot_forms_progress"))
+
+            def asked(reqs, fid):
+                return sum(1 for r in reqs if r.path.endswith("/submissions/forms/" + fid))
+
+            def outcome_row():
+                return self.q("SELECT ok, route, http, detail, at, last_ok_at FROM sync_outcomes "
+                              "WHERE source='hubspot_forms'")[0]
 
             def checked_days_ago(days):
-                progress = json.loads(self.state("hubspot_forms_progress"))
-                progress["notExportable"][f2] = fakes.iso(self.world.now - timedelta(days=days)).replace(
-                    ".000Z", "+00:00")
+                state = progress()
+                when = fakes.iso(self.world.now - timedelta(days=days)).replace(".000Z", "+00:00")
+                state["notExportable"][f2] = when
+                state["notExportableTypes"]["captured"] = when
                 con = sqlite3.connect(str(db))
                 con.execute("UPDATE sync_state SET watermark=? WHERE source='hubspot_forms_progress'",
-                            (json.dumps(progress),))
+                            (json.dumps(state),))
                 con.commit()
                 con.close()
 
-            # Run 1: f2's submissions can't be exported. The pull still succeeds.
+            # Run 1: f2 is refused; f5 (same type, later in the run) and the archived form (listed type)
+            # are not asked. Only expected skips: the pull is ok, with last_ok_at set and the ids listed.
             hub.submissions_error = {f2: refusal}
-            reqs, out = self.run_sync("hubspot_sync.py")
-            ok, _route, _http, detail = self.outcome("hubspot_forms")
-            self.assertEqual(ok, 1, detail)
-            self.assertIn("1 forms' submissions can't be exported (skipped)", detail)
+            reqs, out = self.run_sync("hubspot_sync.py", **env)
+            self.assertEqual((asked(reqs, f1), asked(reqs, f2), asked(reqs, f3), asked(reqs, f5),
+                              asked(reqs, archived)), (3, 1, 1, 0, 0))
+            ok, r_route, http, detail, at, last_ok = outcome_row()
+            self.assertEqual((ok, r_route, http), (1, None, None), detail)
+            self.assertEqual(last_ok, at)
+            self.assertIn("submissions can't be exported, skipped 3: " + ", ".join(sorted([f2, f5, archived])),
+                          detail)
             self.assertNotIn("EXTRA_PULL_FAILED hubspot_forms", out)
-            self.assertEqual(exportable(), {f1: 1, f2: 0, f3: 1, archived: 1})
-            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", f2)[0][0], 0)
+            self.assertEqual(exportable(), {f1: 1, f2: 0, f3: 1, archived: 0, f5: 0})
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id IN (?,?,?)",
+                                    f2, f5, archived)[0][0], 0)
             self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", f1)[0][0],
                              len(hub.submissions[f1]))
-            self.assertEqual(list(not_exportable()), [f2])
+            self.assertEqual(list(progress()["notExportable"]), [f2])
+            self.assertEqual(list(progress()["notExportableTypes"]), ["captured"])
             self.assertNotIn(f2, json.loads(self.state("hubspot_forms")))
-            first_check = not_exportable()[f2]
+            first_ok = last_ok
 
-            # Run 2: f2 is not asked again. Another 400 (not about the form type) still fails the pull.
+            # Run 2: none of the three is asked. Another 400 (not about the form type) still fails the
+            # pull, and last_ok_at stays at run 1.
             hub.submissions_error = {f2: refusal, f3: (400, {"status": "error", "message": "Bad request"})}
-            reqs, out = self.run_sync("hubspot_sync.py")
-            self.assertFalse([r for r in reqs if r.path.endswith(f2)])
-            self.assertEqual(sum(1 for r in reqs if r.path.endswith(f3)), 1)
-            self.assertEqual(self.outcome("hubspot_forms")[:3], (0, route, 400))
+            reqs, out = self.run_sync("hubspot_sync.py", **env)
+            self.assertEqual((asked(reqs, f2), asked(reqs, f5), asked(reqs, archived), asked(reqs, f3)), (0, 0, 0, 1))
+            ok, r_route, http, detail, at, last_ok = outcome_row()
+            self.assertEqual((ok, r_route, http), (0, route, 400))
+            self.assertEqual(last_ok, first_ok)
             self.assertIn("EXTRA_PULL_FAILED hubspot_forms %s 400" % route, out)
-            self.assertEqual(exportable(), {f1: 1, f2: 0, f3: 1, archived: 1})
-            self.assertEqual(not_exportable(), {f2: first_check})
+            self.assertEqual(exportable(), {f1: 1, f2: 0, f3: 1, archived: 0, f5: 0})
 
-            # Run 3: a week later f2 is asked once more; still refused, still skipped, check time moves.
+            # Run 3: a week later f2 is asked once more and still refused, which renews its type,
+            # so f5 is still not asked.
             hub.submissions_error = {f2: refusal}
             checked_days_ago(8)
-            reqs, out = self.run_sync("hubspot_sync.py")
-            self.assertEqual(sum(1 for r in reqs if r.path.endswith(f2)), 1)
-            self.assertEqual(self.outcome("hubspot_forms")[0], 1)
-            self.assertEqual(exportable()[f2], 0)
-            self.assertGreater(not_exportable()[f2], fakes.iso(self.world.now - timedelta(days=1)))
+            reqs, out = self.run_sync("hubspot_sync.py", **env)
+            self.assertEqual((asked(reqs, f2), asked(reqs, f5), asked(reqs, archived)), (1, 0, 0))
+            ok, _r, _h, detail, at, last_ok = outcome_row()
+            self.assertEqual((ok, last_ok), (1, at), detail)
+            self.assertGreater(progress()["notExportableTypes"]["captured"],
+                               fakes.iso(self.world.now - timedelta(days=1)))
 
-            # Run 4: a week on, HubSpot exports f2: its submissions land and the mark goes.
+            # Run 4: a week on, HubSpot exports f2. That clears its type, so f5 is read too.
+            # The listed type is still skipped.
             hub.submissions_error = {}
             checked_days_ago(8)
-            reqs, out = self.run_sync("hubspot_sync.py")
-            self.assertEqual(self.outcome("hubspot_forms")[0], 1)
-            self.assertEqual(exportable()[f2], 1)
-            self.assertEqual(not_exportable(), {})
-            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", f2)[0][0],
-                             len(hub.submissions[f2]))
+            reqs, out = self.run_sync("hubspot_sync.py", **env)
+            self.assertEqual((asked(reqs, f2), asked(reqs, f5), asked(reqs, archived)), (1, 1, 0))
+            ok, _r, _h, detail, at, last_ok = outcome_row()
+            self.assertEqual((ok, last_ok), (1, at), detail)
+            self.assertIn("skipped 1: " + archived, detail)
+            self.assertEqual(exportable(), {f1: 1, f2: 1, f3: 1, archived: 0, f5: 1})
+            self.assertEqual((progress()["notExportable"], progress()["notExportableTypes"]), ({}, {}))
+            for fid in (f2, f5):
+                self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_form_submissions WHERE form_id=?", fid)[0][0],
+                                 len(hub.submissions[fid]))
             self.assertEqual(json.loads(self.state("hubspot_forms"))[f2], hub.submissions[f2][0]["submittedAt"])
-            self.assertNotIn("can't be exported", self.outcome("hubspot_forms")[3])
+
+    def test_sync_only_path_pulls_forms(self):
+        """The 15-minute sync-only run pulls forms with no backfill variable set.
+
+        Uses run.py's own source selection (sync_only_scripts, SYNC_ONLY_SOURCES unset) and
+        run_syncs, the calls _sync_only makes. Only the HubSpot secret is present, so the other
+        sources are skipped.
+        """
+        sys.path.insert(0, str(ROOT / "refresh"))
+        import run
+
+        class Store(run.Store):
+            def secret_exists(self, name):
+                return name == "hubspot-oauth"
+
+        hub = self.world.hubspot
+        with self.fresh_db("sync-only.db") as db:
+            env = self.world.env(os.environ, db)   # drops every HUBSPOT_* variable, backfills included
+            env.pop("SYNC_ONLY_SOURCES", None)
+            self.world.take_requests()
+            with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
+                wanted, scripts = run.sync_only_scripts()
+                ran, failed, _skipped = run.run_syncs(Store(), db, self.sync_dir, scripts)
+            reqs = self.world.take_requests()
+            self.assertIn("hubspot", wanted)
+            self.assertEqual((ran, failed), (["hubspot_sync.py"], []))
+            self.assertTrue([r for r in reqs if r.path == "/marketing/v3/forms"])
+            self.assertTrue([r for r in reqs if r.path.startswith("/form-integrations/v1/submissions/forms/")])
+            self.assertEqual(self.outcome("hubspot_forms")[0], 1)
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_forms")[0][0], len(hub.forms))
+            sources = {r[0] for r in self.q("SELECT source FROM sync_outcomes")}
+            self.assertFalse({"hubspot_contact_backfill", "hubspot_meeting_backfill"} & sources)
 
     def test_hubspot_meeting_backfill(self):
         """HUBSPOT_MEETING_BACKFILL=1 re-reads every meeting once: merged, page-capped, resumable."""

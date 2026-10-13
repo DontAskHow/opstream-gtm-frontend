@@ -202,10 +202,15 @@ Some form types have no exportable submissions. HubSpot answers HTTP 400 with
 with `FORM_TYPE`. That is not a failure. The form gets
 `hubspot_forms.submissions_exportable` = 0 and its check time goes into
 `hubspot_forms_progress` (`notExportable`). It is skipped until
-`NOT_EXPORTABLE_RECHECK_DAYS` (7) have passed, then asked again. A form read
-without that error gets 1, and NULL means not asked yet. The `hubspot_forms`
-detail counts the skipped forms. Any other 400, or any other error status,
-still fails `hubspot_forms` as before.
+`NOT_EXPORTABLE_RECHECK_DAYS` (7) have passed, then asked again. Its
+`formType` is recorded too (`notExportableTypes`). Other forms of that type
+are skipped without a request for as long, and the first one asked after
+that re-checks the type. Forms of a type listed in `HUBSPOT_FORMS_SKIP_TYPES`
+(comma list) are always skipped. Skipped forms also get 0. A form read
+without that error gets 1 and clears its type, and NULL means not asked yet.
+The `hubspot_forms` detail lists the skipped form ids (the first 6, then a
+count). With only these skips, the row is ok=1 and `last_ok_at` moves. Any
+other 400, or any other error status, still fails `hubspot_forms` as before.
 
 The list catalog is mirrored only from a complete answer. A page without a
 `lists` array, a `hasMore` without a later offset, or an empty catalog while
@@ -279,8 +284,10 @@ watermarks, and `sync_outcomes` across repeated runs. They cover paging,
 429s, archived forms (including one archived after its watermark), a missing
 scope (403 on imports and on forms), list answers without a `lists` array or
 with no lists, a list whose memberships fail, a non-numeric `submittedAt`,
-a form whose submissions can't be exported (marked, skipped, re-checked a
-week later) next to a plain 400 that still fails,
+a form whose submissions can't be exported (marked, skipped with others of
+its type and of `HUBSPOT_FORMS_SKIP_TYPES`, re-checked a week later) next to
+a plain 400 that still fails, forms pulled on the sync-only path with no
+backfill variable set,
 the per-run caps on submissions, memberships and activities (including one
 window larger than the budget) resuming, the leads interval, a one-time
 backfill restart, the meeting source and booking link properties (and a 403

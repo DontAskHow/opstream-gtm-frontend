@@ -35,7 +35,10 @@ stop the others:
                             (default 200) and resume next run. A form whose
                             submissions HubSpot cannot export (HTTP 400, form
                             type) is marked submissions_exportable=0, skipped,
-                            and re-checked every NOT_EXPORTABLE_RECHECK_DAYS (7)
+                            and re-checked every NOT_EXPORTABLE_RECHECK_DAYS (7).
+                            Other forms of its formType, and of the types in
+                            HUBSPOT_FORMS_SKIP_TYPES (comma list), are skipped
+                            without a request
   hubspot_lists             list catalog; each contact list's memberships at
                             most every LIST_MIN_INTERVAL_MIN minutes (default
                             360), LIST_MEMBERSHIP_MAX_CALLS pages a run
@@ -513,6 +516,8 @@ FORM_SUBMISSION_MAX_CALLS = int(os.environ.get("FORM_SUBMISSION_MAX_CALLS") or 2
 # {"message": "Submissions can't be exported for this form.", "errorType": "FORM_TYPE_..."}.
 NOT_EXPORTABLE_MESSAGE = re.compile(r"\bcan(?:'|\u2019)?t be exported|\bcannot be exported", re.I)
 NOT_EXPORTABLE_RECHECK_DAYS = 7
+# Form types never asked for submissions (a comma list of formType values).
+FORMS_SKIP_TYPES = {x.strip() for x in (os.environ.get("HUBSPOT_FORMS_SKIP_TYPES") or "").split(",") if x.strip()}
 BACKFILL_PAGE = 200  # CRM search maximum
 # Searches per backfill per run; the backfill resumes next run.
 BACKFILL_MAX_PAGES = int(os.environ.get("HUBSPOT_BACKFILL_MAX_PAGES") or 150)
@@ -651,8 +656,12 @@ def sync_forms(client, log):
 
     A form whose submissions HubSpot will not export (submissions_not_exportable)
     is not a failure: hubspot_forms.submissions_exportable is set to 0 and the
-    form is skipped until NOT_EXPORTABLE_RECHECK_DAYS have passed. A form read
-    without that error gets 1; NULL means not asked yet.
+    form is skipped until NOT_EXPORTABLE_RECHECK_DAYS have passed. Its formType
+    is recorded too, and other forms of that type are skipped without a request
+    for as long; the first of them asked after that re-checks the type. Forms
+    of a type in HUBSPOT_FORMS_SKIP_TYPES are always skipped. Skipped forms get
+    0 as well, and their ids go in the outcome detail. A form read without that
+    error gets 1 (and clears its type); NULL means not asked yet.
     """
     forms = {}
     for archived in (False, True):
@@ -673,17 +682,24 @@ def sync_forms(client, log):
     # cursors: first pulls cut short by FORM_SUBMISSION_MAX_CALLS, {formId: {after, newest}}.
     # archivedRead: archived forms read since they were archived.
     # notExportable: {formId: when HubSpot last said its submissions can't be exported}.
+    # notExportableTypes: {formType: when a form of that type was last refused}.
     progress = _json_state("hubspot_forms_progress")
     cursors = progress.get("cursors") if isinstance(progress.get("cursors"), dict) else {}
     archived_read = {str(x) for x in progress.get("archivedRead") or [] if x}
     not_exportable = progress.get("notExportable") if isinstance(progress.get("notExportable"), dict) else {}
+    bad_types = progress.get("notExportableTypes") if isinstance(progress.get("notExportableTypes"), dict) else {}
+    skipped = []  # forms not asked for submissions this run because they can't be exported
+
+    def recent(iso):
+        age = _days_since(iso)
+        return age is not None and 0 <= age < NOT_EXPORTABLE_RECHECK_DAYS
 
     def save_progress():
         set_sync_state("hubspot_forms_progress", json.dumps(
-            {"cursors": cursors, "archivedRead": sorted(archived_read), "notExportable": not_exportable},
-            sort_keys=True),
-            "first-pull paging cursors; archived forms read since archiving; forms whose submissions "
-            "can't be exported, with when that was last checked")
+            {"cursors": cursors, "archivedRead": sorted(archived_read), "notExportable": not_exportable,
+             "notExportableTypes": bad_types}, sort_keys=True),
+            "first-pull paging cursors; archived forms read since archiving; forms and form types whose "
+            "submissions can't be exported, with when that was last checked")
 
     con = db_connect()
     new_total = 0
@@ -704,8 +720,11 @@ def sync_forms(client, log):
             f = forms[fid]
             if f["archived"] and fid in archived_read:
                 continue
-            age = _days_since(not_exportable.get(fid))
-            if age is not None and 0 <= age < NOT_EXPORTABLE_RECHECK_DAYS:
+            ftype = str(f.get("formType") or "")
+            if recent(not_exportable.get(fid)) or ftype in FORMS_SKIP_TYPES or (ftype and recent(bad_types.get(ftype))):
+                con.execute("UPDATE hubspot_forms SET submissions_exportable=0 WHERE form_id=?", (fid,))
+                con.commit()
+                skipped.append(fid)
                 continue
             mark = _ms(marks.get(fid))
             cur = cursors.get(fid) if mark is None and isinstance(cursors.get(fid), dict) else None
@@ -766,6 +785,9 @@ def sync_forms(client, log):
                     con.execute("UPDATE hubspot_forms SET submissions_exportable=0 WHERE form_id=?", (fid,))
                     con.commit()
                     not_exportable[fid] = fetched_at
+                    if f.get("formType"):
+                        bad_types[str(f["formType"])] = fetched_at
+                    skipped.append(fid)
                     cursors.pop(fid, None)
                     if f["archived"]:
                         archived_read.add(fid)
@@ -789,7 +811,9 @@ def sync_forms(client, log):
             con.execute("UPDATE hubspot_forms SET submissions_exportable=1 WHERE form_id=?", (fid,))
             con.commit()
             new_total += new
-            if not_exportable.pop(fid, None) is not None:
+            cleared = not_exportable.pop(fid, None) is not None
+            cleared = bad_types.pop(str(f.get("formType") or ""), None) is not None or cleared
+            if cleared:
                 save_progress()
             if not done:
                 if after:
@@ -806,12 +830,13 @@ def sync_forms(client, log):
                 save_progress()
     finally:
         con.close()
-    pending = sum(1 for fid in forms if _ms(marks.get(fid)) is None and fid not in not_exportable)
+    pending = sum(1 for fid in forms if _ms(marks.get(fid)) is None and fid not in skipped)
     detail = "%d forms (%d archived), %d new submissions" % (
         len(forms), sum(1 for f in forms.values() if f["archived"]), new_total)
-    skipped = sum(1 for fid in forms if fid in not_exportable)
     if skipped:
-        detail += "; %d forms' submissions can't be exported (skipped)" % skipped
+        # Ids first: record_outcome keeps 400 characters.
+        detail += "; submissions can't be exported, skipped %d: %s%s" % (
+            len(skipped), ", ".join(sorted(skipped)[:6]), " +%d more" % (len(skipped) - 6) if len(skipped) > 6 else "")
     if first_calls >= FORM_SUBMISSION_MAX_CALLS and pending:
         detail += "; FORM_SUBMISSION_MAX_CALLS reached, %d forms resume next run" % pending
     if failed:
