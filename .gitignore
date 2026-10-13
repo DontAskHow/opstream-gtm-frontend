@@ -4,3 +4,12 @@ out/
 *.db
 *.sqlite*
 preview-check.png
+
+# GTM one-page: generated output and local data snapshots (never commit)
+gtm-onepage-out/
+gtm-data/
+
+# One-page GTM build: data + output must never be committed
+gtm-onepage-out/
+gtm-data/
+onepage/out/
