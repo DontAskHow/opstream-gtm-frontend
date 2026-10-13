@@ -122,20 +122,36 @@ const put = (deps, bucket, key, text, sha) => deps.put(bucket, key, text, { cont
 
 // One run: decide and (when needed) upload. prev = refresh.json's `workspace` block from the last run.
 // Returns the new `workspace` block for refresh.json and the problem (if any) for the alarm.
-export async function publishWorkspace({ deps, previewBucket, key = WORKSPACE_FILE, text, tooLarge = false, runId, prev = {}, patterns, nowIso }) {
+// Only the sync-only job (every 15 minutes) writes workspace.json; the 6-hourly full job's
+// snapshot (LATEST.json mode other than 'sync-only') has none, and the next sync-only run
+// brings it back. Such a snapshot is not a problem unless no sync-only snapshot with a good
+// workspace.json has been seen for longer than this.
+export const MISSING_GRACE_MINUTES = 60;
+
+export async function publishWorkspace({ deps, previewBucket, key = WORKSPACE_FILE, text, tooLarge = false, runId, prev = {}, patterns, nowIso, snapshotMode = 'sync-only', graceMinutes = MISSING_GRACE_MINUTES }) {
   const pSha = patterns.length ? patternsHash(patterns) : null;
+  // When a sync-only snapshot last brought a good workspace.json (a run before this field existed: its check time).
+  const seenAt = prev.workspaceSeenAt ?? (['uploaded', 'unchanged'].includes(prev.status) ? prev.checkedAt ?? null : null);
   const base = {
     publishedSha256: prev.publishedSha256 ?? null, publishedTextSha256: prev.publishedTextSha256 ?? null,
     publishedGeneratedAt: prev.publishedGeneratedAt ?? null, publishedRunId: prev.publishedRunId ?? null,
     publishedPatternsSha256: prev.publishedPatternsSha256 ?? null, withheld: !!prev.withheld, runId: runId ?? null, checkedAt: nowIso,
+    snapshotMode: snapshotMode ?? null, workspaceSeenAt: seenAt,
   };
-  const keep = (problem, errors) => ({
-    block: { ...base, status: base.withheld ? 'withheld' : 'kept-last-good', problem, errors: errors || [], sha256: null, stamps: base.withheld ? null : prev.stamps ?? null },
+  const keep = (problem, errors, note) => ({
+    block: { ...base, status: base.withheld ? 'withheld' : 'kept-last-good', problem, errors: errors || [], sha256: null, stamps: base.withheld ? null : prev.stamps ?? null, ...(note ? { note } : {}) },
     problem, uploaded: false,
   });
   if (!patterns.length) return keep(PROBLEMS.noPatterns);
   if (tooLarge) return keep(PROBLEMS.invalid, ['too large to read']);
-  if (text == null) return keep(PROBLEMS.missing);
+  if (text == null) {
+    const age = seenAt ? Date.parse(nowIso) - Date.parse(seenAt) : NaN;
+    if (snapshotMode !== 'sync-only' && Number.isFinite(age) && age <= graceMinutes * 60e3) {
+      // Expected: the 6-hourly snapshot. Keep the last good copy, no alarm, no banner.
+      return keep(null, [], `the latest snapshot is from the ${snapshotMode || 'full'} job, which does not write workspace.json; the last sync-only snapshot with one was seen ${Math.round(age / 60e3)} min ago`);
+    }
+    return keep(PROBLEMS.missing);
+  }
   const v = validateWorkspace(text, patterns);
   if (!v.ok) {
     // A pattern that matches now, under a pattern set the live copy was never checked with:
@@ -155,14 +171,14 @@ export async function publishWorkspace({ deps, previewBucket, key = WORKSPACE_FI
   const sha = contentHash(v.doc);
   if (sha === base.publishedSha256 && !base.withheld) {
     // Same content as the live copy, now also checked against the current patterns.
-    return { block: { ...base, status: 'unchanged', problem: null, errors: [], sha256: sha, publishedPatternsSha256: pSha, stamps: workspaceStamps(v.doc, base.publishedTextSha256) }, problem: null, uploaded: false };
+    return { block: { ...base, status: 'unchanged', problem: null, errors: [], sha256: sha, publishedPatternsSha256: pSha, workspaceSeenAt: nowIso, stamps: workspaceStamps(v.doc, base.publishedTextSha256) }, problem: null, uploaded: false };
   }
   const tSha = textHash(text);
   await put(deps, previewBucket, key, text, tSha);
   return {
     block: { ...base, status: 'uploaded', problem: null, errors: [], sha256: sha, publishedSha256: sha, publishedTextSha256: tSha,
       publishedGeneratedAt: v.doc.meta?.generatedAt ?? v.doc.meta?.asOf ?? null, publishedRunId: runId ?? null, publishedPatternsSha256: pSha,
-      withheld: false, stamps: workspaceStamps(v.doc, tSha) },
+      withheld: false, workspaceSeenAt: nowIso, stamps: workspaceStamps(v.doc, tSha) },
     problem: null, uploaded: true,
   };
 }

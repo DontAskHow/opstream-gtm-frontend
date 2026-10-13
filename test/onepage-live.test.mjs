@@ -66,12 +66,13 @@ function world({ patterns = [SYNTHETIC_SCRUB] } = {}) {
   const s3 = new Map();
   const w = { s3, puts: [], notes: [], tmp: mkdtempSync(join(tmpdir(), 'onepage-live-')), runs: 0 };
   let clock = Date.parse('2026-10-13T16:00:00Z');
-  w.publish = (workspaceText) => {
+  // mode: LATEST.json's mode. The sync-only job (every 15 min) writes workspace.json; the 6-hourly full job (no mode) does not.
+  w.publish = (workspaceText, mode = 'sync-only') => {
     const runId = `run-${++w.runs}`;
     const prefix = `published/${runId}/`;
     for (const [k, v] of Object.entries(snapshotFiles())) s3.set(`data/${prefix}${k}`, JSON.stringify(v));
     if (workspaceText != null) s3.set(`data/${prefix}workspace.json`, workspaceText);
-    s3.set('data/published/LATEST.json', JSON.stringify({ runId, prefix, publishedAt: new Date(clock).toISOString() }));
+    s3.set('data/published/LATEST.json', JSON.stringify({ runId, prefix, publishedAt: new Date(clock).toISOString(), ...(mode ? { mode } : {}) }));
   };
   w.deps = {
     async getText(bucket, key) { return s3.get(`${bucket === 'B-data' ? 'data' : 'preview'}/${key}`) ?? null; },
@@ -179,6 +180,57 @@ test('Lambda: an invalid workspace.json (scrub hit, schema) keeps the last good 
   w.publish('{"not": "json"');
   assert.equal((await w.run()).workspace.problem, PROBLEMS.invalid);
   assert.equal(w.notes.length, 1, 'the same problem does not alarm again');
+});
+
+test('Lambda: a 6-hourly snapshot (mode not sync-only) without workspace.json is expected: no alarm, no banner, unless none came for > 60 min', async (t) => {
+  const w = world();
+  t.after(w.done);
+  w.publish(WS);
+  assert.equal((await w.run()).workspace.status, 'uploaded');
+  const seen = w.refreshDoc().workspace.workspaceSeenAt;
+  assert.ok(seen, 'the time a sync-only snapshot last brought a good copy');
+  // The full job publishes (LATEST has no mode, as run.py writes it): quiet, last good copy kept.
+  w.publish(null, null);
+  const full = await w.run(15);
+  assert.equal(full.workspace.status, 'kept-last-good');
+  assert.equal(full.workspace.problem, null);
+  assert.ok(!full.failing.includes(PROBLEMS.missing));
+  assert.equal(w.notes.length, 0, 'no alarm');
+  const block = w.refreshDoc().workspace;
+  assert.equal(block.workspaceSeenAt, seen, 'the last sync-only sighting is kept, not moved');
+  assert.match(block.note, /full job, which does not write workspace\.json/);
+  assert.equal(page.header(buildView(JSON.parse(WS), w.refreshDoc()), { now: Date.parse('2026-10-13T16:30:00Z') }).includes('Showing the last good data'), false, 'no banner on the page');
+  // Explicit non-sync-only modes too.
+  w.publish(null, 'full');
+  assert.equal((await w.run(15)).workspace.problem, null);
+  // Still no sync-only snapshot with workspace.json 60 minutes after the last one: alarm (once).
+  const late = await w.run(31);
+  assert.equal(late.workspace.problem, PROBLEMS.missing);
+  assert.ok(late.failing.includes(PROBLEMS.missing));
+  assert.equal(w.notes.length, 1);
+  assert.match(w.notes[0].subject, /snapshot-has-no-workspace-json/);
+  assert.ok(w.s3.has('preview/workspace.json'), 'the last good copy stays');
+  // The next sync-only snapshot brings it back and clears the problem.
+  w.publish(WS);
+  const back = await w.run();
+  assert.equal(back.workspace.status, 'unchanged');
+  assert.equal(back.workspace.problem, null);
+  assert.ok(Date.parse(w.refreshDoc().workspace.workspaceSeenAt) > Date.parse(seen));
+  // A sync-only snapshot without workspace.json still alarms at once (its job should have written it).
+  const n = w.notes.length;
+  w.publish(null);
+  const bad = await w.run();
+  assert.equal(bad.workspace.problem, PROBLEMS.missing);
+  assert.equal(w.notes.length, n + 1);
+});
+
+test('Lambda: a full snapshot right after deploy (no sync-only copy seen yet) alarms: nothing proves workspace.json is flowing', async (t) => {
+  const w = world();
+  t.after(w.done);
+  w.publish(null, null);
+  const r = await w.run();
+  assert.equal(r.workspace.problem, PROBLEMS.missing);
+  assert.equal(w.notes.length, 1);
 });
 
 test('Lambda: a snapshot without workspace.json keeps the previous copy and alarms once, with no daily reminder', async (t) => {

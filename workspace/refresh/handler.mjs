@@ -149,6 +149,8 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
     ? await publishWorkspace({
       deps, previewBucket: cfg.previewBucket, key: cfg.workspaceKey, runId: snap.runId, prev: prev.workspace || {},
       text: snap.workspaceText, tooLarge: snap.workspaceTooLarge, patterns: cfg.scrubPatterns || [], nowIso: now().toISOString(),
+      // LATEST.json's mode: 'sync-only' runs write workspace.json; the 6-hourly full run (no mode) does not.
+      snapshotMode: snap.meta.mode ?? null,
     })
     : { block: null, problem: null, uploaded: false };
   let live = null;
