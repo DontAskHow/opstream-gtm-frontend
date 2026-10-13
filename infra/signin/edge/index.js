@@ -27,30 +27,48 @@ const REFRESH_WAIT_MS = 1500; // a warm instance waits at most this long for a r
 const JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
 const JWKS_TTL_MS = 60 * 60 * 1000;
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const HTTP_TIMEOUT_MS = 3000;
+// Time budget against the 5 s viewer-request limit. Each HTTP request has a total deadline (not just a
+// socket-idle timeout). Secrets: <= 2 s (cold start ~1 s). The callback's Google calls (token exchange,
+// JWKS) share whatever is left of CALLBACK_DEADLINE_MS, counted from the start of the invocation, so a
+// cold-start callback answers within ~3.8 s and fails closed (502) rather than hitting CloudFront's 503.
+const SECRETS_TIMEOUT_MS = 2000;
+const GOOGLE_TIMEOUT_MS = 2000;
+const CALLBACK_DEADLINE_MS = 3800;
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ event, ...fields }));
 
 // ---------- default I/O ----------
 const agents = {};
-function request(url, { method = 'GET', headers = {}, body } = {}) {
+// timeoutMs is a total deadline for the request (queueing on the socket, connect, TLS, response).
+function request(url, { method = 'GET', headers = {}, body, timeoutMs = GOOGLE_TIMEOUT_MS } = {}) {
   const u = new URL(url);
   agents[u.host] = agents[u.host] || new https.Agent({ keepAlive: true, maxSockets: 1 });
   return new Promise((resolve, reject) => {
-    const req = https.request(u, { method, headers, agent: agents[u.host], timeout: HTTP_TIMEOUT_MS }, (res) => {
+    let timer;
+    const done = (fn, v) => { clearTimeout(timer); fn(v); };
+    const req = https.request(u, { method, headers, agent: agents[u.host], timeout: timeoutMs }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
         let json = null;
         try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { json = null; }
-        resolve({ status: res.statusCode, body: json });
+        done(resolve, { status: res.statusCode, body: json });
       });
-      res.on('error', reject);
+      res.on('error', (err) => done(reject, err));
     });
-    req.on('timeout', () => req.destroy(new Error('timeout ' + u.host)));
-    req.on('error', reject);
+    const timeout = () => { req.destroy(); done(reject, new Error('timeout ' + u.host)); };
+    timer = setTimeout(timeout, Math.max(0, timeoutMs));
+    req.on('timeout', timeout);
+    req.on('error', (err) => done(reject, err));
     req.end(body);
   });
+}
+
+// Rejects after ms (the promise itself keeps running; request() above cleans up its own socket).
+function withDeadline(promise, ms, what) {
+  let timer;
+  const late = new Promise((_, reject) => { timer = setTimeout(reject, Math.max(0, ms), new Error('deadline ' + what)); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
 }
 
 const sha256hex = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -77,19 +95,22 @@ async function getSecretValue({ region, id }) {
   const creds = { accessKeyId: process.env.AWS_ACCESS_KEY_ID, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY, sessionToken: process.env.AWS_SESSION_TOKEN };
   const body = JSON.stringify({ SecretId: id });
   const { url, headers } = signAwsJson({ region, service: 'secretsmanager', target: 'secretsmanager.GetSecretValue', body, creds });
-  const { status, body: res } = await request(url, { method: 'POST', headers, body });
+  const { status, body: res } = await request(url, { method: 'POST', headers, body, timeoutMs: SECRETS_TIMEOUT_MS });
   if (status !== 200 || !res || typeof res.SecretString !== 'string') {
     throw new Error(`GetSecretValue ${id} failed: ${status} ${res && (res.__type || res.message) || ''}`.trim());
   }
   return res.SecretString.trim();
 }
 
-async function readSecrets() {
+async function readSecrets(get = getSecretValue) {
   // One socket per region: the two secrets in a region share it (one TLS handshake per region).
   const [clientId, clientSecret, sessionKey, edgeConfig] = await Promise.all(
-    [SECRETS.clientId, SECRETS.clientSecret, SECRETS.sessionKey, SECRETS.edgeConfig].map(getSecretValue));
-  const cfg = JSON.parse(edgeConfig);
-  if (!clientId || !clientSecret || sessionKey.length < 32) throw new Error('incomplete sign-in config');
+    [SECRETS.clientId, SECRETS.clientSecret, SECRETS.sessionKey, SECRETS.edgeConfig].map((s) => get(s)));
+  // JSON.parse error messages quote the input, which could be a pasted credential: never let them reach a log.
+  let cfg;
+  try { cfg = JSON.parse(edgeConfig); } catch { throw new Error('edge config is not JSON'); }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('edge config is not a JSON object');
+  if (!clientId || !clientSecret || typeof sessionKey !== 'string' || sessionKey.length < 32) throw new Error('incomplete sign-in config');
   return {
     clientId, clientSecret, sessionKey,
     // Fail closed: only an explicit false turns the Basic gate off.
@@ -99,18 +120,18 @@ async function readSecrets() {
 }
 
 async function fetchJwks() {
-  const { status, body } = await request(JWKS_URL);
+  const { status, body } = await request(JWKS_URL, { timeoutMs: GOOGLE_TIMEOUT_MS });
   if (status !== 200 || !body || !Array.isArray(body.keys)) throw new Error('jwks fetch failed: ' + status);
   return body;
 }
 
-async function exchangeCode({ code, verifier, clientId, clientSecret }) {
+async function exchangeCode({ code, verifier, clientId, clientSecret, timeoutMs = GOOGLE_TIMEOUT_MS }) {
   const form = new URLSearchParams({
     code, code_verifier: verifier, client_id: clientId, client_secret: clientSecret,
     redirect_uri: L.REDIRECT_URI, grant_type: 'authorization_code',
   }).toString();
   const { status, body } = await request(TOKEN_URL, {
-    method: 'POST', body: form,
+    method: 'POST', body: form, timeoutMs: Math.min(timeoutMs, GOOGLE_TIMEOUT_MS),
     headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': Buffer.byteLength(form) },
   });
   if (status !== 200 || !body || typeof body.id_token !== 'string') {
@@ -155,14 +176,15 @@ function createHandler(deps = {}) {
   const getJwks = deps.getJwks || cached(fetchJwks, JWKS_TTL_MS, JWKS_TTL_MS * 24);
   const exchange = deps.exchangeCode || exchangeCode;
   const random = deps.random || ((n) => crypto.randomBytes(n));
+  const callbackDeadlineMs = deps.callbackDeadlineMs || CALLBACK_DEADLINE_MS;
   let lastJwksRefresh = 0;
 
-  async function verifyWithJwks(idToken, opts) {
-    let r = L.verifyIdToken(idToken, { ...opts, jwks: await getJwks() });
+  async function verifyWithJwks(idToken, opts, left) {
+    let r = L.verifyIdToken(idToken, { ...opts, jwks: await withDeadline(getJwks(), left(), 'jwks') });
     // Google rotates keys; refetch once (at most every 60 s) when the kid is new to us.
     if (!r.ok && r.reason === 'unknown-kid' && now() - lastJwksRefresh > 60000) {
       lastJwksRefresh = now();
-      r = L.verifyIdToken(idToken, { ...opts, jwks: await getJwks({ force: true }) });
+      r = L.verifyIdToken(idToken, { ...opts, jwks: await withDeadline(getJwks({ force: true }), left(), 'jwks') });
     }
     return r;
   }
@@ -184,7 +206,8 @@ function createHandler(deps = {}) {
     });
   }
 
-  async function callback(request, cfg, cookies, nowS) {
+  async function callback(request, cfg, cookies, nowS, startedAt) {
+    const left = () => startedAt + callbackDeadlineMs - Date.now();
     const clearState = L.clearCookie(L.STATE_COOKIE);
     const fail = (status, desc, msg) => L.respond(status, desc, {
       cookies: [clearState], body: L.page('Sign-in failed', `<p>${L.esc(msg)}</p><p><a href="/">Try again</a></p>`),
@@ -202,19 +225,27 @@ function createHandler(deps = {}) {
     getJwks().catch(() => {}); // warm the JWKS cache while the code is exchanged
     let idToken;
     try {
-      idToken = await exchange({ code: q.get('code'), verifier: saved.verifier, clientId: cfg.clientId, clientSecret: cfg.clientSecret });
+      idToken = await withDeadline(exchange({ code: q.get('code'), verifier: saved.verifier, clientId: cfg.clientId,
+        clientSecret: cfg.clientSecret, timeoutMs: left() }), left(), 'token exchange');
     } catch (err) {
       log('callback', { outcome: 'exchange-failed', error: err.message });
       return fail(502, 'Bad Gateway', 'Could not complete the sign-in with Google.');
     }
-    const r = await verifyWithJwks(idToken, { clientId: cfg.clientId, nonce: saved.nonce, nowS });
+    let r;
+    try {
+      r = await verifyWithJwks(idToken, { clientId: cfg.clientId, nonce: saved.nonce, nowS }, left);
+    } catch (err) {
+      log('callback', { outcome: 'jwks-unavailable', error: err.message });
+      return fail(502, 'Bad Gateway', 'Could not complete the sign-in with Google.');
+    }
     if (!r.ok) {
       log('callback', { outcome: 'id-token-rejected', reason: r.reason });
       return fail(403, 'Forbidden', 'The sign-in could not be verified.');
     }
     const email = r.claims.email.toLowerCase();
-    if (!L.isAllowedEmail(email)) {
-      log('callback', { outcome: 'denied', domain: email.split('@').pop() });
+    const hd = typeof r.claims.hd === 'string' ? r.claims.hd : undefined;
+    if (!L.isAllowedIdentity(email, hd)) {
+      log('callback', { outcome: 'denied', domain: email.split('@').pop(), hd: hd === undefined ? '(none)' : hd.slice(0, 64) });
       return L.respond(403, 'Forbidden', {
         cookies: [clearState, L.clearCookie(L.SESSION_COOKIE)],
         body: L.page('Access denied', `<p>${L.esc(email)} does not have access to this preview.</p>`
@@ -224,11 +255,12 @@ function createHandler(deps = {}) {
     log('callback', { outcome: 'allowed', domain: email.split('@').pop() });
     return L.respond(302, 'Found', {
       headers: { location: saved.returnTo },
-      cookies: [clearState, L.setCookie(L.SESSION_COOKIE, L.makeSession(cfg.sessionKey, email, nowS), L.SESSION_TTL_S)],
+      cookies: [clearState, L.setCookie(L.SESSION_COOKIE, L.makeSession(cfg.sessionKey, { email, hd }, nowS), L.SESSION_TTL_S)],
     });
   }
 
   return async function handler(event) {
+    const startedAt = Date.now();
     const request = event.Records[0].cf.request;
     let cfg;
     try { cfg = await getConfig(); } catch (err) {
@@ -242,7 +274,7 @@ function createHandler(deps = {}) {
       }
       const nowS = Math.floor(now() / 1000);
       const cookies = L.parseCookies(request);
-      if (request.uri === L.CALLBACK_PATH) return await callback(request, cfg, cookies, nowS);
+      if (request.uri === L.CALLBACK_PATH) return await callback(request, cfg, cookies, nowS, startedAt);
       if (request.uri === L.LOGOUT_PATH) {
         return L.respond(200, 'OK', {
           cookies: [L.clearCookie(L.SESSION_COOKIE), L.clearCookie(L.STATE_COOKIE)],
@@ -264,6 +296,8 @@ function createHandler(deps = {}) {
 
 exports.createHandler = createHandler;
 exports.cached = cached;
+exports.readSecrets = readSecrets;
+exports.withDeadline = withDeadline;
 exports.SECRETS = SECRETS;
 exports.signAwsJson = signAwsJson;
 exports.handler = createHandler();

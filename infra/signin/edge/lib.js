@@ -18,15 +18,25 @@ const SESSION_TTL_S = 12 * 60 * 60;
 const STATE_TTL_S = 10 * 60;
 const CLOCK_SKEW_S = 60;
 
-// Who may see the preview: any verified @opstream.ai Google account, plus one named account.
+// Who may see the preview: a Google Workspace account of opstream.ai, plus one named account.
+// For a non-Gmail address Google is only authoritative when the id_token carries the matching hosted
+// domain (hd); a consumer Google account registered under an @opstream.ai address has no hd. So the
+// domain suffix needs hd === 'opstream.ai', and the named Gmail address must match exactly.
 const ALLOWED_DOMAIN_SUFFIX = '@opstream.ai';
+const ALLOWED_HD = 'opstream.ai';
 const ALLOWED_EMAILS = ['zackkaufman39@gmail.com'];
 
-function isAllowedEmail(email) {
-  if (typeof email !== 'string') return false;
+function normalizeEmail(email) {
+  if (typeof email !== 'string') return null;
   const e = email.trim().toLowerCase();
-  if (!/^[^@\s]+@[^@\s]+$/.test(e)) return false;
-  return e.endsWith(ALLOWED_DOMAIN_SUFFIX) || ALLOWED_EMAILS.includes(e);
+  return /^[^@\s]+@[^@\s]+$/.test(e) ? e : null;
+}
+
+function isAllowedIdentity(email, hd) {
+  const e = normalizeEmail(email);
+  if (!e) return false;
+  if (ALLOWED_EMAILS.includes(e)) return true;
+  return e.endsWith(ALLOWED_DOMAIN_SUFFIX) && hd === ALLOWED_HD;
 }
 
 const B64URL = /^[A-Za-z0-9_-]+$/;
@@ -67,13 +77,16 @@ function verifyToken(key, purpose, token, nowS) {
   return claims;
 }
 
-function makeSession(key, email, nowS) {
-  return signToken(key, 'session', { email: String(email).toLowerCase(), iat: nowS, exp: nowS + SESSION_TTL_S });
+// hd (the id_token's hosted domain) is kept in the session so the allowlist re-check sees it too.
+function makeSession(key, { email, hd }, nowS) {
+  const claims = { email: String(email).toLowerCase(), iat: nowS, exp: nowS + SESSION_TTL_S };
+  if (typeof hd === 'string') claims.hd = hd;
+  return signToken(key, 'session', claims);
 }
 
 function readSession(key, token, nowS) {
   const c = verifyToken(key, 'session', token, nowS);
-  if (!c || c.exp - c.iat > SESSION_TTL_S || !isAllowedEmail(c.email)) return null;
+  if (!c || c.exp - c.iat > SESSION_TTL_S || !isAllowedIdentity(c.email, c.hd)) return null;
   return c;
 }
 
@@ -213,8 +226,8 @@ function page(title, html) {
 
 module.exports = {
   ORIGIN, CALLBACK_PATH, LOGOUT_PATH, REDIRECT_URI, GOOGLE_AUTH_URL, GOOGLE_ISSUERS,
-  SESSION_COOKIE, STATE_COOKIE, SESSION_TTL_S, STATE_TTL_S, ALLOWED_DOMAIN_SUFFIX, ALLOWED_EMAILS,
-  isAllowedEmail, b64url, fromB64url, safeEqual, signToken, verifyToken, makeSession, readSession,
+  SESSION_COOKIE, STATE_COOKIE, SESSION_TTL_S, STATE_TTL_S, ALLOWED_DOMAIN_SUFFIX, ALLOWED_HD, ALLOWED_EMAILS,
+  normalizeEmail, isAllowedIdentity, b64url, fromB64url, safeEqual, signToken, verifyToken, makeSession, readSession,
   makeState, readState, safeReturnPath, basicAuthOk, verifyIdToken, header, parseCookies, authorizeUrl,
   respond, setCookie, clearCookie, esc, page,
 };

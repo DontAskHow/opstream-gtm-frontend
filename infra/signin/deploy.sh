@@ -11,11 +11,13 @@
 #   3. Lambda gtm-preview-signin-edge (us-east-1, nodejs20.x, x86_64, 128 MB, 5 s, no env vars),
 #      then a numbered version.
 #   4. Response headers policy gtm-preview-headers-policy-db5553a4: the same four headers the CloudFront
-#      Function gtm-preview-headers-db5553a4 sets. CloudFront rejects a behavior that has a CloudFront
+#      Function gtm-preview-headers-db5553a4 sets, plus HSTS (max-age one year). CloudFront rejects a behavior that has a CloudFront
 #      Function on any viewer event and Lambda@Edge on any viewer event (InvalidLambdaFunctionAssociation),
 #      so that function cannot stay on viewer-response; the policy (no code, no per-request charge) replaces it.
 #   5. Distribution default behavior, in one update: the Lambda version on viewer-request, both CloudFront
 #      Functions disassociated (not deleted; rollback.sh puts them back), the headers policy attached.
+#   6. 14-day retention on the function's log groups that exist (Lambda@Edge creates one in each region
+#      that serves traffic, with no expiry); re-run to cover regions that started serving later.
 #
 #   infra/signin/deploy.sh             # deploy + wait until the distribution is Deployed
 #   infra/signin/deploy.sh --no-wait
@@ -42,6 +44,7 @@ DIST=EZQ1E2Y6O6NDG
 FN=gtm-preview-signin-edge
 ROLE=gtm-preview-signin-edge-role
 HEADERS_POLICY=gtm-preview-headers-policy-db5553a4
+LOG_RETENTION_DAYS=14
 SESSION_SECRET=opstream-gtm/preview-session-key
 CONFIG_SECRET=opstream-gtm/preview-edge-config
 BASIC_AUTH_CREDENTIALS_FILE="${BASIC_AUTH_CREDENTIALS_FILE:-/workspace/gtm-preview-credentials.txt}"
@@ -133,12 +136,32 @@ echo "function  $VERSION_ARN"
 echo "secrets   $ARN_SESSION"
 echo "          $ARN_CONFIG"
 
+# ---------- log retention (only groups that exist; a failure here only warns) ----------
+for r in $(aws ec2 describe-regions --query 'Regions[].RegionName' --output text); do
+  for g in "/aws/lambda/us-east-1.$FN" "/aws/lambda/$FN"; do
+    [ "$g" = "/aws/lambda/$FN" ] && [ "$r" != us-east-1 ] && continue
+    if ! cur=$(aws logs describe-log-groups --region "$r" --log-group-name-prefix "$g" \
+        --query "logGroups[?logGroupName=='$g'].[logGroupName,retentionInDays]" --output text 2>/dev/null); then
+      echo "warning: could not read log groups in $r" >&2; continue
+    fi
+    [ -n "$cur" ] || continue
+    if [ "$(echo "$cur" | cut -f2)" = "$LOG_RETENTION_DAYS" ]; then
+      echo "logs      $r $g: ${LOG_RETENTION_DAYS}d"
+    elif aws logs put-retention-policy --region "$r" --log-group-name "$g" --retention-in-days "$LOG_RETENTION_DAYS"; then
+      echo "logs      $r $g: retention set to ${LOG_RETENTION_DAYS}d"
+    else
+      echo "warning: could not set retention on $r $g" >&2
+    fi
+  done
+done
+
 [ "$DIST_UPDATE" = 1 ] || exit 0
 
 # ---------- response headers policy (replaces the viewer-response CloudFront Function) ----------
 cat > "$TMP/headers.json" <<EOF
-{"Name":"$HEADERS_POLICY","Comment":"Same headers as CloudFront Function gtm-preview-headers-db5553a4",
- "SecurityHeadersConfig":{"ContentTypeOptions":{"Override":true},"ReferrerPolicy":{"ReferrerPolicy":"no-referrer","Override":true}},
+{"Name":"$HEADERS_POLICY","Comment":"Same headers as CloudFront Function gtm-preview-headers-db5553a4, plus HSTS",
+ "SecurityHeadersConfig":{"ContentTypeOptions":{"Override":true},"ReferrerPolicy":{"ReferrerPolicy":"no-referrer","Override":true},
+   "StrictTransportSecurity":{"AccessControlMaxAgeSec":31536000,"IncludeSubdomains":false,"Preload":false,"Override":true}},
  "CustomHeadersConfig":{"Quantity":2,"Items":[
    {"Header":"X-Robots-Tag","Value":"noindex, nofollow","Override":true},
    {"Header":"Cache-Control","Value":"private, no-store","Override":true}]}}

@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const L = require('../infra/signin/edge/lib.js');
-const { createHandler, cached } = require('../infra/signin/edge/index.js');
+const { createHandler, cached, readSecrets, withDeadline, SECRETS } = require('../infra/signin/edge/index.js');
 
 const KEY = crypto.randomBytes(48).toString('hex');
 const NOW = 1_800_000_000;
@@ -18,13 +18,13 @@ const BASIC_SHA = crypto.createHash('sha256').update('preview:test-password').di
 
 // ---------- signed cookies ----------
 test('session cookie round-trips and carries a 12h expiry', () => {
-  const c = L.readSession(KEY, L.makeSession(KEY, 'Test.User@Opstream.ai', NOW), NOW + 10);
+  const c = L.readSession(KEY, L.makeSession(KEY, { email: 'Test.User@Opstream.ai', hd: 'opstream.ai' }, NOW), NOW + 10);
   assert.equal(c.email, 'test.user@opstream.ai');
   assert.equal(c.exp - c.iat, 12 * 3600);
 });
 
 test('session cookie: tampered payload, tampered signature, wrong key, wrong purpose are rejected', () => {
-  const tok = L.makeSession(KEY, 'test.user@opstream.ai', NOW);
+  const tok = L.makeSession(KEY, { email: 'test.user@opstream.ai', hd: 'opstream.ai' }, NOW);
   const [p, s] = tok.split('.');
   const forgedPayload = L.b64url(JSON.stringify({ email: 'test.user@opstream.ai', iat: NOW, exp: NOW + 10 * 86400 }));
   assert.equal(L.readSession(KEY, forgedPayload + '.' + s, NOW), null);
@@ -36,27 +36,48 @@ test('session cookie: tampered payload, tampered signature, wrong key, wrong pur
 });
 
 test('session cookie: expired, malformed and garbage values are rejected', () => {
-  const tok = L.makeSession(KEY, 'test.user@opstream.ai', NOW);
+  const tok = L.makeSession(KEY, { email: 'test.user@opstream.ai', hd: 'opstream.ai' }, NOW);
   assert.equal(L.readSession(KEY, tok, NOW + 12 * 3600), null);
   assert.equal(L.readSession(KEY, tok, NOW + 12 * 3600 - 1).email, 'test.user@opstream.ai');
   for (const bad of [undefined, '', 'garbage', 'a.b', 'a.b.c', tok + '.x', '.' + tok.split('.')[1], 'x'.repeat(5000), '%%%.***']) {
     assert.equal(L.readSession(KEY, bad, NOW), null, String(bad).slice(0, 20));
   }
   // Correctly signed but with a lifetime longer than 12h, or a disallowed email: still rejected.
-  assert.equal(L.readSession(KEY, L.signToken(KEY, 'session', { email: 'test.user@opstream.ai', iat: NOW, exp: NOW + 13 * 3600 }), NOW), null);
+  assert.equal(L.readSession(KEY, L.signToken(KEY, 'session', { email: 'test.user@opstream.ai', hd: 'opstream.ai', iat: NOW, exp: NOW + 13 * 3600 }), NOW), null);
   assert.equal(L.readSession(KEY, L.signToken(KEY, 'session', { email: 'x@notopstream.ai', iat: NOW, exp: NOW + 60 }), NOW), null);
-  assert.equal(L.readSession(KEY, L.signToken(KEY, 'session', { email: 'test.user@opstream.ai', iat: NOW + 3600, exp: NOW + 7200 }), NOW), null);
+  assert.equal(L.readSession(KEY, L.signToken(KEY, 'session', { email: 'test.user@opstream.ai', hd: 'opstream.ai', iat: NOW + 3600, exp: NOW + 7200 }), NOW), null);
 });
 
 // ---------- allowlist ----------
-test('allowlist: @opstream.ai and the one named account only', () => {
-  for (const ok of ['test.user@opstream.ai', 'TEST.USER@OPSTREAM.AI', ' test.user@opstream.ai ', 'zackkaufman39@gmail.com', 'ZackKaufman39@Gmail.com']) {
-    assert.equal(L.isAllowedEmail(ok), true, ok);
+test('allowlist: @opstream.ai Workspace accounts (hd) and the one named account only', () => {
+  for (const ok of ['test.user@opstream.ai', 'TEST.USER@OPSTREAM.AI', ' test.user@opstream.ai ']) {
+    assert.equal(L.isAllowedIdentity(ok, 'opstream.ai'), true, ok);
+  }
+  for (const ok of ['zackkaufman39@gmail.com', 'ZackKaufman39@Gmail.com']) {
+    assert.equal(L.isAllowedIdentity(ok, undefined), true, ok);
   }
   for (const bad of ['evil@opstream.ai.evil.com', 'x@notopstream.ai', 'x@sub.opstream.ai.com', 'opstream.ai', '@opstream.ai',
     'x@opstream.ai@evil.com', 'zackkaufman39@gmail.com.evil.com', 'zackkaufman39+x@gmail.com', 'someone@example.com', 'x@opstream.aii', '', null, undefined, 42]) {
-    assert.equal(L.isAllowedEmail(bad), false, String(bad));
+    assert.equal(L.isAllowedIdentity(bad, 'opstream.ai'), false, String(bad));
   }
+});
+
+test('allowlist: an @opstream.ai address needs hd === "opstream.ai" (consumer Google accounts have no hd)', () => {
+  for (const hd of [undefined, null, '', 'evil.com', 'OPSTREAM.AI', 'opstream.ai.evil.com', 'sub.opstream.ai', ['opstream.ai'], 42]) {
+    assert.equal(L.isAllowedIdentity('test.user@opstream.ai', hd), false, JSON.stringify(hd));
+  }
+  // The named Gmail address is an exact match; hd plays no part (Google is authoritative for gmail.com).
+  assert.equal(L.isAllowedIdentity('someone.else@gmail.com', 'opstream.ai'), false);
+});
+
+test('session: hd is stored and re-checked; a correctly signed session without hd is rejected', () => {
+  const c = L.readSession(KEY, L.makeSession(KEY, { email: 'test.user@opstream.ai', hd: 'opstream.ai' }, NOW), NOW);
+  assert.equal(c.hd, 'opstream.ai');
+  for (const hd of [undefined, 'evil.com']) {
+    assert.equal(L.readSession(KEY, L.makeSession(KEY, { email: 'test.user@opstream.ai', hd }, NOW), NOW), null, String(hd));
+  }
+  assert.equal(L.readSession(KEY, L.signToken(KEY, 'session', { email: 'test.user@opstream.ai', iat: NOW, exp: NOW + 60 }), NOW), null);
+  assert.equal(L.readSession(KEY, L.makeSession(KEY, { email: 'zackkaufman39@gmail.com' }, NOW), NOW).email, 'zackkaufman39@gmail.com');
 });
 
 // ---------- return path ----------
@@ -93,13 +114,15 @@ function jwt(claims, { kid = 'k1', alg = 'RS256', key = rsa.privateKey, header }
 }
 const goodClaims = (over = {}) => ({
   iss: 'https://accounts.google.com', aud: CLIENT_ID, azp: CLIENT_ID, sub: '1', email: 'test.user@opstream.ai',
-  email_verified: true, nonce: 'n-123', iat: NOW - 5, exp: NOW + 3600, ...over,
+  hd: 'opstream.ai', email_verified: true, nonce: 'n-123', iat: NOW - 5, exp: NOW + 3600, ...over,
 });
 const verify = (tok, over = {}) => L.verifyIdToken(tok, { jwks: JWKS, clientId: CLIENT_ID, nonce: 'n-123', nowS: NOW, ...over });
 
 test('id_token: a correctly signed Google token verifies (both issuer spellings)', () => {
   assert.equal(verify(jwt(goodClaims())).ok, true);
   assert.equal(verify(jwt(goodClaims({ iss: 'accounts.google.com' }))).ok, true);
+  // An array aud is accepted only when it includes the client id and azp is the client id.
+  assert.equal(verify(jwt(goodClaims({ aud: ['someone-else', CLIENT_ID], azp: CLIENT_ID }))).ok, true);
 });
 
 test('id_token: signature, alg, kid, iss, aud, azp, exp, nonce, email_verified are enforced', () => {
@@ -117,6 +140,9 @@ test('id_token: signature, alg, kid, iss, aud, azp, exp, nonce, email_verified a
     [jwt(goodClaims({ nonce: undefined })), 'nonce'],
     [jwt(goodClaims({ email_verified: false })), 'email-unverified'],
     [jwt(goodClaims({ email_verified: 'true' })), 'email-unverified'],
+    [jwt(goodClaims({ aud: ['someone-else', CLIENT_ID], azp: 'someone-else' })), 'aud'],
+    [jwt(goodClaims({ aud: ['someone-else', CLIENT_ID], azp: undefined })), 'aud'],
+    [jwt(goodClaims({ aud: ['someone-else'] })), 'aud'],
     ['a.b', 'malformed'],
     ['not a jwt at all', 'malformed'],
   ];
@@ -187,11 +213,11 @@ test('handler: Basic only -> 302 to Google with exact redirect_uri, state, nonce
 
 test('handler: forged, garbage, expired or tampered session cookies are not served', async () => {
   const { handler } = makeHandler();
-  const valid = L.makeSession(KEY, 'test.user@opstream.ai', NOW);
+  const valid = L.makeSession(KEY, { email: 'test.user@opstream.ai', hd: 'opstream.ai' }, NOW);
   const [p, s] = valid.split('.');
   const bad = [
-    'garbage', L.makeSession('wrong-key-wrong-key-wrong-key-wrong', 'test.user@opstream.ai', NOW),
-    L.makeSession(KEY, 'test.user@opstream.ai', NOW - 13 * 3600),
+    'garbage', L.makeSession('wrong-key-wrong-key-wrong-key-wrong', { email: 'test.user@opstream.ai', hd: 'opstream.ai' }, NOW),
+    L.makeSession(KEY, { email: 'test.user@opstream.ai', hd: 'opstream.ai' }, NOW - 13 * 3600),
     L.b64url(JSON.stringify({ email: 'test.user@opstream.ai', iat: NOW, exp: NOW + 99999 })) + '.' + s,
     p + '.' + L.b64url(crypto.randomBytes(32)),
   ];
@@ -213,7 +239,7 @@ test('handler: subresource fetches without a session get 403 and no new state co
 
 test('handler: valid session passes the request through and maps "/" to index.html', async () => {
   const { handler } = makeHandler();
-  const cookie = `other=1; ${L.SESSION_COOKIE}=${L.makeSession(KEY, 'zackkaufman39@gmail.com', NOW)}`;
+  const cookie = `other=1; ${L.SESSION_COOKIE}=${L.makeSession(KEY, { email: 'zackkaufman39@gmail.com' }, NOW)}`;
   const req = await handler(ev('/', { headers: { Authorization: BASIC, Cookie: cookie } }));
   assert.equal(req.uri, '/index.html');
   assert.equal(req.status, undefined);
@@ -226,7 +252,7 @@ test('handler: valid session passes the request through and maps "/" to index.ht
 test('handler: basic_auth_required=false skips only the Basic gate', async () => {
   const { handler } = makeHandler({ cfg: { basicAuthRequired: false } });
   assert.equal((await handler(ev('/'))).status, '302');
-  const cookie = `${L.SESSION_COOKIE}=${L.makeSession(KEY, 'test.user@opstream.ai', NOW)}`;
+  const cookie = `${L.SESSION_COOKIE}=${L.makeSession(KEY, { email: 'test.user@opstream.ai', hd: 'opstream.ai' }, NOW)}`;
   assert.equal((await handler(ev('/', { headers: { Cookie: cookie } }))).uri, '/index.html');
 });
 
@@ -328,4 +354,113 @@ test('config cache: a slow refresh on a warm instance returns the cached copy, a
   release();
   await new Promise((r) => setTimeout(r, 5));
   assert.equal(await get({ now: Date.now() }), 'v2');
+});
+
+// ---------- review fixes (2026-10-12) ----------
+async function signIn(handler) {
+  const { loc, stateCookie } = await startFlow(handler);
+  return { loc, stateCookie, qs: `code=abc&state=${loc.searchParams.get('state')}`, nonce: loc.searchParams.get('nonce') };
+}
+const sessionOf = (res) => cookiesOf(res).find((c) => c.startsWith(L.SESSION_COOKIE + '=') && !c.includes('Max-Age=0'));
+
+test('callback: @opstream.ai without hd, or with another hd -> 403, no session; with hd -> session carries hd', async () => {
+  for (const [over, status] of [[{ hd: undefined }, '403'], [{ hd: 'evil.com' }, '403'], [{ hd: 'opstream.ai.evil.com' }, '403'], [{ hd: 'opstream.ai' }, '302']]) {
+    let idToken;
+    const { handler } = makeHandler({ exchangeCode: async () => idToken });
+    const f = await signIn(handler);
+    idToken = jwt(goodClaims({ nonce: f.nonce, ...over }));
+    const res = await handler(ev('/_auth/callback', { qs: f.qs, headers: { Authorization: BASIC, Cookie: f.stateCookie } }));
+    assert.equal(res.status, status, JSON.stringify(over));
+    const session = sessionOf(res);
+    if (status === '403') assert.equal(session, undefined);
+    else assert.equal(L.readSession(KEY, cookiePair(session).split('=')[1], NOW).hd, 'opstream.ai');
+  }
+});
+
+test('callback: the named Gmail account signs in without hd', async () => {
+  let idToken;
+  const { handler } = makeHandler({ exchangeCode: async () => idToken });
+  const f = await signIn(handler);
+  idToken = jwt(goodClaims({ nonce: f.nonce, email: 'zackkaufman39@gmail.com', hd: undefined }));
+  const res = await handler(ev('/_auth/callback', { qs: f.qs, headers: { Authorization: BASIC, Cookie: f.stateCookie } }));
+  assert.equal(res.status, '302');
+  assert.equal(L.readSession(KEY, cookiePair(sessionOf(res)).split('=')[1], NOW).email, 'zackkaufman39@gmail.com');
+});
+
+test('callback: a hanging token exchange or JWKS fetch ends at the deadline with 502, no session', async () => {
+  const never = () => new Promise(() => {});
+  for (const deps of [{ exchangeCode: never }, { getJwks: never }]) {
+    let idToken;
+    const handler = createHandler({
+      now: () => NOW * 1000, callbackDeadlineMs: 50,
+      getConfig: async () => ({ clientId: CLIENT_ID, clientSecret: 's', sessionKey: KEY, basicAuthRequired: false }),
+      getJwks: async () => JWKS, exchangeCode: async () => idToken, ...deps,
+    });
+    const f = await signIn(handler);
+    idToken = jwt(goodClaims({ nonce: f.nonce }));
+    const t0 = Date.now();
+    const res = await handler(ev('/_auth/callback', { qs: f.qs, headers: { Cookie: f.stateCookie } }));
+    assert.ok(Date.now() - t0 < 1000);
+    assert.equal(res.status, '502', Object.keys(deps)[0]);
+    assert.equal(sessionOf(res), undefined);
+  }
+});
+
+test('withDeadline: passes a fast result through, rejects a slow one', async () => {
+  assert.equal(await withDeadline(Promise.resolve(7), 50, 'x'), 7);
+  await assert.rejects(withDeadline(new Promise(() => {}), 10, 'slow thing'), /deadline slow thing/);
+});
+
+const secretsFrom = (edgeConfig, over = {}) => async ({ id }) => ({
+  [SECRETS.clientId.id]: CLIENT_ID, [SECRETS.clientSecret.id]: 'test-secret', [SECRETS.sessionKey.id]: KEY,
+  [SECRETS.edgeConfig.id]: edgeConfig, ...over,
+}[id]);
+
+test('readSecrets: only a JSON false turns Basic off; missing, "false", null or other values keep it on', async () => {
+  const cfg = (o) => readSecrets(secretsFrom(JSON.stringify({ basic_auth_sha256: BASIC_SHA.toUpperCase(), ...o })));
+  assert.equal((await cfg({ basic_auth_required: false })).basicAuthRequired, false);
+  for (const v of [true, 'false', null, 0, '', undefined]) {
+    assert.equal((await cfg({ basic_auth_required: v })).basicAuthRequired, true, JSON.stringify(v));
+  }
+  assert.equal((await cfg({})).basicAuthSha256, BASIC_SHA);
+  assert.equal((await cfg({ basic_auth_sha256: 42 })).basicAuthSha256, '');
+});
+
+test('readSecrets: a non-JSON or non-object edge config fails without echoing the value', async () => {
+  const pasted = 'preview-user:hunter2-not-json';
+  await assert.rejects(readSecrets(secretsFrom(pasted)), (err) => err.message === 'edge config is not JSON' && !err.message.includes('hunter2'));
+  for (const v of ['[]', '42', 'null', '"x"']) {
+    await assert.rejects(readSecrets(secretsFrom(v)), /edge config is not/, v);
+  }
+  await assert.rejects(readSecrets(secretsFrom('{}', { [SECRETS.sessionKey.id]: 'short' })), /incomplete sign-in config/);
+});
+
+test('handler: a malformed config never reaches the log, and requests get 503', async () => {
+  const lines = [];
+  const orig = console.log;
+  console.log = (l) => lines.push(String(l));
+  try {
+    const handler = createHandler({ readSecrets: () => readSecrets(secretsFrom('preview-user:hunter2-not-json')) });
+    const res = await handler(ev('/', { headers: { Authorization: BASIC } }));
+    assert.equal(res.status, '503');
+  } finally { console.log = orig; }
+  assert.ok(lines.length > 0 && lines.every((l) => !l.includes('hunter2')), lines.join('\n'));
+});
+
+test('handler: duplicate session cookies -> the first one counts', async () => {
+  const { handler } = makeHandler();
+  const good = L.makeSession(KEY, { email: 'test.user@opstream.ai', hd: 'opstream.ai' }, NOW);
+  const first = await handler(ev('/', { headers: { Authorization: BASIC, Cookie: `${L.SESSION_COOKIE}=garbage; ${L.SESSION_COOKIE}=${good}` } }));
+  assert.equal(first.status, '302');
+  const second = await handler(ev('/', { headers: { Authorization: BASIC, Cookie: `${L.SESSION_COOKIE}=${good}; ${L.SESSION_COOKIE}=garbage` } }));
+  assert.equal(second.uri, '/index.html');
+});
+
+test('handler: other /_auth paths -> 404, even with a valid session', async () => {
+  const { handler } = makeHandler();
+  const cookie = `${L.SESSION_COOKIE}=${L.makeSession(KEY, { email: 'test.user@opstream.ai', hd: 'opstream.ai' }, NOW)}`;
+  for (const uri of ['/_auth', '/_auth/', '/_auth/login', '/_auth/callback/x', '/_auth/logout/']) {
+    const res = await handler(ev(uri, { headers: { Authorization: BASIC, Cookie: cookie } }));
+    assert.equal(res.status, '404', uri);
+  }
 });

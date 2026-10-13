@@ -41,7 +41,7 @@ def cmd_basic_hash_config(a):
     with open(a.file) as f:
         for line in f:
             if "=" in line:
-                k, v = line.rstrip("\n").split("=", 1)
+                k, v = line.rstrip("\r\n").split("=", 1)
                 kv[k.strip()] = v
     if not kv.get("user") or not kv.get("password"):
         sys.exit("credentials file needs user= and password= lines")
