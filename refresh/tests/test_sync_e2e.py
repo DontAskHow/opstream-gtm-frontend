@@ -11,7 +11,7 @@ Run from the repo root:
     python3 -m unittest discover -s refresh/tests -v
 
 Needs python3 with boto3 (as the refresh image has) and the openssl CLI.
-Takes about two and a half minutes, mostly the scripts' own request pacing.
+Takes about three to four minutes, mostly the scripts' own request pacing.
 """
 
 import contextlib
@@ -34,6 +34,9 @@ import fakes  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 SYNC_SRC = ROOT / "refresh" / "brain-sync"
+
+MEETING_PROPS = ("hs_meeting_source", "hs_meeting_source_id", "hs_meeting_external_url", "hs_meeting_location",
+                 "hs_activity_type")
 
 # Read-only POSTs the HubSpot sync may send; everything else must be GET.
 HUBSPOT_POSTS = re.compile(r"^(/oauth/v1/token|/crm/v3/objects/[^/]+/search|/crm/v3/lists/search"
@@ -123,6 +126,7 @@ class SyncE2E(unittest.TestCase):
         finally:
             self.db, hub.forms, hub.submissions, hub.members, lem.activities = saved
             hub.forms_status, hub.lists_shape, hub.members_status = 200, None, {}
+            hub.meeting_properties_status, hub.fail_meeting_backfill_after = 200, None
 
     def assert_hubspot_read_only(self, reqs):
         hs = [r for r in reqs if r.host == fakes.HUBSPOT_HOST]
@@ -149,9 +153,24 @@ class SyncE2E(unittest.TestCase):
         body = next(r.json() for r in reqs if r.path == "/crm/v3/objects/contacts/search")
         for prop in ("hs_analytics_source", "hs_latest_source_data_2", "first_conversion_date", "hs_object_source",
                      "hs_google_click_id", "hs_lifecyclestage_customer_date", "utm_source", "utm_campaign",
-                     "paid_touch_campaign"):
+                     "paid_touch_campaign", "num_conversion_events", "recent_conversion_event_name",
+                     "recent_conversion_date"):
             self.assertIn(prop, body["properties"])
         self.assertNotIn("favorite_color", body["properties"])
+
+        # Meetings: source fields, plus the booking link properties the portal lists (one matched by
+        # name, one by label). Internal notes and unrelated properties are not requested.
+        body = next(r.json() for r in reqs if r.path == "/crm/v3/objects/meetings/search")
+        for prop in MEETING_PROPS + ("test_booking_page_url", "test_link_used"):
+            self.assertIn(prop, body["properties"])
+        for prop in ("hs_internal_meeting_notes", "favorite_room"):
+            self.assertNotIn(prop, body["properties"])
+        props = json.loads(self.q("SELECT properties_json FROM hubspot_objects WHERE object_type='meetings' "
+                                  "AND hs_id='7001'")[0][0])
+        self.assertEqual((props["hs_meeting_source"], props["test_booking_page_url"]),
+                         ("MEETINGS_PUBLIC", "https://example.com/book/test"))
+        self.assertNotIn("hs_internal_meeting_notes", props)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_objects WHERE object_type='meetings'")[0][0], 2)
         props = json.loads(self.q("SELECT properties_json FROM hubspot_objects WHERE object_type='contacts' "
                                   "AND hs_id='101'")[0][0])
         self.assertEqual(props["hs_analytics_source"], "PAID_SEARCH")
@@ -385,6 +404,71 @@ class SyncE2E(unittest.TestCase):
                              ["/crm/v3/lists/12/memberships"])
             self.assertEqual(self.outcome("hubspot_lists")[0], 1)
             self.assertGreater(json.loads(self.state("hubspot_lists"))["refreshed"]["12"], before["12"])
+
+    def test_hubspot_meeting_backfill(self):
+        """HUBSPOT_MEETING_BACKFILL=1 re-reads every meeting once, merging, resumable; property listing may fail."""
+        hub = self.world.hubspot
+        with self.fresh_db("meetings.db") as db:
+            # Meetings stored before the source and booking link properties were fetched.
+            con = sqlite3.connect(str(db))
+            for i in hub.meetings:
+                con.execute("INSERT INTO hubspot_objects VALUES('meetings', ?, ?, '2026-01-01T00:00:00+00:00')",
+                            (str(i), json.dumps({"hs_object_id": str(i), "hs_meeting_title": "Stored title",
+                                                 "seed_only": "kept"})))
+            con.commit()
+            con.close()
+
+            def keyset(reqs):
+                return [r.json() for r in reqs if r.path == "/crm/v3/objects/meetings/search"
+                        and r.json()["filterGroups"][0]["filters"][0]["propertyName"] == "hs_object_id"]
+
+            def stored(hs_id):
+                return json.loads(self.q("SELECT properties_json FROM hubspot_objects WHERE object_type='meetings' "
+                                         "AND hs_id=?", str(hs_id))[0][0])
+
+            # Run 1: the second page fails. The first 200 are merged; the failure is recorded alone.
+            hub.fail_meeting_backfill_after = 7200
+            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1)
+            self.assert_hubspot_read_only(reqs)
+            self.assertEqual(self.outcome("hubspot")[0], 1)
+            self.assertEqual(self.outcome("hubspot_meeting_backfill")[:3],
+                             (0, "POST /crm/v3/objects/meetings/search", 500))
+            self.assertIn("EXTRA_PULL_FAILED hubspot_meeting_backfill POST /crm/v3/objects/meetings/search 500", out)
+            self.assertFalse(self.q("SELECT 1 FROM sync_outcomes WHERE source='hubspot_contact_backfill'"))
+            self.assertEqual([b["filterGroups"][0]["filters"][0]["value"] for b in keyset(reqs)], ["0", "7200"])
+            self.assertIn("test_booking_page_url", keyset(reqs)[0]["properties"])
+            bf = json.loads(self.state("hubspot_meeting_backfill"))
+            self.assertEqual((bf["afterId"], bf["count"], bf.get("done")), ("7200", 200, None))
+            m = stored(7100)
+            self.assertEqual((m["seed_only"], m["hs_meeting_source"], m["hs_meeting_external_url"]),
+                             ("kept", "MEETINGS_PUBLIC", "https://example.com/meet/7100"))    # merged
+            self.assertNotIn("hs_internal_meeting_notes", m)
+            self.assertNotIn("hs_meeting_source", stored(7250))
+
+            # Run 2: meeting properties cannot be listed (403). The sync goes on with the fixed
+            # properties, and the backfill resumes after 7200 and finishes.
+            hub.fail_meeting_backfill_after = None
+            hub.meeting_properties_status = 403
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1)
+            self.assertEqual(self.outcome("hubspot")[0], 1)
+            bodies = keyset(reqs)
+            self.assertEqual([b["filterGroups"][0]["filters"][0]["value"] for b in bodies], ["7200"])
+            for prop in MEETING_PROPS:
+                self.assertIn(prop, bodies[0]["properties"])
+            self.assertNotIn("test_booking_page_url", bodies[0]["properties"])
+            bf = json.loads(self.state("hubspot_meeting_backfill"))
+            self.assertEqual((bf["afterId"], bf["count"], bf["done"]), ("7250", 250, True))
+            self.assertEqual(self.outcome("hubspot_meeting_backfill")[0], 1)
+            self.assertEqual(stored(7250)["hs_meeting_source"], "MEETINGS_PUBLIC")
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_objects WHERE object_type='meetings' AND "
+                                    "json_extract(properties_json, '$.hs_activity_type')='Discovery'")[0][0],
+                             len(hub.meetings))
+
+            # Run 3: a finished backfill is not repeated.
+            hub.meeting_properties_status = 200
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1)
+            self.assertFalse(keyset(reqs))
+            self.assertIn("already complete", self.outcome("hubspot_meeting_backfill")[3])
 
     # ------------------------------------------------------------ Lemlist
 

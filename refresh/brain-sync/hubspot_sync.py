@@ -22,7 +22,11 @@ flow. Calls are GET, plus the CRM search, lists search, and batch read POSTs.
 A missing secret, a rejected token, or a portal other than 21303277 exits 3
 and does not move watermarks.
 
-After the objects, four extra pulls run. Each records its own sync_outcomes
+Meetings also carry their source (hs_meeting_source*, external URL, location,
+activity type) and any property naming the booking link that
+GET /crm/v3/properties/meetings lists; when that call fails they go without.
+
+After the objects, up to five extra pulls run. Each records its own sync_outcomes
 row and a failure in one (a missing scope, say) does not fail the sync or
 stop the others:
   hubspot_forms             forms (archived too) and their submissions; first
@@ -36,6 +40,7 @@ stop the others:
   hubspot_contact_backfill  only with HUBSPOT_CONTACT_BACKFILL=1 (or restart,
                             which starts over once per value): re-reads
                             every contact's properties once
+  hubspot_meeting_backfill  the same for meetings, with HUBSPOT_MEETING_BACKFILL
 A failed extra pull also logs `EXTRA_PULL_FAILED <name> <route> <status>` to
 stdout; the exit code does not change.
 """
@@ -117,7 +122,12 @@ OBJECT_TYPES = {
     "meetings": ("hs_lastmodifieddate", ["hs_createdate", "hs_lastmodifieddate",
         "hs_meeting_body", "hs_meeting_end_time", "hs_meeting_outcome",
         "hs_meeting_start_time", "hs_meeting_title", "hs_object_id", "hs_timestamp",
-        "hubspot_owner_id"]),
+        "hubspot_owner_id",
+        # Where the meeting came from (booked through a meetings link, a calendar
+        # sync, ...). Meetings stored before these were added get them from
+        # HUBSPOT_MEETING_BACKFILL=1.
+        "hs_meeting_source", "hs_meeting_source_id", "hs_meeting_external_url",
+        "hs_meeting_location", "hs_activity_type"]),
     "products": ("hs_lastmodifieddate", ["createdate", "description", "hs_createdate",
         "hs_lastmodifieddate", "hs_object_id", "hs_sku", "name", "price"]),
     "line_items": ("hs_lastmodifieddate", ["amount", "createdate", "hs_createdate",
@@ -126,6 +136,12 @@ OBJECT_TYPES = {
 # NOTE: tickets deliberately excluded (outside registered scope).
 # Portal-defined contact properties fetched when the portal has them.
 CUSTOM_CONTACT_PROP = re.compile(r"^(paid_touch_campaign|utm_\w+)$", re.I)
+# Meeting properties naming the booking (meetings) link, by name or label,
+# fetched when GET /crm/v3/properties/meetings lists them.
+MEETING_LINK_NAME = re.compile(r"booking|meetings?_link|scheduling_page|scheduled_tasks", re.I)
+MEETING_LINK_LABEL = re.compile(r"booking|meetings? link|scheduling page", re.I)
+# Not wanted, whatever the pattern says: internal notes are free text.
+MEETING_PROPS_SKIPPED = {"hs_internal_meeting_notes"}
 
 # Deal properties added after the backfill. Rows fetched before then get them
 # once from backfill_deal_props().
@@ -476,7 +492,8 @@ SUBMISSIONS_ROUTE = "GET /form-integrations/v1/submissions/forms/{formGuid}"
 LISTS_ROUTE = "POST /crm/v3/lists/search"
 MEMBERSHIPS_ROUTE = "GET /crm/v3/lists/{listId}/memberships"
 IMPORTS_ROUTE = "GET /crm/v3/imports"
-CONTACT_SEARCH_ROUTE = "POST /crm/v3/objects/contacts/search"
+# object type -> backfill name: HUBSPOT_<NAME>_BACKFILL, sync_state and outcome hubspot_<name>_backfill.
+BACKFILLS = {"contacts": "contact", "meetings": "meeting"}
 CONTACT_LIST_TYPE = "0-1"
 LIST_MIN_INTERVAL_MIN = float(os.environ.get("LIST_MIN_INTERVAL_MIN") or 360)
 # Per-run page caps, so a first pull fits the 15-minute cadence; both resume next run.
@@ -560,18 +577,31 @@ def _json_state(source):
     return state if isinstance(state, dict) else {}
 
 
-def discover_contact_props(client, log):
-    """Custom paid_touch_campaign / utm_* contact properties, when the portal has them."""
+def discover_props(client, otype, wanted, what, log):
+    """Names of otype properties for which wanted(property) is true, or [] when they cannot be listed."""
     try:
-        payload = hs_call(client, "GET", client.api_base + "/crm/v3/properties/contacts",
-                          "GET /crm/v3/properties/contacts")
+        payload = hs_call(client, "GET", client.api_base + "/crm/v3/properties/" + otype,
+                          "GET /crm/v3/properties/" + otype)
     except Exception as e:
-        log.warning("contact properties not listed (%s); custom attribution properties skipped", e)
+        log.warning("%s properties not listed (%s); %s skipped", otype[:-1], e, what)
         return []
     names = sorted({str(p.get("name") or "") for p in payload.get("results") or []
-                    if isinstance(p, dict) and CUSTOM_CONTACT_PROP.match(str(p.get("name") or ""))})
-    log.info("contact properties: custom attribution properties %s", ", ".join(names) or "none")
+                    if isinstance(p, dict) and p.get("name") and wanted(p)})
+    log.info("%s properties: %s %s", otype[:-1], what, ", ".join(names) or "none")
     return names
+
+
+def discover_contact_props(client, log):
+    """Custom paid_touch_campaign / utm_* contact properties, when the portal has them."""
+    return discover_props(client, "contacts", lambda p: CUSTOM_CONTACT_PROP.match(str(p["name"])),
+                          "custom attribution properties", log)
+
+
+def discover_meeting_props(client, log):
+    """Meeting properties naming the booking link, when the portal has them."""
+    return discover_props(client, "meetings", lambda p: str(p["name"]) not in MEETING_PROPS_SKIPPED and (
+        MEETING_LINK_NAME.search(str(p["name"])) or MEETING_LINK_LABEL.search(str(p.get("label") or ""))),
+        "booking link properties", log)
 
 
 def sync_forms(client, log):
@@ -913,33 +943,30 @@ def sync_imports(client, log):
     return "%d imports" % len(rows)
 
 
-def backfill_contacts(client, props, log):
-    """Re-read every contact's properties once (HUBSPOT_CONTACT_BACKFILL=1).
+def backfill_objects(client, otype, props, log):
+    """Re-read every object's properties once (HUBSPOT_CONTACT_BACKFILL=1, HUBSPOT_MEETING_BACKFILL=1).
 
     Keyset paging: each search asks for hs_object_id > the last id stored, so
     the 10,000-result cap of one search does not apply. sync_state
-    'hubspot_contact_backfill' holds that id after every page, so a run that
+    'hubspot_<type>_backfill' holds that id after every page, so a run that
     stops resumes there. When done it says so and later runs skip it.
-    HUBSPOT_CONTACT_BACKFILL=restart starts over once: the value is recorded
-    as restartKey, so leaving it set resumes instead of restarting every run.
-    Another value starting with "restart" (restart:2, say) starts over again.
-    Properties are merged into the stored ones; associations and the contacts
-    watermark are untouched.
+    =restart starts over once: the value is recorded as restartKey, so
+    leaving it set resumes instead of restarting every run. Another value
+    starting with "restart" (restart:2, say) starts over again. Properties
+    are merged into the stored ones; associations and the watermark are
+    untouched.
     """
-    raw, _run, _note = get_sync_state("hubspot_contact_backfill")
-    try:
-        state = json.loads(raw) if raw else {}
-        if not isinstance(state, dict):
-            state = {}
-    except ValueError:
-        state = {}
-    mode = os.environ.get("HUBSPOT_CONTACT_BACKFILL", "").strip().lower()
+    kind = BACKFILLS[otype]
+    source, env = "hubspot_%s_backfill" % kind, "HUBSPOT_%s_BACKFILL" % kind.upper()
+    route = "POST /crm/v3/objects/%s/search" % otype
+    state = _json_state(source)
+    mode = os.environ.get(env, "").strip().lower()
     if mode.startswith("restart") and state.get("restartKey") != mode:
-        log.info("contact backfill: starting over (HUBSPOT_CONTACT_BACKFILL=%s)", mode)
+        log.info("%s backfill: starting over (%s=%s)", kind, env, mode)
         state = {"restartKey": mode}
     if state.get("done"):
-        return "already complete (%s contacts, %s); a new HUBSPOT_CONTACT_BACKFILL=restart value runs it again" % (
-            state.get("count"), state.get("finishedAt"))
+        return "already complete (%s %s, %s); a new %s=restart value runs it again" % (
+            state.get("count"), otype, state.get("finishedAt"), env)
     after_id = int(state.get("afterId") or 0)
     count = int(state.get("count") or 0)
     state.setdefault("startedAt", datetime.now(timezone.utc).isoformat())
@@ -948,8 +975,8 @@ def backfill_contacts(client, props, log):
     try:
         while True:
             pages += 1
-            payload = hs_call(client, "POST", client.api_base + "/crm/v3/objects/contacts/search",
-                              CONTACT_SEARCH_ROUTE, search=True, body={
+            payload = hs_call(client, "POST", client.api_base + "/crm/v3/objects/%s/search" % otype,
+                              route, search=True, body={
                                   "filterGroups": [{"filters": [{"propertyName": "hs_object_id", "operator": "GT",
                                                                  "value": str(after_id)}]}],
                                   "sorts": [{"propertyName": "hs_object_id", "direction": "ASCENDING"}],
@@ -963,8 +990,8 @@ def backfill_contacts(client, props, log):
                 except (TypeError, ValueError):
                     continue
                 last_id = max(last_id, hs_id)
-                row = con.execute("SELECT properties_json FROM hubspot_objects WHERE object_type='contacts' AND hs_id=?",
-                                  (str(hs_id),)).fetchone()
+                row = con.execute("SELECT properties_json FROM hubspot_objects WHERE object_type=? AND hs_id=?",
+                                  (otype, str(hs_id))).fetchone()
                 try:
                     merged = json.loads(row[0]) if row and row[0] else {}
                 except ValueError:
@@ -974,23 +1001,22 @@ def backfill_contacts(client, props, log):
                     "INSERT INTO hubspot_objects(object_type, hs_id, properties_json, fetched_at) VALUES(?,?,?,?) "
                     "ON CONFLICT(object_type, hs_id) DO UPDATE SET properties_json=excluded.properties_json, "
                     "fetched_at=excluded.fetched_at",
-                    ("contacts", str(hs_id), json.dumps(merged, ensure_ascii=False), fetched_at))
+                    (otype, str(hs_id), json.dumps(merged, ensure_ascii=False), fetched_at))
             con.commit()
             count += len(results)
-            more = bool(((payload.get("paging") or {}).get("next") or {}).get("after")) and last_id > after_id
+            more = bool(_next_after(payload)) and last_id > after_id
             after_id = last_id
             state.update(afterId=str(after_id), count=count)
             if not more:
                 state.update(done=True, finishedAt=fetched_at)
-            set_sync_state("hubspot_contact_backfill", json.dumps(state, sort_keys=True),
-                           "done" if not more else "in progress")
+            set_sync_state(source, json.dumps(state, sort_keys=True), "done" if not more else "in progress")
             if not more:
                 break
             if pages % 25 == 0:
-                log.info("contact backfill: %d contacts so far", count)
+                log.info("%s backfill: %d %s so far", kind, count, otype)
     finally:
         con.close()
-    return "%d contacts re-read with %d properties" % (count, len(props))
+    return "%d %s re-read with %d properties" % (count, otype, len(props))
 
 
 def main_sync(log):
@@ -1017,8 +1043,10 @@ def main_sync(log):
         con.commit()
     finally:
         con.close()
-    contact_props = OBJECT_TYPES["contacts"][1] + [
-        p for p in discover_contact_props(client, log) if p not in OBJECT_TYPES["contacts"][1]]
+    props_by_type = {otype: props for otype, (_modfield, props) in OBJECT_TYPES.items()}
+    for otype, discover in (("contacts", discover_contact_props), ("meetings", discover_meeting_props)):
+        props_by_type[otype] = props_by_type[otype] + [
+            p for p in discover(client, log) if p not in props_by_type[otype]]
 
     con = db_connect()
     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -1026,9 +1054,8 @@ def main_sync(log):
     total_assoc = 0
     changed_deals = []
     try:
-        for otype, (modfield, props) in OBJECT_TYPES.items():
-            if otype == "contacts":
-                props = contact_props
+        for otype, (modfield, _props) in OBJECT_TYPES.items():
+            props = props_by_type[otype]
             since_iso = watermarks.get(otype, "2020-01-01T00:00:00+00:00")
             since_ms = _to_ms(since_iso)
             changed_ids = []
@@ -1078,9 +1105,11 @@ def main_sync(log):
         ("hubspot_lists", lambda: sync_lists(client, log)),
         ("hubspot_imports", lambda: sync_imports(client, log)),
     ]
-    backfill = os.environ.get("HUBSPOT_CONTACT_BACKFILL", "").strip().lower()
-    if backfill in ("1", "true", "yes") or backfill.startswith("restart"):
-        parts.append(("hubspot_contact_backfill", lambda: backfill_contacts(client, contact_props, log)))
+    for otype, kind in BACKFILLS.items():
+        backfill = os.environ.get("HUBSPOT_%s_BACKFILL" % kind.upper(), "").strip().lower()
+        if backfill in ("1", "true", "yes") or backfill.startswith("restart"):
+            parts.append(("hubspot_%s_backfill" % kind,
+                          lambda otype=otype: backfill_objects(client, otype, props_by_type[otype], log)))
     failed = [name for name, fn in parts if not run_part(name, fn, log)]
     return note + ("; failed: " + ", ".join(failed) if failed else "")
 

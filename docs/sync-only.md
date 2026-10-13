@@ -104,6 +104,16 @@ Custom `paid_touch_campaign` and `utm_*` properties are added when
 fails, the sync goes on without them. The incremental search reads these
 properties for contacts that changed.
 
+Meetings carry `hs_meeting_source`, `hs_meeting_source_id`,
+`hs_meeting_external_url`, `hs_meeting_location`, and `hs_activity_type`.
+They also carry any meeting property that names the booking link, if
+`GET /crm/v3/properties/meetings` lists one. A property matches when its name
+contains `booking`, `meeting_link`/`meetings_link`, `scheduling_page`, or
+`scheduled_tasks`, or when its label contains "booking", "meeting link",
+"meetings link", or "scheduling page". `hs_internal_meeting_notes` is never
+fetched. When that call fails, meetings are read without the booking link
+properties.
+
 `HUBSPOT_CONTACT_BACKFILL=1` re-reads every contact's properties once and
 merges them into `hubspot_objects`. Each search asks for `hs_object_id` above
 the last stored id, 200 per call, so the 10,000-result search cap does not
@@ -113,11 +123,16 @@ done and later runs skip it. `HUBSPOT_CONTACT_BACKFILL=restart` starts over
 once: the value is recorded in that `sync_state` row, so leaving it set does
 not restart every run. Set a new value (`restart:2`, say) to start over again.
 It leaves associations and the contacts watermark alone. 10,000 contacts take
-about 50 searches.
+about 50 searches. `HUBSPOT_MEETING_BACKFILL=1` (or `restart`) does the same
+for meetings, so meetings stored before the source and booking link
+properties existed get them. Its state is in `sync_state`
+`hubspot_meeting_backfill`, and it records its own `sync_outcomes` row of the
+same name.
 
 After the objects, three extra pulls run every time. Each writes its own
 `sync_outcomes` row (`hubspot_forms`, `hubspot_lists`, `hubspot_imports`,
-plus `hubspot_contact_backfill` when set). A failure in one, such as a 403
+plus `hubspot_contact_backfill` and `hubspot_meeting_backfill` when set).
+A failure in one, such as a 403
 for a scope the app lacks, is recorded there with its route and status, and
 logged to stdout (CloudWatch) as one line:
 
@@ -219,13 +234,14 @@ scope (403 on imports and on forms), list answers without a `lists` array or
 with no lists, a list whose memberships fail, a non-numeric `submittedAt`,
 the per-run caps on submissions, memberships and activities (including one
 window larger than the budget) resuming, the leads interval, a one-time
-backfill restart, the `EXTRA_PULL_FAILED` lines, and that only GETs and the
+backfill restart, the meeting source and booking link properties (and a 403
+when listing meeting properties), the resumable meeting backfill, the `EXTRA_PULL_FAILED` lines, and that only GETs and the
 read-only POSTs were sent.
 
     python3 -m unittest discover -s refresh/tests -v
 
 They need Python 3 with boto3 and the `openssl` CLI, and take about 2.5
-minutes, mostly the scripts' own pacing. Nothing leaves the machine.
+to 4 minutes, mostly the scripts' own pacing. Nothing leaves the machine.
 
 ## GA4
 

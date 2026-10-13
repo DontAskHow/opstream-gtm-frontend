@@ -104,7 +104,7 @@ class SecretsManagerFake:
 # ---------------------------------------------------------------- HubSpot
 
 class HubSpotFake:
-    """Synthetic portal: contacts, forms (one archived), lists, imports."""
+    """Synthetic portal: contacts, meetings, forms (one archived), lists, imports."""
 
     FORMS_PAGE = 2   # forms list pages are small to exercise paging
     LISTS_PAGE = 2
@@ -127,6 +127,25 @@ class HubSpotFake:
         self.properties = ["email", "firstname", "lastmodifieddate", "hs_object_id", "hs_analytics_source",
                            "hs_analytics_source_data_1", "hs_latest_source", "utm_source", "utm_campaign",
                            "paid_touch_campaign", "favorite_color"]
+        # 250 meetings; 7001 and 7002 changed in the last hour.
+        self.meetings = {}
+        for i in range(7001, 7251):
+            recent = i in (7001, 7002)
+            self.meetings[i] = {
+                "hs_object_id": str(i), "hs_meeting_title": "Test meeting %d" % i,
+                "hs_lastmodifieddate": iso(now - (timedelta(hours=1) if recent else timedelta(days=30))),
+                "hs_meeting_start_time": iso(now - timedelta(days=5)),
+                "hs_meeting_source": "MEETINGS_PUBLIC", "hs_meeting_source_id": "src-%d" % i,
+                "hs_meeting_external_url": "https://example.com/meet/%d" % i, "hs_meeting_location": "Online",
+                "hs_activity_type": "Discovery", "test_booking_page_url": "https://example.com/book/test",
+                "hs_internal_meeting_notes": "Test internal note",
+            }
+        # name, label: one property matches by name, one by label only; the others must not be requested.
+        self.meeting_properties = [
+            ("hs_meeting_title", "Meeting name"), ("hs_meeting_source", "Meeting source"),
+            ("test_booking_page_url", "Test page URL"), ("test_link_used", "Meetings link used"),
+            ("hs_internal_meeting_notes", "Internal meeting notes"), ("favorite_room", "Favorite room")]
+        self.meeting_properties_status = 200
         self.forms = []
         self.submissions = {}
         for n, (archived, count) in enumerate([(False, 120), (False, 3), (False, 0), (True, 5)], start=1):
@@ -150,7 +169,8 @@ class HubSpotFake:
         self.forms_status = 200           # the forms list answers this status
         self.lists_shape = None           # "no-lists": no lists array; "empty": an empty catalog
         self.members_status = {}          # listId -> status its memberships answer
-        self.fail_backfill_after = None   # keyset search with this GT value answers 500
+        self.fail_backfill_after = None   # contacts keyset search with this GT value answers 500
+        self.fail_meeting_backfill_after = None
         self.once_429 = set()             # route keys that answer 429 once
 
     def _submission(self, fid, k, when):
@@ -197,6 +217,11 @@ class HubSpotFake:
             ]}]}
         if req.method == "GET" and p == "/crm/v3/properties/contacts":
             return 200, {"results": [{"name": n, "label": n, "type": "string"} for n in self.properties]}
+        if req.method == "GET" and p == "/crm/v3/properties/meetings":
+            if self.meeting_properties_status != 200:
+                return self.meeting_properties_status, {"status": "error", "category": "MISSING_SCOPES"}
+            return 200, {"results": [{"name": n, "label": label, "type": "string"}
+                                     for n, label in self.meeting_properties]}
         if req.method == "POST" and p.startswith("/crm/v3/objects/") and p.endswith("/search"):
             return self._search(p.split("/")[4], req.json())
         if req.method == "GET" and p.startswith("/crm/v4/objects/"):
@@ -254,28 +279,33 @@ class HubSpotFake:
         return 200, out
 
     def _search(self, otype, body):
-        if otype != "contacts":
+        if otype == "contacts":
+            objs, modfield, fail = self.contacts, "lastmodifieddate", self.fail_backfill_after
+            known = self.properties
+        elif otype == "meetings":
+            objs, modfield, fail = self.meetings, "hs_lastmodifieddate", self.fail_meeting_backfill_after
+            known = [n for n, _label in self.meeting_properties]
+        else:
             return 200, {"total": 0, "results": []}
         flt = body["filterGroups"][0]["filters"][0]
         limit = int(body.get("limit") or 10)
         wanted = body.get("properties") or []
         if flt["propertyName"] == "hs_object_id" and flt["operator"] == "GT":
-            if self.fail_backfill_after is not None and str(flt["value"]) == str(self.fail_backfill_after):
+            if fail is not None and str(flt["value"]) == str(fail):
                 return 500, {"status": "error", "message": "internal error"}
-            ids = sorted(i for i in self.contacts if i > int(flt["value"]))
+            ids = sorted(i for i in objs if i > int(flt["value"]))
             start = 0
-        elif flt["propertyName"] == "lastmodifieddate" and flt["operator"] == "GTE":
+        elif flt["propertyName"] == modfield and flt["operator"] == "GTE":
             since = int(flt["value"])
-            ids = sorted((i for i in self.contacts if ms(parse_iso(self.contacts[i]["lastmodifieddate"])) >= since),
-                         key=lambda i: self.contacts[i]["lastmodifieddate"])
+            ids = sorted((i for i in objs if ms(parse_iso(objs[i][modfield])) >= since),
+                         key=lambda i: objs[i][modfield])
             start = int(body.get("after") or 0)
         else:
             return 400, {"status": "error", "message": "fake does not support this filter"}
         page = ids[start:start + limit]
         out = {"total": len(ids), "results": [
-            {"id": str(i), "properties": {k: self.contacts[i].get(k) for k in wanted if k in self.properties
-                                          or k in self.contacts[i]},
-             "createdAt": iso(self.now - timedelta(days=90)), "updatedAt": self.contacts[i]["lastmodifieddate"],
+            {"id": str(i), "properties": {k: objs[i].get(k) for k in wanted if k in known or k in objs[i]},
+             "createdAt": iso(self.now - timedelta(days=90)), "updatedAt": objs[i][modfield],
              "archived": False} for i in page]}
         if start + limit < len(ids):
             out["paging"] = {"next": {"after": str(start + limit)}}
