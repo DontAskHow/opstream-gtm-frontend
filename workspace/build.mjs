@@ -111,6 +111,7 @@ export function build(opts) {
   const warn = opts.quiet ? () => {} : (...a) => console.warn(...a);
   const dir = opts.data;
   const inputs = { ...readInputs(dir, warn), expect: opts.expect };
+  if (!opts.recon) throw new Error('--recon <dir with live_deals.json> is required: pipeline figures come only from HubSpot');
   if (opts.recon) {
     const p = join(opts.recon, 'live_deals.json');
     if (!existsSync(p)) throw new Error(`--recon ${opts.recon} has no live_deals.json`);

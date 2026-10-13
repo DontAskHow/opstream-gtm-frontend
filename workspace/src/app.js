@@ -443,19 +443,12 @@
       ${tile('On Hold (separate)', int(fig.onHold.count), sumOrDash(fig.onHold, fig.onHold.openAmount))}
     </div>`;
 
-  // HubSpot (--recon) is the only headline. Without it the CRM snapshot is shown, marked unreconciled.
+  // HubSpot (--recon) is the only headline; builds without it are refused.
   function headlineBlock() {
     const h = D.headline;
     const q = D.quality || {};
     if (!fromHubspot || !h) {
-      const all = figures[0];
-      const openCount = all ? all.active.count + all.onHold.count : 0;
-      return `<div class="side"><h4>CRM snapshot open deals <span class="pill bad">unreconciled</span></h4><div class="tiles">
-          ${tile('Open deals', int(D.recordsOpenCount), 'all pipelines, incl. On Hold', 'hero')}
-          ${tile('Open amount', money(all ? all.active.openAmount + all.onHold.openAmount : null), '')}
-          ${tile('Of which On Hold', int(all && all.onHold.count), '')}
-        </div><p class="sub muted">${updatedTag(times.records)}</p></div>
-        <p class="note bad"><strong>Unreconciled.</strong> records.json has ${int(D.recordsOpenCount)} deals whose HubSpot stage isn’t closed (${int(openCount)} counted here). It doesn’t record each deal’s pipeline, so new business can’t be separated from renewal, customer-success and partnership deals. ${R ? 'The published snapshot has no HubSpot pipeline export yet, so HubSpot-only deals are missing too.' : 'Build with <code>--recon</code> for the HubSpot headline.'}</p>`;
+      return `<div class="side"><h4>HubSpot · Sales Pipeline</h4><p class="note warn">HubSpot figures are not in this build.</p></div>`;
     }
     const e = D.expect || {};
     const verified = e.checked && e.matches;
@@ -467,10 +460,8 @@
     if (liveMode === 'live' || liveMode === 'snapshot' || liveMode === 'last-good') {
       const live = liveMode !== 'last-good';
       const from = liveMode === 'live' ? 'Live from HubSpot' : `From HubSpot as synced into the published snapshot (HubSpot ${fmtUpdated(times.recon)})`;
-      const note = live
-        ? `<p class="note">${esc(from)}: HubSpot is the source of truth for every deal’s amount, stage and status. The page checks for new data every 15 minutes; these figures aren’t compared with a fixed reconciliation. Sheet comparisons use the Sheet as of ${esc(fmtUpdated(times.sheet))}. ${esc(bridgeText)} <a href="#/pipeline#quality">See data quality</a>.</p>`
-        : `<p class="note warn"><strong>The live HubSpot pull failed.</strong> These figures are from the last successful pull (${esc(fmtUpdated(times.recon))}). ${esc(bridgeText)}</p>`;
-      return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)} <span class="pill ${live ? 'green' : 'warn'}">${liveMode === 'live' ? 'live' : liveMode === 'snapshot' ? 'HubSpot sync' : 'last good pull'}</span></h4>${figTiles(h)}
+      const note = live ? '' : `<p class="note">HubSpot figures as of ${esc(fmtUpdated(times.recon))}.</p>`;
+      return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)} <span class="pill ${live ? 'green' : 'warn'}">${liveMode === 'live' ? 'live' : 'HubSpot sync'}</span></h4>${figTiles(h)}
         <p class="sub muted">${updatedTag(pipeUpdated())}</p></div>${note}`;
     }
     const caveat = verified
@@ -478,7 +469,7 @@
       : `<p class="note bad"><strong>${e.checked ? 'Doesn’t match the expected reconciliation' : 'Not verified'}.</strong> ${e.checked
         ? esc(e.rows.filter((r) => !r.ok).map((r) => `${r.key}: computed ${r.got}, expected ${r.want}`).join('; ')) + '.'
         : 'The build was run without expected figures (--expect), so these HubSpot numbers haven’t been checked against the reconciliation.'} ${esc(bridgeText)}</p>`;
-    return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)} <span class="pill ${verified ? 'green' : 'bad'}">${verified ? 'reconciled' : 'unreconciled'}</span></h4>${figTiles(h)}
+    return `<div class="side"><h4>HubSpot · ${esc(h.pipeline)} <span class="pill ${verified ? 'green' : 'warn'}">${verified ? 'verified' : 'HubSpot'}</span></h4>${figTiles(h)}
         <p class="sub muted">${updatedTag(pipeUpdated())}</p></div>${caveat}`;
   }
 
@@ -605,7 +596,7 @@
       ${tile('Weighted', list.length ? moneyFull(t.weighted) : DASH, `${plural(t.noProb, 'deal')} without probability`)}
       ${tile('Close date passed', int(past), 'still open, flagged')}
       ${tile('No close date', int(list.filter((d) => !d.close).length), '')}
-    </div>${fromHubspot ? '' : `<p class="note bad"><strong>Unreconciled.</strong> Without the HubSpot export these deals come from records.json across all pipelines.</p>`}`;
+    </div>`;
     const rank = stageRankFor(f.pipe);
     const dealCols = [
       { key: 'name', label: 'Deal', render: (d) => `${dealLink(d)}<span class="sub">${text(d.account || 'No account in snapshot')}</span>` },

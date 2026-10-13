@@ -140,13 +140,24 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
     live = await pullLive(deps, cfg, { since, now: started });
   }
 
-  const { text, hash, data, vols } = compose({ snapshot: snap.snapshot, meta: snap.meta, transcripts: snap.transcripts, live, prev });
+  // Last good HubSpot export, persisted in the preview bucket, used when the snapshot has none.
+  let lastGood = null;
+  if (!snap.snapshot.hubspotExport?.live) {
+    const t = await deps.getText(cfg.previewBucket, cfg.hubspotCacheKey).catch(() => null);
+    try { const c = t ? JSON.parse(t) : null; if (c?.live) lastGood = c; } catch { /* no usable cache */ }
+  }
+  const { text, hash, data, vols } = compose({ snapshot: snap.snapshot, meta: snap.meta, transcripts: snap.transcripts, live, prev, lastGood });
   const changed = hash !== prev.dataSha256;
   const nowIso = now().toISOString();
   if (changed) {
     await deps.put(cfg.previewBucket, cfg.dataKey, stamp(text, nowIso, vols), { contentType: 'application/javascript; charset=utf-8', cacheControl: 'no-store', metadata: { sha256: hash } });
   }
   let hubspotSha256 = prev.hubspotSha256;
+  if (!live?.hubspot.ok && snap.snapshot.hubspotExport?.live) {
+    const hsHash = sha256(JSON.stringify(snap.snapshot.hubspotExport.live));
+    if (hsHash !== prev.hubspotSha256) await deps.put(cfg.previewBucket, cfg.hubspotCacheKey, JSON.stringify({ fetchedAt: snap.snapshot.hubspotExport.fetchedAt ?? nowIso, live: snap.snapshot.hubspotExport.live }), { contentType: 'application/json', cacheControl: 'no-store' });
+    hubspotSha256 = hsHash;
+  }
   if (live?.hubspot.ok) {
     const hsHash = sha256(JSON.stringify(live.hubspot.live));
     if (hsHash !== prev.hubspotSha256) await deps.put(cfg.previewBucket, cfg.hubspotCacheKey, JSON.stringify({ fetchedAt: nowIso, live: live.hubspot.live }), { contentType: 'application/json', cacheControl: 'no-store' });

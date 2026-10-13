@@ -129,19 +129,14 @@ test('HubSpot export drives the pipeline; pipelines never mix; expected figures 
   } finally { rmSync(fx.root, { recursive: true, force: true }); }
 });
 
-test('a mismatch keeps the caveat; no --recon falls back to records.json, unreconciled', () => {
+test('a mismatch keeps the caveat; no --recon is refused', () => {
   const fx = fixtures();
   try {
     build({ ...fx, expect: { ...EXPECT, weighted: 17501 }, quiet: true });
     let data = loadData(fx.out);
     assert.equal(data.expect.matches, false);
     assert.deepEqual(data.expect.rows.filter((r) => !r.ok).map((r) => r.key), ['weighted']);
-    build({ ...fx, recon: null, expect: null, quiet: true });
-    data = loadData(fx.out);
-    assert.equal(data.pipelineSource, 'records');
-    assert.equal(data.headline, null);
-    assert.equal(data.quality.missingFromSheet, null);
-    assert.equal(data.deals[0].probability, 0.05); // records.json percent -> fraction
+    assert.throws(() => build({ ...fx, recon: null, expect: null, quiet: true }), /--recon .* is required/);
   } finally { rmSync(fx.root, { recursive: true, force: true }); }
 });
 

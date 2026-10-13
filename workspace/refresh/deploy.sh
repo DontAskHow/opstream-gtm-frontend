@@ -63,7 +63,7 @@ cat > "$TMP/policy-lambda.json" <<EOF
   "Condition":{"StringLike":{"s3:prefix":["published/*"]}}},
  {"Sid":"SnapshotRead","Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::$DATA_BUCKET/published/*"},
  {"Sid":"PreviewDataJsAndRefreshJson","Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],
-  "Resource":["arn:aws:s3:::$PREVIEW_BUCKET/data.js","arn:aws:s3:::$PREVIEW_BUCKET/refresh.json"]},
+  "Resource":["arn:aws:s3:::$PREVIEW_BUCKET/data.js","arn:aws:s3:::$PREVIEW_BUCKET/refresh.json","arn:aws:s3:::$PREVIEW_BUCKET/_state/hubspot-live.json"]},
  {"Sid":"PreviewListSoMissingIs404","Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::$PREVIEW_BUCKET"},
  {"Sid":"Alarm","Effect":"Allow","Action":"sns:Publish","Resource":"$TOPIC"}
 ]}

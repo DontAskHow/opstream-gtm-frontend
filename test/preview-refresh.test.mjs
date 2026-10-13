@@ -150,7 +150,7 @@ test('first run uploads data.js; an identical second run writes only refresh.jso
   const a = await w.run();
   assert.equal(a.changed, true);
   assert.equal(a.livePull, false);
-  assert.deepEqual(w.keys().sort(), ['data.js', 'refresh.json']);
+  assert.deepEqual(w.keys().sort(), ['_state/hubspot-live.json', 'data.js', 'refresh.json']);
   const put = w.puts.find((p) => p.key === 'data.js');
   assert.equal(put.opts.metadata.sha256, a.sha256);
   assert.equal(put.opts.cacheControl, 'no-store');
@@ -212,7 +212,7 @@ test('a new snapshot with different HubSpot data uploads; a new snapshot with th
   w.publish('run-test-3', { ...w.files, 'hubspot-deals.json': hubspotExport(deals) }, '2026-01-16T20:45:00Z');
   const c = await w.run();
   assert.equal(c.changed, true);
-  assert.deepEqual(w.keys().sort(), ['data.js', 'refresh.json']);
+  assert.deepEqual(w.keys().sort(), ['_state/hubspot-live.json', 'data.js', 'refresh.json']);
   assert.equal(w.data().deals.find((x) => x.id === 'deal-101').amount, 2000);
 });
 
@@ -250,20 +250,17 @@ test('the snapshot’s HubSpot export decides amount, status and the deal list; 
   assert.ok(d.sources.every((s) => s.fromSnapshot && !s.live));
 });
 
-test('a snapshot without a HubSpot export falls back to records.json, unreconciled, and alarms once', async (t) => {
+test('a snapshot without a HubSpot export uses the last good copy; with none it refuses to build', async (t) => {
   const w = world({ withExport: false });
   t.after(() => rmSync(w.tmp, { recursive: true, force: true }));
-  const r = await w.run();
-  assert.deepEqual(r.failing, ['snapshot-has-no-hubspot-export']);
-  assert.equal(w.data().refresh.hubspot, 'records');
-  assert.equal(w.data().pipelineSource, 'records');
-  assert.equal(w.notes.length, 1);
-  await w.run();
-  assert.equal(w.notes.length, 1, 'no repeat alarm for the same problem');
+  await assert.rejects(w.run(), /no HubSpot deal export/);
   w.publish('run-test-2', { ...w.files, 'hubspot-deals.json': hubspotExport() }, '2026-01-16T20:30:00Z');
-  const ok = await w.run();
-  assert.deepEqual(ok.failing, []);
-  assert.match(w.notes[1].subject, /cleared/);
+  await w.run();
+  assert.equal(w.data().pipelineSource, 'hubspot');
+  w.publish('run-test-3', { ...w.files }, '2026-01-16T20:45:00Z');
+  await w.run();
+  assert.equal(w.data().refresh.hubspot, 'last-good');
+  assert.equal(w.data().pipelineSource, 'hubspot');
 });
 
 test('a stale LATEST.json alarms', async (t) => {

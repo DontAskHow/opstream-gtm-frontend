@@ -58,7 +58,7 @@ export function mergeRecordings(records, recordings) {
 // snapshot: readInputs() of the published run, plus hubspotExport ({live, fetchedAt}) when the run has one.
 // live (LIVE_PULL=1 only): { hubspot|lemlist|fathom: {ok, live?|outbound?|recordings?, detail?, error?, fallback?} }.
 // Without live, every source is as published by the sync job.
-export function compose({ snapshot, meta, transcripts = [], live = null, prev = {} }) {
+export function compose({ snapshot, meta, transcripts = [], live = null, prev = {}, lastGood = null }) {
   const hs = live?.hubspot || {};
   const lm = live?.lemlist || {};
   const fa = live?.fathom || {};
@@ -68,6 +68,9 @@ export function compose({ snapshot, meta, transcripts = [], live = null, prev = 
   if (live && hs.ok) { recon = { live: hs.live, fetchedAt: NOW_TOKEN }; hubspotMode = 'live'; }
   else if (snapshot.hubspotExport?.live) { recon = snapshot.hubspotExport; hubspotMode = 'snapshot'; }
   else if (live && hs.fallback?.live) { recon = { live: hs.fallback.live, fetchedAt: hs.fallback.fetchedAt ?? null }; hubspotMode = 'last-good'; }
+  else if (lastGood?.live) { recon = { live: lastGood.live, fetchedAt: lastGood.fetchedAt ?? null }; hubspotMode = 'last-good'; }
+  // HubSpot is mandatory: never build pipeline figures from records.json.
+  if (!recon) throw new Error('no HubSpot deal export (snapshot live_deals.json or last-good copy); keeping the previous data.js');
 
   const { records, added } = live && fa.ok ? mergeRecordings(snapshot.records, fa.recordings) : { records: snapshot.records, added: 0 };
   const mk = snapshot.marketing || {};
