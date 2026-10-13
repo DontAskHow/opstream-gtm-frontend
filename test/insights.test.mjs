@@ -196,6 +196,7 @@ const pageData = () => ({
     { id: 'd9', name: 'Gone elsewhere', pipeline: 'Renewal Pipeline', stage: 'Lost', open: false, lost: true, lostReason: 'Example Rival' },
   ],
   leadTracker: { total: 8, mql: 2, unowned: 3 },
+  mqlFunnel: { available: true, numerator: 2, denominator: 8 },
   outbound: { campaigns: [
     { status: 'running', sent: 200, replied: 3 },
     { status: 'running', sent: 100, replied: 0 },
@@ -216,8 +217,8 @@ test('metric values come from the page data; goal progress follows the direction
     // Proposal sent only: the On Hold deal sits in a ≥ 0.7 stage but stays out, as on the tiles.
     commit_stage_amount: 20000,
     lead_to_mql_rate: 25, unowned_lead_count: 3,
-    // Running campaigns with both figures: 3 replies / 300 sends.
-    outbound_reply_rate: 1,
+    // Every campaign with both figures, any status: 53 replies / 1,300 sends.
+    outbound_reply_rate: 4.1,
     ai_share_of_voice: 12.5,
     // Needs the goal's competitor (goalValue).
     closed_lost_to_competitor_count: null,
@@ -256,9 +257,13 @@ test('new goal metrics: commit stages from metadata, leads, outbound, AI share o
   noAmt.deals.find((x) => x.id === 'd2').amount = null;
   assert.equal(metricValues(noAmt, NOW).commit_stage_amount, null);
   // Rates are percents rounded to 0.1; no rows or no sends: unknown.
-  assert.equal(metricValues({ ...d, leadTracker: { total: 3, mql: 1, unowned: 0 } }, NOW).lead_to_mql_rate, 33.3);
-  assert.equal(metricValues({ ...d, leadTracker: { total: 0, mql: 0, unowned: 0 } }, NOW).lead_to_mql_rate, null);
-  assert.equal(metricValues({ ...d, outbound: { campaigns: [{ status: 'paused', sent: 10, replied: 1 }] } }, NOW).outbound_reply_rate, null);
+  // lead_to_mql_rate is the per-contact funnel (r12): Lead Tracker counts no longer give it; unavailable inputs: unknown.
+  assert.equal(metricValues({ ...d, mqlFunnel: { available: true, numerator: 1, denominator: 3 } }, NOW).lead_to_mql_rate, 33.3);
+  assert.equal(metricValues({ ...d, mqlFunnel: { available: false, reason: 'not synced' } }, NOW).lead_to_mql_rate, null);
+  assert.equal(metricValues({ ...d, mqlFunnel: undefined, leadTracker: { total: 3, mql: 1, unowned: 0 } }, NOW).lead_to_mql_rate, null);
+  // Any status counts (r12); no sends at all: unknown.
+  assert.equal(metricValues({ ...d, outbound: { campaigns: [{ status: 'paused', sent: 10, replied: 1 }] } }, NOW).outbound_reply_rate, 10);
+  assert.equal(metricValues({ ...d, outbound: { campaigns: [{ status: 'draft', sent: 0, replied: 0 }] } }, NOW).outbound_reply_rate, null);
   // AI share of voice only while connected.
   assert.equal(metricValues({ ...d, ai: { connected: false, shareOfVoice: 12.5 } }, NOW).ai_share_of_voice, null);
   // Competitor losses: headline pipeline only, whole word or phrase, any case and spacing.

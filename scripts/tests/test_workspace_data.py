@@ -82,5 +82,39 @@ class Parsing(unittest.TestCase):
         self.assertEqual(wd.load_lead_insights(None), {})
 
 
+class LeadRules(unittest.TestCase):
+    platforms = wd.ad_platforms({'ads': {'platforms': ['Google Ads', 'LinkedIn Ads', 'Reddit Ads', 'OpenAI (ChatGPT) Ads']}})
+
+    def test_campaign_tags_from_config(self):
+        self.assertEqual(wd.campaign_tags('sales_outbound (separate sub-source recommended)', 'Example -> New Company (Bad ICP)'),
+                         (['job_changer', 'sales'], ['Bad ICP']))
+        self.assertEqual(wd.campaign_tags('sales_outbound (intent-triggered)', 'Visitors')[0], ['website_intent', 'sales'])
+        self.assertEqual(wd.campaign_tags('exclude', 'Draft')[0], ['excluded'])
+        self.assertEqual(wd.campaign_tags(None, 'Unknown')[0], ['unmapped'])
+
+    def test_pipeline_check_names_platform(self):
+        ls = wd.LeadSources({'ads': {'platforms': ['LinkedIn Ads', 'OpenAI (ChatGPT) Ads'],
+                                     'checks_x': {'acme': 'Paid LinkedIn, confirmed: lead gen form.', 'reddit': '0 traceable leads'}}})
+        self.assertEqual(ls.check_for('Acme Corp')['platform'], 'LinkedIn Ads')
+        self.assertIsNone(ls.check_for('Acmeworks'))
+        self.assertIsNone(ls.check_for('Reddit Fans'), 'a check that does not say Paid <platform> names no lead')
+        self.assertEqual(ls.platform_check('reddit'), '0 traceable leads')
+
+    def test_contact_paid_needs_a_paid_signal(self):
+        c = lambda **p: {'props': p}
+        self.assertIsNone(wd.contact_paid(c(utm_source='chatgpt.com', utm_medium='referral'), self.platforms), 'organic AI referral is not paid')
+        r = wd.contact_paid(c(utm_source='chatgpt', utm_medium='cpc'), self.platforms)
+        self.assertEqual((r['rule'], r['platform']), ('HubSpot UTM / click id', 'OpenAI (ChatGPT) Ads'))
+        self.assertEqual(wd.contact_paid(c(hs_google_click_id='x'), self.platforms)['platform'], 'Google Ads')
+        self.assertTrue(wd.contact_paid(c(utm_source='google', utm_medium='cpc', utm_term='brand term'), self.platforms)['branded'])
+        self.assertEqual(wd.contact_paid(c(hs_analytics_source='PAID_SOCIAL'), self.platforms)['rule'], 'HubSpot original source')
+
+    def test_call_classification_missing_falls_back(self):
+        out, why = wd.load_call_classification('/nonexistent/records.jsonl', lambda *a: None)
+        self.assertIsNone(out)
+        self.assertIn('not found', why)
+        self.assertEqual(wd.load_call_classification(None, lambda *a: None), (None, 'no CALL_CLASSIFICATION path given'))
+
+
 if __name__ == '__main__':
     unittest.main()

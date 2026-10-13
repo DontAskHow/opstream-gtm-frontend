@@ -81,6 +81,7 @@ function brainFixture({ synced = false } = {}) {
   deal('7009', 'Northstar old bid', 'default', 'closedlost', 20000, 0, C.north, { hs_is_closed: 'true', hs_is_closed_won: 'false', closed_lost_reason: 'went with another vendor' });
   deal('7010', 'Cedar trial', 'default', '1270127483', 10000, 0, C.cedar, { hs_is_closed: 'true', hs_is_closed_won: 'false', closed_lost_reason: 'irrelevant' });
   deal('7011', 'Northstar enterprise', 'default', 'contractsent', 300000, 0.9, C.north, { hubspot_owner_id: '103' });
+  deal('7012', 'Juniper add-on', 'default', 'closedlost', 15000, 0, C.juniper, { hs_is_closed: 'true', hs_is_closed_won: 'false', createdate: '2026-05-01T15:00:00Z', closed_lost_reason: 'na' });
   deal('7101', 'Bluebird renewal', '686463412', '1005329279', 60000, 0.5, C.bluebird);
   deal('7102', 'Maple partnership', '686100770', '1005341488', null, 0.5, C.maple);
   deal('7103', 'Juniper success plan', '855205465', '1275460022', 20000, 0.2, C.juniper);
@@ -98,17 +99,19 @@ function brainFixture({ synced = false } = {}) {
     const props = { email, firstname: first, lastname: last, jobtitle: 'Procurement Lead', lifecyclestage: 'opportunity', hubspot_owner_id: '101', createdate: '2026-06-01T15:00:00Z' };
     if (synced) Object.assign(props, { hs_analytics_source: 'DIRECT_TRAFFIC', hs_object_source: 'FORM' });
     if (synced && k === 'fay') Object.assign(props, { paid_touch_campaign: 'OpenAI ChatGPT Q3', hs_analytics_source: 'PAID_SEARCH' });
+    if (synced && k === 'ana') Object.assign(props, { utm_source: 'google', utm_medium: 'cpc', utm_term: 'example brand' });
     obj('contacts', id, props);
     if (co) link('contacts', id, 'companies', C[co]);
   }
 
   const mtg = (id, start, owner, title, contactKeys = [], extra = {}) => {
-    obj('meetings', id, { hs_meeting_title: title, hs_meeting_start_time: start, hs_timestamp: start, hs_meeting_outcome: 'SCHEDULED', hubspot_owner_id: owner });
+    const booking = synced && extra.booking ? { hs_meeting_source: 'MEETINGS_PUBLIC', hs_meeting_booking_link: extra.booking, hs_createdate: '2026-10-01T15:00:00Z' } : {};
+    obj('meetings', id, { hs_meeting_title: title, hs_meeting_start_time: start, hs_timestamp: start, hs_meeting_outcome: 'SCHEDULED', hubspot_owner_id: owner, ...booking });
     for (const k of contactKeys) link('meetings', id, 'contacts', K[k]);
     if (extra.deal) link('meetings', id, 'deals', extra.deal);
   };
   mtg('8001', '2026-10-05T17:00:00Z', '101', `Northstar intro with ${hiddenFirst}`, ['ana']);
-  mtg('8002', '2026-10-20T17:00:00Z', '102', 'Cedar demo', ['ben']);
+  mtg('8002', '2026-10-20T17:00:00Z', '102', 'Cedar demo', ['ben'], { booking: 'https://meetings.example.com/team/book-a-demo' });
   mtg('8003', '2026-10-21T17:00:00Z', '103', 'Northstar security review', ['ana']);
   mtg('8004', '2026-10-06T17:00:00Z', '76564046', 'Northstar CS check-in', ['ana']);
   mtg('8005', '2026-10-07T17:00:00Z', '101', 'Juniper QBR', ['cara']);
@@ -116,7 +119,8 @@ function brainFixture({ synced = false } = {}) {
   mtg('8007', '2026-10-09T17:00:00Z', '101', 'Orchid check-in', ['gus']);
   mtg('8008', '2026-10-02T17:00:00Z', '101', 'Pine evaluation', ['fay']);
   mtg('8009', '2026-10-08T18:00:00Z', '101', 'Pine kickoff', ['fay']);
-  mtg('8010', '2026-10-10T17:00:00Z', '102', 'Maple intro', ['eli']);
+  mtg('8010', '2026-10-10T17:00:00Z', '102', 'Maple intro', ['eli'], { booking: 'https://meetings.example.com/team/intro' });
+  if (synced) link('deals', '7001', 'contacts', K.ana);
   mtg('8011', '2026-10-11T17:00:00Z', '102', 'Weekly sync');
   mtg('8012', '2026-10-12T17:00:00Z', '102', 'Bluebird Systems onboarding session');
   mtg('8013', '2026-10-03T17:00:00Z', '101', 'Internal planning', ['ivy']);
@@ -206,6 +210,7 @@ function brainFixture({ synced = false } = {}) {
   camp('cam_out1', 'Synthetic Outbound A', 'running', 100, 10, 2);
   camp('cam_event', 'Synthetic Event Outreach', 'paused', 50, 20, 15);
   camp('cam_cust', 'Customer company -> New Company', 'running', 10, 1, 0);
+  camp('cam_bad', 'Customer company -> New Company (Bad ICP)', 'running', 31, 7, 0);
   camp('cam_draft', 'Hiring draft', 'draft', 0, 0, 0);
 
   table('sync_outcomes', ['source', 'at', 'ok', 'route', 'http', 'detail', 'last_ok_at']);
@@ -237,7 +242,8 @@ function brainFixture({ synced = false } = {}) {
 
   const leadSources = {
     generated_at: '2026-10-13T09:00:00-07:00', owner: 'synthetic', needs_reviewer: ['1. Which forms count?'],
-    ads: { platforms: ['Google Ads', 'LinkedIn Ads', 'Reddit Ads', 'OpenAI (ChatGPT) Ads'] },
+    ads: { platforms: ['Google Ads', 'LinkedIn Ads', 'Reddit Ads', 'OpenAI (ChatGPT) Ads'],
+      checks_2026_10_13: { quartz: 'Paid Google, confirmed: synthetic contact with gclid and utm_medium=cpc.', reddit: '0 traceable HubSpot leads, confirmed (synthetic).' } },
     forms: [{ id: 'f-demo', name: 'Demo Request', bucket: 'demo_request', detail: 'demo', counts_as_lead_source: true, uncertain: false },
       { id: 'f-pricing', name: 'Pricing form', bucket: 'contact', detail: 'pricing', counts_as_lead_source: true, uncertain: true },
       { id: 'f-jobs', name: 'Job application', bucket: 'not_a_lead_source', detail: 'jobs', counts_as_lead_source: false, uncertain: false }],
@@ -251,6 +257,7 @@ function brainFixture({ synced = false } = {}) {
       { id: 'cam_out1', name: 'Synthetic Outbound A', bucket: 'sales_outbound' },
       { id: 'cam_event', name: 'Synthetic Event Outreach', bucket: 'sales_outbound (event/webinar pre/post-show)' },
       { id: 'cam_cust', name: 'Customer company -> New Company', bucket: 'sales_outbound (separate sub-source recommended)' },
+      { id: 'cam_bad', name: 'Customer company -> New Company (Bad ICP)', bucket: 'sales_outbound (separate sub-source recommended)' },
       { id: 'cam_draft', name: 'Hiring draft', bucket: 'exclude' }] },
     sheet: { tab: `Lead Tracker (${TRACKER})` },
     customer_success: { owners: { 'CS owner one': ['76564046'], 'CS owner two': ['82316863'] } },
@@ -275,19 +282,36 @@ function brainFixture({ synced = false } = {}) {
       { lifecycle: 'opportunity', dealIds: ['deal-r1'], meetings: [{}, {}], recordings: [] },
       { lifecycle: 'opportunity', dealIds: ['deal-o1'], meetings: [{}], recordings: [{}, {}] }] };
 
+  const crec = (id, audience, extra = {}) => ({ call_id: id, audience, audience_reason: audience === 'prospect' ? 'default_prospect' : audience + '_rule', ...extra });
+  const callClassification = [
+    crec(1001, 'prospect', { hubspot_company_id: C.north, deal: { id: '7001', name: 'Northstar pilot', stage: 'SQL' }, call_type: 'discovery', buyer_roles: ['procurement'],
+      objections: [{ category: 'price_budget', quote: 'Synthetic budget worry.' }], competitors: { Zip: 2 }, next_steps: ['Send the pilot plan.'] }),
+    crec(1002, 'customer'), crec(1003, 'customer'), crec(1004, 'prospect', { deal: null }), crec(1005, 'customer'), crec(1006, 'internal'),
+    crec(1007, 'prospect', { deal: null }), crec(1008, 'partner_other')].map((r) => JSON.stringify(r)).join('\n') + '\n';
+  const reviewList = 'row,company,sheet_source,hubspot_sources,evidence,sheet_note,action\n' +
+    '9,Orchid Retail,Inbound,Paid,gus@orchid.example: OpenAI via utm,OpenAI ads lead,review (HubSpot is primary; Sheet unchanged)\n' +
+    '5,Cedar Harbor,Events,Outbound,ben@cedar.example: Lemlist reply,Met at the booth,review (HubSpot is primary; Sheet unchanged)\n';
+  const paidExport = { generated_at: '2026-10-13T16:30:00+00:00', stages: {}, deals: [
+    { id: '7002', properties: { dealname: 'Cedar expansion', pipeline: 'default' }, derived: { pipelineId: 'default', stageLabel: 'Demo meeting', paid_platform: 'Google', paid_evidence: { via: 'utm', level: 'deal' }, google_branded: true } },
+    { id: '7011', properties: { dealname: 'Northstar enterprise', pipeline: 'default' }, derived: { pipelineId: 'default', stageLabel: 'Legal & Compliance', paid_platform: 'LinkedIn', paid_evidence: { via: 'form (company contact)', level: 'company' }, google_branded: false } },
+    { id: '7101', properties: { dealname: 'Bluebird renewal', pipeline: '686463412' }, derived: { pipelineId: '686463412', paid_platform: 'Google', paid_evidence: { via: 'utm', level: 'deal' }, google_branded: false } },
+    { id: '7001', properties: { dealname: 'Northstar pilot', pipeline: 'default' }, derived: { pipelineId: 'default', paid_platform: null } }] };
+
   const expect = {
     asOf: AS_OF, hidden: pat,
     headline: { count: 4, amount: 750000, weighted: 340000, onHoldCount: 2, onHoldAmount: 80000 },
     change: { fromCount: 3, fromAmount: 600000, toCount: 4, toAmount: 750000, newIds: ['7003'], stageIds: ['7002'] },
-    closed: { lost: 2, lostAmount: 50000, dq: 1, dqAmount: 10000, won: 2 },
+    closed: { lost: 3, lostAmount: 65000, dq: 1, dqAmount: 10000, won: 2, reasons: 3, postWin: ['7012'] },
     leads: { total: 9, mql: 4, sql: 2, openaiConfirmed: 2, openaiAtMost: 3 },
     meetings: { thisMonth: { matched: 4, unmatched: 1, noContact: 1 }, upcoming: { matched: 3, unmatched: 0, noContact: 0 },
       scope: { total: 16, cs: 1, customer: 6, internal: 1, inScope: 8 } },
-    calls: { total: 8, internal: 1, cs: 1, customer: 2, prospect: 4, listed: 3 },
-    outbound: { delivered: 150, replies: synced ? 2 + 0 : 13 },
+    callsFallback: { total: 8, internal: 1, cs: 1, customer: 2, prospect: 4, listed: 3 },
+    outbound: { sends: 191, replies: 38, count: 5 },
+    calls: { strategy: { total: 8, prospect: 3, customer: 3, internal: 1, partner_other: 1, listed: 3 } },
+    paid: { total: 3, sales: 2 },
     currentPage: { companies: 3, meetings: 6, recordings: 3, recordingsTotal: 5 },
   };
-  return { tables: T, inputs: { leadSources, lostReasons, insights, leadInsights, prior, currentPage }, expect };
+  return { tables: T, inputs: { leadSources, lostReasons, insights, leadInsights, prior, currentPage, paidExport }, text: { 'records.jsonl': callClassification, 'review.csv': reviewList }, expect };
 }
 
 module.exports = { writeDemo, brainFixture };
@@ -300,6 +324,7 @@ if (require.main === module) {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(dir + '/fixture.json', JSON.stringify(fx));
     for (const [k, v] of Object.entries(fx.inputs)) fs.writeFileSync(`${dir}/${k}.json`, JSON.stringify(v, null, 1));
+    for (const [k, v] of Object.entries(fx.text)) fs.writeFileSync(`${dir}/${k}`, v);
     console.log('synthetic brain fixture written to ' + dir);
   }
 }

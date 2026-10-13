@@ -187,7 +187,7 @@ def cell(row, i):
 class Assoc:
     """Both directions of the HubSpot association pairs the page needs."""
 
-    PAIRS = [('deals', 'companies'), ('meetings', 'contacts'), ('meetings', 'companies'), ('meetings', 'deals'),
+    PAIRS = [('deals', 'companies'), ('deals', 'contacts'), ('meetings', 'contacts'), ('meetings', 'companies'), ('meetings', 'deals'),
              ('contacts', 'companies')]
 
     def __init__(self, brain):
@@ -741,8 +741,25 @@ def tracker_rows(brain, lead_sources):
     return out, title, tab
 
 
+RULES = json.load(open(os.path.join(ROOT, 'config', 'lead-rules.json'), encoding='utf-8'))
+
+
+def campaign_tags(bucket, name):
+    """Tags for a Lemlist campaign from config/lead-rules.json (bucket text and name rules)."""
+    b, tags, flags = str(bucket or ''), [], []
+    for t in RULES['lemlist']['tags']:
+        if ('bucketContains' in t and t['bucketContains'] in b) or ('bucketStartsWith' in t and b.startswith(t['bucketStartsWith'])):
+            tags.append(t['tag'])
+    for f in RULES['lemlist']['flags']:
+        if f['nameContains'].lower() in str(name or '').lower():
+            flags.append(f['flag'])
+    if not tags:
+        tags = ['unmapped']
+    return tags, flags
+
+
 class LeadSources:
-    """lead-sources.json, indexed. Everything from it is provisional (see provisional_label)."""
+    """lead-sources.json, indexed, with config/lead-rules.json on top. Labelled provisional (see provisional_label)."""
 
     def __init__(self, doc):
         self.doc = doc or {}
@@ -758,12 +775,15 @@ class LeadSources:
         self.lists_by_name = {norm(l.get('name')): l for l in self.lists.values()}
         self.campaigns = {}
         for c in ((self.doc.get('lemlist') or {}).get('campaigns') or []):
-            b = str(c.get('bucket') or '')
-            kind = ('excluded' if b.startswith('exclude') or b.startswith('nurture') else
-                    'customer' if 'separate sub-source' in b else 'outbound' if b.startswith('sales_outbound') else 'other')
-            self.campaigns[str(c.get('id'))] = {**c, 'kind': kind}
+            tags, flags = campaign_tags(c.get('bucket'), c.get('name'))
+            self.campaigns[str(c.get('id'))] = {**c, 'tags': tags, 'flags': flags}
         self.campaigns_by_name = {norm(c.get('name')): c for c in self.campaigns.values()}
-        self.uncertain_forms = sorted(f.get('name') for f in self.forms.values() if f.get('uncertain') and f.get('counts_as_lead_source'))
+        ads = self.doc.get('ads') or {}
+        pre = RULES['ads']['checksKeyPrefix']
+        self.checks = {}
+        for k, v in ads.items():
+            if k.startswith(pre) and isinstance(v, dict):
+                self.checks.update({str(n).lower(): str(t) for n, t in v.items() if isinstance(t, str)})
 
     @property
     def counted_event_lists(self):
@@ -772,9 +792,25 @@ class LeadSources:
     def campaign(self, cid, name=None):
         return self.campaigns.get(str(cid)) or self.campaigns_by_name.get(norm(name))
 
+    def form_is_lead(self, form):
+        return not form or form.get('bucket') not in RULES['forms']['notLeadBuckets']
+
     def form_source(self, form):
         m = re.search(r'Sheet source:\s*([A-Za-z]+)', str(form.get('detail') or ''))
         return m.group(1) if m else SCOPE['formBucketSource'].get(form.get('bucket'))
+
+    def check_for(self, company):
+        """A Pipeline paid check (lead-sources.json ads.checks_*) whose key starts the company name and says 'Paid <platform>'."""
+        n = norm(company)
+        for key, text in self.checks.items():
+            m = re.match(r'\s*paid\s+(\w+)', text, re.I)
+            if m and (n == key or n.startswith(key + ' ')):
+                names = platform_in_text(m.group(1), self.platforms)
+                return {'platform': names[0]['name'] if names else None, 'text': text}
+        return None
+
+    def platform_check(self, key):
+        return self.checks.get(key)
 
 
 def match_tracker_company(lead, comps, by_domain, by_name):
@@ -872,11 +908,11 @@ def paid_from_values(vals, platforms):
     if not names and gclid:
         names = [p for p in platforms if p['key'] == 'google']
     detail = ', '.join('%s=%s' % kv for kv in sorted(utm.items())) or 'gclid present'
-    return (names[0]['name'] if len(names) == 1 else None), detail
+    return (names[0]['name'] if len(names) == 1 else None), detail, bool(re.search(r'brand', text, re.I))
 
 
 def attribute(lead, lead_contacts, ctx):
-    """HubSpot/Lemlist evidence for one lead, in rule order. Returns evidence rows (first = the rule that fired)."""
+    """System evidence (Lemlist, HubSpot) for one lead. Each row: rule, source, detail, and whether it decides the source."""
     ls, platforms = ctx['ls'], ctx['ls'].platforms
     ev = []
     for c in lead_contacts:
@@ -884,48 +920,40 @@ def attribute(lead, lead_contacts, ctx):
         if ctx['lemlist'] is not None and email in ctx['lemlist']:
             for r in ctx['lemlist'][email]:
                 camp = ls.campaign(r.get('campaign_id'))
-                if camp and camp['kind'] == 'excluded':
+                tags = (camp or {}).get('tags') or ['unmapped']
+                if not set(tags) & set(RULES['lemlist']['outboundTags']):
                     continue
                 name = (camp or {}).get('name') or ctx['campaign_names'].get(str(r.get('campaign_id'))) or r.get('campaign_id')
+                job = 'job_changer' in tags
                 ev.append({'rule': 'Lemlist lead email', 'source': 'Outbound', 'detail': name, 'contactId': c['id'],
-                           'subSource': 'Customer job changer' if camp and camp['kind'] == 'customer' else name,
-                           'tag': 'customer→new company' if camp and camp['kind'] == 'customer' else None,
+                           'subSource': 'Job changer' if job else name, 'tag': 'job_changer' if job else None,
                            'replied': bool(r.get('replied_at')) and not is_auto_reply(r.get('raw_json')),
                            'at': r.get('replied_at') or r.get('contacted_at')})
         if ctx['submissions'] is not None and email in ctx['submissions']:
-            for s in ctx['submissions'][email]:
-                form = ls.forms.get(s['formId']) or ls.forms_by_name.get(norm(ctx['form_names'].get(s['formId'])))
-                fname = (form or {}).get('name') or ctx['form_names'].get(s['formId']) or s['formId']
-                if form and not form.get('counts_as_lead_source'):
+            for sub in ctx['submissions'][email]:
+                form = ls.forms.get(sub['formId']) or ls.forms_by_name.get(norm(ctx['form_names'].get(sub['formId'])))
+                fname = (form or {}).get('name') or ctx['form_names'].get(sub['formId']) or sub['formId']
+                if not ls.form_is_lead(form):
                     continue
-                paid = paid_from_values(s['values'], platforms)
-                if form and form.get('bucket') == 'ads_conversion' or paid:
-                    ev.append({'rule': 'HubSpot form / UTM', 'source': 'Paid', 'detail': fname + ('' if not paid else ' · ' + paid[1]),
-                               'platform': paid[0] if paid else None, 'contactId': c['id'], 'at': s['at'],
-                               'unconfirmed': bool(form and form.get('uncertain'))})
+                note = ' (was "uncertain" in the mapping)' if form and form.get('uncertain') else ''
+                paid = paid_from_values(sub['values'], platforms)
+                if (form and form.get('bucket') == 'ads_conversion') or is_paid_form(fname) or paid:
+                    ev.append({'rule': 'HubSpot form / UTM', 'source': 'Paid', 'detail': fname + note + ('' if not paid else ' · ' + paid[1]),
+                               'platform': (paid[0] if paid else None) or platform_of_form(fname, platforms),
+                               'branded': bool(paid and paid[2]), 'contactId': c['id'], 'at': sub['at']})
                     continue
-                ev.append({'rule': 'HubSpot form submission', 'source': ls.form_source(form) if form else None,
-                           'detail': fname, 'subSource': (form or {}).get('bucket') or 'form not in mapping',
-                           'unconfirmed': bool(not form or form.get('uncertain')), 'contactId': c['id'], 'at': s['at']})
+                ev.append({'rule': 'HubSpot form submission', 'source': (ls.form_source(form) if form else None) or 'Inbound',
+                           'detail': fname + note, 'subSource': fname, 'contactId': c['id'], 'at': sub['at']})
         if ctx['memberships'] is not None:
             for m in ctx['memberships'].get(c['id'], []):
                 l = ls.lists.get(m['listId'])
                 if l and l['counts']:
                     ev.append({'rule': 'Event list upload', 'source': 'Events', 'detail': l.get('show') or l.get('name'),
                                'subSource': l.get('show') or l.get('name'), 'contactId': c['id'], 'at': m['added']})
+        cp = contact_paid(c, platforms)
+        if cp:
+            ev.append({**cp, 'source': 'Paid', 'contactId': c['id']})
         p = c['props']
-        if p.get('paid_touch_campaign'):
-            names = platform_in_text(p['paid_touch_campaign'], platforms)
-            ev.append({'rule': 'paid_touch_campaign', 'source': 'Paid', 'detail': p['paid_touch_campaign'],
-                       'platform': names[0]['name'] if len(names) == 1 else None, 'contactId': c['id']})
-        src = str(p.get('hs_analytics_source') or '').upper()
-        if src in SCOPE['paidAnalyticsSources'] or p.get('hs_google_click_id'):
-            text = ' '.join(str(p.get(k) or '') for k in ('hs_analytics_source_data_1', 'hs_analytics_source_data_2'))
-            names = platform_in_text(text, platforms)
-            if not names and p.get('hs_google_click_id'):
-                names = [x for x in platforms if x['key'] == 'google']
-            ev.append({'rule': 'HubSpot original source', 'source': 'Paid', 'detail': ('%s %s' % (src, text)).strip(),
-                       'platform': names[0]['name'] if len(names) == 1 else None, 'contactId': c['id']})
         if str(p.get('hs_object_source') or '').upper() == 'IMPORT':
             iname = p.get('hs_object_source_detail_1') or ''
             l = ls.lists_by_name.get(norm(iname))
@@ -938,8 +966,47 @@ def attribute(lead, lead_contacts, ctx):
     return ev
 
 
+def is_paid_form(name):
+    return any(norm(f) in norm(name) for f in RULES['ads']['paidForms'])
+
+
+def platform_of_form(name, platforms):
+    names = platform_in_text(name, platforms)
+    return names[0]['name'] if len(names) == 1 else None
+
+
+def contact_paid(c, platforms):
+    """Paid evidence on one contact's synced fields, best first: UTMs with a paid signal / click id,
+    paid_touch_campaign, then original source. None when the contact has none."""
+    p = {str(k).lower(): str(v) for k, v in c['props'].items() if v not in (None, '')}
+    mediums = set(RULES['ads']['paidMediums'])
+    utm = {k: v for k, v in p.items() if 'utm' in k}
+    click = [k for k in RULES['ads']['clickIdKeys'] if p.get(k)]
+    if any(norm(v).replace(' ', '_') in mediums or norm(v) in mediums for k, v in utm.items() if 'medium' in k) or click:
+        text = ' '.join(utm.values())
+        names = platform_in_text(text, platforms) or ([x for x in platforms if x['key'] == 'google'] if any('gclid' in k or 'google' in k for k in click) else [])
+        detail = ', '.join('%s=%s' % kv for kv in sorted(utm.items())) or ', '.join(click)
+        return {'rule': 'HubSpot UTM / click id', 'platform': names[0]['name'] if len(names) == 1 else None, 'detail': detail,
+                'branded': bool(re.search(r'brand', ' '.join(utm.values()), re.I))}
+    if p.get('paid_touch_campaign'):
+        names = platform_in_text(p['paid_touch_campaign'], platforms)
+        return {'rule': 'paid_touch_campaign', 'platform': names[0]['name'] if len(names) == 1 else None,
+                'detail': p['paid_touch_campaign'], 'branded': 'brand' in p['paid_touch_campaign'].lower()}
+    src = p.get('hs_analytics_source', '').upper()
+    if src in SCOPE['paidAnalyticsSources']:
+        text = ' '.join(p.get(k, '') for k in ('hs_analytics_source_data_1', 'hs_analytics_source_data_2'))
+        names = platform_in_text(text, platforms)
+        return {'rule': 'HubSpot original source', 'platform': names[0]['name'] if len(names) == 1 else None,
+                'detail': ('%s %s' % (src, text)).strip(), 'branded': False}
+    return None
+
+
+# Rule order; "decides" rules are system evidence (HubSpot primary). The paid-deal export is deal-level
+# (company fallback included), so it names the platform but does not move a lead's source.
 RULE_ORDER = ['Lemlist lead email', 'HubSpot form / UTM', 'HubSpot form submission', 'Event list upload',
-              'paid_touch_campaign', 'HubSpot original source', 'HubSpot import', 'Lead Tracker note']
+              'HubSpot UTM / click id', 'paid_touch_campaign', 'HubSpot original source', 'HubSpot import',
+              'HubSpot source (review list)', 'HubSpot check (Pipeline)', 'Paid deal (Pipeline export)', 'Lead Tracker note']
+NOT_DECIDING = {'Paid deal (Pipeline export)', 'Lead Tracker note'}
 
 
 def conversion_event_terms(ads):
@@ -997,7 +1064,7 @@ def build_leads(brain, ctx):
                 'hsids': sorted({r['hsid'] for r in rs if r['hsid']}), 'domains': sorted({r['domain'] for r in rs if r['domain']}),
                 'flags': []}
         if len(sources) > 1:
-            lead['flags'].append({'kind': 'sheet', 'text': 'Lead Tracker rows disagree on Source: %s (first row wins)' % ' vs '.join(sources)})
+            lead['flags'].append({'kind': 'sheet', 'text': 'Lead Tracker rows disagree on Source: %s (earliest row used as the fallback)' % ' vs '.join(sources)})
         ids, rule = match_tracker_company(lead, comps, by_domain, by_name)
         lead['hubspot'] = {'companyIds': ids, 'matchRule': rule}
         cos = [comps[i] for i in ids]
@@ -1021,36 +1088,65 @@ def build_leads(brain, ctx):
             ms += meetings_by_company.get(i, [])
         ms = sorted({m['id']: m for m in ms}.values(), key=lambda m: m['start'] or '', reverse=True)
         lead['meetings'] = [{'id': m['id'], 'title': m['title'], 'start': m['start'], 'owner': m['owner'], 'inList': m['inWindow']} for m in ms[:8]]
-        # Evidence: HubSpot/Lemlist rules first (in order), then the Tracker note.
+        # Evidence: system rules (Lemlist, HubSpot, Pipeline's HubSpot reads), then Sheet-side.
         ev = attribute(lead, lcontacts, ctx)
+        rv = ctx['review'].get(lead['rows'][0]) or next((ctx['review'][r] for r in lead['rows'] if r in ctx['review']), None)
+        if rv and rv.get('hubspot_sources'):
+            hs = [x.strip() for x in re.split(r'[|/,;]', rv['hubspot_sources']) if x.strip()]
+            named = platform_in_text(rv.get('evidence') or '', platforms)
+            ev.append({'rule': 'HubSpot source (review list)', 'source': hs[0], 'detail': rv.get('evidence') or rv['hubspot_sources'],
+                       'platform': named[0]['name'] if hs[0] == 'Paid' and len(named) == 1 else None, 'subSource': None})
+        chk = ctx['ls'].check_for(lead['company'])
+        if chk:
+            ev.append({'rule': 'HubSpot check (Pipeline)', 'source': 'Paid', 'platform': chk['platform'], 'detail': chk['text']})
+        for d in sdeals:
+            pd = ctx['paid_deals'].get(d['id'])
+            if pd:
+                ev.append({'rule': 'Paid deal (Pipeline export)', 'source': 'Paid', 'platform': pd['platform'],
+                           'branded': pd['branded'], 'detail': '%s: %s (%s%s)' % (d['name'], pd['platform'], pd['via'] or 'evidence',
+                                                                                 ', company-level' if pd['level'] == 'company' else '')})
         note = ' '.join(lead['notes'])
         named = platform_in_text(note, platforms)
         if named and re.search(r'\b(ad|ads|paid|ppc|cpc)\b', note, re.I):
             ev.append({'rule': 'Lead Tracker note', 'source': 'Paid', 'platform': named[0]['name'] if len(named) == 1 else None,
                        'detail': 'note names %s' % ' / '.join(p['name'] for p in named)})
         ev.sort(key=lambda e: RULE_ORDER.index(e['rule']))
+        for e in ev:
+            e['decides'] = e['rule'] not in NOT_DECIDING and bool(e.get('source'))
         lead['evidence'] = ev
-        fired = ev[0] if ev else None
-        lead['rule'] = fired['rule'] if fired else 'Lead Tracker Source (column B)'
-        # Sub-source within the Sheet Source.
-        sub, platform, unconfirmed, tag = None, None, False, None
+        # HubSpot is primary: the first deciding rule sets the source; the Sheet is the fallback.
+        hub = next((e for e in ev if e['decides']), None)
+        lead['sheetSource'] = lead['source']
+        if hub:
+            lead['source'], lead['sourceBasis'], lead['rule'] = hub['source'], 'hubspot', hub['rule']
+        else:
+            lead['sourceBasis'], lead['rule'] = 'sheet', RULES['source']['sheetLabel']
+        if hub and hub['source'] != lead['sheetSource']:
+            lead['review'] = True
+            lead['flags'].append({'kind': 'review', 'text': '%s says %s; the Lead Tracker says %s. HubSpot is used; on the review list.'
+                                  % (hub['rule'], hub['source'], lead['sheetSource'])})
+        else:
+            lead['review'] = bool(rv)
+        sub, platform, tag = None, None, None
         if lead['source'] == 'Paid':
-            pe = next((e for e in ev if e['source'] == 'Paid' and e.get('platform')), None)
+            pe = next((e for e in ev if e.get('source') == 'Paid' and e.get('platform')), None)
             platform = pe['platform'] if pe else None
             sub = platform or 'Platform not named'
-            if pe:
-                lead['rule'] = pe['rule']
-                unconfirmed = bool(pe.get('unconfirmed'))
-            else:
+            if pe and pe['rule'] != lead['rule'] and lead['sourceBasis'] == 'sheet':
+                lead['rule'] = '%s (platform: %s)' % (lead['rule'], pe['rule'])
+            elif pe and lead['sourceBasis'] == 'hubspot' and pe['rule'] != lead['rule']:
+                lead['rule'] = '%s (platform: %s)' % (lead['rule'], pe['rule'])
+            if not pe:
                 t = squash(note)
                 possible = sorted(name for name, terms in event_terms.items() if any(x in t for x in terms))
                 if possible:
                     lead['possiblePlatforms'] = possible
+            if any(e.get('branded') for e in ev if e.get('source') == 'Paid'):
+                tag = RULES['ads']['brandedFlag']
         else:
-            same = next((e for e in ev if e['source'] == lead['source'] and e.get('subSource')), None)
+            same = next((e for e in ev if e.get('source') == lead['source'] and e.get('subSource')), None)
             if same:
-                sub, unconfirmed, tag = same['subSource'], bool(same.get('unconfirmed')), same.get('tag')
-                lead['rule'] = same['rule']
+                sub, tag = same['subSource'], same.get('tag')
             elif lead['source'] == 'Outbound':
                 sub = 'Campaign: Lemlist leads not yet synced' if ctx['lemlist'] is None else 'No Lemlist match'
             elif lead['source'] == 'Events':
@@ -1059,13 +1155,12 @@ def build_leads(brain, ctx):
                 sub = 'Form: submissions not yet synced' if ctx['submissions'] is None else 'No form match'
         lead['subSource'] = sub
         lead['platform'] = platform
-        lead['unconfirmed'] = unconfirmed
         lead['tag'] = tag
-        # Conflicts: evidence naming a different source. The Sheet still wins.
+        # Other evidence naming a different source than the one used: shown, not resolved.
         for e in ev:
-            if e.get('source') and e['source'] != lead['source']:
-                what = e.get('platform') or e.get('detail') or e['source']
-                lead['flags'].append({'kind': 'conflict', 'text': '%s says %s (%s); Source says %s' % (e['rule'], e['source'], what, lead['source'])})
+            if e.get('source') and e['source'] != lead['source'] and e is not hub and not (e['rule'] == 'Lead Tracker note' and lead['sheetSource'] == lead['source']):
+                what = e.get('platform') or e['source']
+                lead['flags'].append({'kind': 'conflict', 'text': '%s says %s (%s); source used: %s' % (e['rule'], e['source'], what, lead['source'])})
         lead['conflict'] = any(f['kind'] == 'conflict' for f in lead['flags'])
         found = [ctx['lead_insights'][c['id']] for c in lcontacts if c['id'] in ctx['lead_insights']]
         lead['insight'] = max(found, key=lambda x: str(x.get('lastCall') or '')) if found else None
@@ -1082,20 +1177,185 @@ def build_leads(brain, ctx):
     openai = next((p for p in platforms if p['key'] == 'openai'), None)
     plat = []
     for p in platforms:
-        confirmed = [l for l in items if l['platform'] == p['name'] or
-                     any(e.get('platform') == p['name'] for e in l['evidence'])]
-        possible = [l for l in items if l['source'] == 'Paid' and not l['platform'] and p['name'] in (l.get('possiblePlatforms') or [])]
+        confirmed = [l for l in items if l['platform'] == p['name']]
+        possible = [l for l in items if l['source'] == 'Paid' and not l['platform'] and p['name'] in (l.get('possiblePlatforms') or [])
+                    and l not in confirmed]
+        note_named = [l for l in items if any(e['rule'] == 'Lead Tracker note' and e.get('platform') == p['name'] for e in l['evidence'])]
+        note_possible = [l for l in items if l['sheetSource'] == 'Paid' and l not in note_named and p['name'] in (l.get('possiblePlatforms') or [])]
         plat.append({'name': p['name'], 'key': p['key'], 'confirmed': len(confirmed),
+                     'trackerNamed': len(note_named), 'trackerAtMost': len(note_named) + len(note_possible),
                      'confirmedIds': [l['id'] for l in confirmed], 'inPaid': sum(1 for l in confirmed if l['source'] == 'Paid'),
                      'possible': len(possible), 'possibleIds': [l['id'] for l in possible],
                      'atMost': len(confirmed) + len(possible)})
     return {'connected': True, 'sheet': {'title': title, 'tab': tab}, 'total': total, 'mql': mql,
-            'sql': sum(1 for l in items if l['sql']), 'rate': (mql / total) if total else None,
+            'sql': sum(1 for l in items if l['sql']),
             'sources': sources, 'platforms': plat, 'openai': next((x for x in plat if openai and x['key'] == 'openai'), None),
-            'conflicts': sum(1 for l in items if l['conflict']), 'items': items,
+            'conflicts': sum(1 for l in items if l['conflict']), 'reviewLeads': sum(1 for l in items if l['review']),
+            'hubspotSourced': sum(1 for l in items if l['sourceBasis'] == 'hubspot'), 'items': items,
             'definition': 'A lead is a company on the Lead Tracker with its first lead date (Lead Date, else First Touch). '
-                          'MQL counts companies with an MQL or an SQL date. Source is the Sheet\'s Source column; it wins '
-                          'when other evidence disagrees, and the disagreement is flagged.'}
+                          'Source: HubSpot evidence first (where the conversion happened); the Lead Tracker Source only when '
+                          'HubSpot has none. Disagreements go to the review list; nothing is overwritten. Sheet MQL/SQL are the '
+                          'Lead Tracker\'s dates.'}
+
+
+def load_review_list(path):
+    """lead-source-review.csv (data-side): Sheet row -> row dict. None when no file."""
+    if not path or not os.path.exists(path):
+        return None
+    import csv
+    with open(path, encoding='utf-8', newline='') as f:
+        rows = list(csv.DictReader(f))
+    out = {}
+    for r in rows:
+        try:
+            out[int(str(r.get('row') or '').strip())] = r
+        except ValueError:
+            continue
+    return {'path': path, 'rows': rows, 'byRow': out}
+
+
+def load_paid_export(path, platforms):
+    """Pipeline's deals export with derived.paid_platform / paid_evidence / google_branded."""
+    with open(path, encoding='utf-8') as f:
+        d = json.load(f)
+    live = d['live'] if isinstance(d.get('live'), dict) else d
+    deals = {}
+    for x in live.get('deals') or []:
+        dv = x.get('derived') or {}
+        if not dv.get('paid_platform'):
+            continue
+        ev, pr = dv.get('paid_evidence') or {}, x.get('properties') or {}
+        names = platform_in_text(dv['paid_platform'], platforms)
+        deals[str(x.get('id'))] = {'platform': names[0]['name'] if len(names) == 1 else dv['paid_platform'], 'raw': dv['paid_platform'],
+                                   'via': ev.get('via'), 'level': ev.get('level'), 'contactId': ev.get('contactId'),
+                                   'branded': bool(dv.get('google_branded')), 'pipeline': str(dv.get('pipelineId') or pr.get('pipeline') or ''),
+                                   'name': pr.get('dealname'), 'stage': dv.get('stageLabel'), 'amount': dv.get('amount')}
+    has_field = any('paid_platform' in (x.get('derived') or {}) for x in live.get('deals') or [])
+    if not has_field:
+        raise ValueError('%s has no derived.paid_platform field' % path)
+    return {'basis': 'Pipeline export', 'path': path, 'generatedAt': d.get('generated_at') or d.get('fetchedAt'), 'deals': deals}
+
+
+def compute_paid_deals(deals, ctx):
+    """The export's rules on synced contact fields: the deal's contacts first, then its company's contacts (level company)."""
+    platforms, contacts, a = ctx['ls'].platforms, ctx['contacts'], ctx['assoc']
+    out = {}
+    for d in deals:
+        found, level = None, 'deal'
+        for cid in sorted(a.get('deals', d['id'], 'contacts')):
+            c = contacts.get(cid)
+            found = c and contact_paid(c, platforms)
+            if found:
+                found['contactId'] = cid
+                break
+        if not found:
+            level = 'company'
+            for co in d['companyIds']:
+                for cid in sorted(a.get('companies', co, 'contacts')):
+                    c = contacts.get(cid)
+                    found = c and contact_paid(c, platforms)
+                    if found:
+                        found['contactId'] = cid
+                        break
+                if found:
+                    break
+        if found:
+            out[d['id']] = {'platform': found['platform'] or 'Paid (platform unknown)', 'raw': found['platform'], 'via': found['rule'],
+                            'level': level, 'contactId': found['contactId'], 'branded': found['branded'], 'pipeline': d['pipeline'],
+                            'name': d['name'], 'stage': d['stage'], 'amount': d['amount']}
+    return {'basis': 'computed from synced HubSpot contact fields (no Pipeline export given)', 'path': None, 'generatedAt': None, 'deals': out}
+
+
+def paid_deals_view(paid, deal_by_id, comp_name):
+    sales = []
+    for i, x in paid['deals'].items():
+        d = deal_by_id.get(i)
+        pipe = d['pipeline'] if d else x['pipeline']
+        if pipe != SCOPE['salesPipelineId']:
+            continue
+        sales.append({'id': i, 'name': (d or {}).get('name') or x['name'], 'stage': (d or {}).get('stage') or x['stage'],
+                      'amount': (d or {}).get('amount') if d else x['amount'], 'platform': x['platform'], 'via': x['via'],
+                      'level': x['level'], 'branded': x['branded'], 'open': (d or {}).get('open'),
+                      'company': next((comp_name[c] for c in (d or {}).get('companyIds', []) if c in comp_name), None)})
+    sales.sort(key=lambda r: (r['platform'], -(r['amount'] or 0)))
+    by = {}
+    for r in sales:
+        by[r['platform']] = by.get(r['platform'], 0) + 1
+    return {'basis': paid['basis'], 'generatedAt': paid['generatedAt'], 'total': len(paid['deals']), 'sales': sales,
+            'otherPipelines': len(paid['deals']) - len(sales), 'byPlatform': by,
+            'branded': sum(1 for r in sales if r['branded']), 'companyLevel': sum(1 for r in sales if r['level'] == 'company')}
+
+
+def mql_funnel(brain, ctx, as_of):
+    """r12 lead_to_mql_rate: book-a-demo bookings / form-filling contacts, trailing window. None when the data isn't there."""
+    cfg = RULES['mql']
+    since = as_of - timedelta(days=cfg['windowDays'])
+    src_prop = cfg['meetingSourceProperty']
+    has = lambda kind, prop: bool(brain.q("SELECT 1 FROM hubspot_objects WHERE object_type=? AND json_type(properties_json, '$.%s') IS NOT NULL LIMIT 1" % prop, (kind,)))
+    link_props = [x for x in cfg['bookingLinkProperties'] if has('meetings', x)]
+    missing = []
+    if not has('meetings', src_prop):
+        missing.append('meeting source (%s)' % src_prop)
+    if not link_props:
+        missing.append('meeting booking link')
+    form_props = [x for x in cfg['formContactProperties'] if x in ctx['contact_props']]
+    if ctx['submissions'] is None and not form_props:
+        missing.append('form submissions')
+    if missing:
+        return {'available': False, 'reason': 'not derivable from brain.db: no %s' % ', '.join(missing)}
+    pat = re.compile(cfg['bookingLinkPattern'], re.I)
+    booked = set()
+    fields = [src_prop, 'hs_createdate', 'hs_meeting_start_time'] + link_props
+    for row in brain.objects('meetings', fields):
+        mid, vals = str(row[0]), dict(zip(fields, row[1:]))
+        if str(vals.get(src_prop) or '').upper() != cfg['meetingSourceValue']:
+            continue
+        if not any(pat.search(str(vals.get(k) or '')) for k in link_props):
+            continue
+        t = parse_time(vals.get('hs_createdate') or vals.get('hs_meeting_start_time'))
+        if t and since <= t <= as_of:
+            booked |= set(ctx['assoc'].get('meetings', mid, 'contacts'))
+    filled = set()
+    if ctx['submissions'] is not None:
+        for email, subs in ctx['submissions'].items():
+            c = ctx['contact_by_email'].get(email)
+            if c and any((lambda t: t and since <= t <= as_of)(parse_time(x['at'])) for x in subs):
+                filled.add(c['id'])
+        basis = 'hubspot_form_submissions'
+    else:
+        for c in ctx['contacts'].values():
+            t = parse_time(c['props'].get('first_conversion_date'))
+            if t and since <= t <= as_of:
+                filled.add(c['id'])
+        basis = 'contact first_conversion_date'
+    if not filled:
+        return {'available': False, 'reason': 'no form-filling contacts in the window'}
+    return {'available': True, 'numerator': len(booked), 'denominator': len(filled), 'rate': len(booked) / len(filled),
+            'windowDays': cfg['windowDays'], 'label': cfg['label'], 'definition': cfg['definition'], 'formBasis': basis,
+            'since': iso(since)}
+
+
+def load_call_classification(path, warn):
+    if not path:
+        return None, 'no CALL_CLASSIFICATION path given'
+    if not os.path.exists(path):
+        warn('warn: call classification %s not found; falling back to the built-in call rule' % path)
+        return None, '%s not found' % os.path.basename(path)
+    out = {}
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get('call_id') is not None and r.get('audience'):
+                out[str(r['call_id'])] = r
+    if not out:
+        return None, '%s has no records' % os.path.basename(path)
+    return out, None
 
 
 def _is_fragment(v):
@@ -1246,7 +1506,8 @@ def build_calls(brain, ctx, as_of):
             domain_index.setdefault(c['domain'], []).append(c)
     has_transcripts = brain.has('transcripts')
     with_transcript = {r[0] for r in brain.q('SELECT recording_id FROM transcripts WHERE n_turns > 0')} if has_transcripts else set()
-    counts = {'total': 0, 'internal': 0, 'cs': 0, 'customer': 0, 'prospect': 0}
+    counts = ({'total': 0, 'prospect': 0, 'customer': 0, 'internal': 0, 'partner_other': 0} if ctx['call_class'] is not None
+              else {'total': 0, 'internal': 0, 'cs': 0, 'customer': 0, 'prospect': 0})
     window_start = min(as_of.astimezone(TZ).replace(day=1, hour=0, minute=0, second=0, microsecond=0),
                        as_of - timedelta(days=SCOPE['callsWindowDays']))
     items = []
@@ -1261,13 +1522,23 @@ def build_calls(brain, ctx, as_of):
             invitees = []
         ext = [i for i in invitees if i.get('is_external') and domain_of(i.get('email')) not in internal]
         remail = (remail or '').strip().lower()
-        if not ext:
+        cls = ctx['call_class']
+        rc = cls.get(str(rid)) if cls is not None else None
+        if cls is not None:
+            # Strategy's per-call classification decides; only prospect calls are counted or listed.
+            aud = rc['audience'] if rc else 'unclassified'
+            counts[aud] = counts.get(aud, 0) + 1
+            if aud != 'prospect':
+                continue
+        elif not ext:
             counts['internal'] += 1
             continue
-        if remail in cs_emails:
+        elif remail in cs_emails:
             counts['cs'] += 1
             continue
         cos = {}
+        if rc and str(rc.get('hubspot_company_id') or '') in comps:
+            cos[str(rc['hubspot_company_id'])] = comps[str(rc['hubspot_company_id'])]
         for i in ext:
             c = contacts.get(ctx['contact_by_email'].get((i.get('email') or '').lower(), {}).get('id'))
             for co in (c['companies'] if c else []):
@@ -1277,24 +1548,40 @@ def build_calls(brain, ctx, as_of):
             if d and d not in FREE_MAIL:
                 for co in domain_index.get(d, []):
                     cos[co['id']] = co
-        if any(customer_at(c, t) for c in cos.values()):
-            counts['customer'] += 1
-            continue
-        counts['prospect'] += 1
+        if cls is None:
+            if any(customer_at(c, t) for c in cos.values()):
+                counts['customer'] += 1
+                continue
+            counts['prospect'] += 1
         if not t or t < window_start:
             continue
         rec = by_email_owner.get(remail)
         recorder = rec['name'] if rec else scrub.person((rname or '').title())
         deal_cos = [c for c in cos.values() if c['salesDeal']]
+        strat = None
+        if rc:
+            dl = rc.get('deal') if isinstance(rc.get('deal'), dict) else None
+            strat = {'reason': rc.get('audience_reason'), 'callType': rc.get('call_type'), 'buyerRoles': rc.get('buyer_roles') or [],
+                     'deal': {'id': str(dl.get('id')), 'name': dl.get('name'), 'stage': dl.get('stage')} if dl else None,
+                     'objections': [{'category': str(o.get('category') or '').replace('_', ' '), 'quote': o.get('quote')}
+                                    for o in (rc.get('objections') or [])[:4] if isinstance(o, dict)],
+                     'competitors': sorted((rc.get('competitors') or {}), key=lambda k: -(rc['competitors'][k] or 0))[:6]
+                     if isinstance(rc.get('competitors'), dict) else [],
+                     'nextSteps': [x for x in (rc.get('next_steps') or [])[:3] if isinstance(x, str)]}
         items.append({'id': 'R%s' % rid, 'title': scrub.text(title or '(no title)'), 'start': iso(t), 'recorder': recorder,
-                      'matched': bool(deal_cos),
+                      'matched': bool(deal_cos) or bool(strat and strat['deal']), 'strategy': strat,
                       'reason': None if deal_cos else ('no Sales Pipeline deal at the company' if cos else 'company not in HubSpot'),
                       'companies': [{'id': c['id'], 'name': c['name'], 'deal': deal_ref(sales_deal_of(c))} for c in list(cos.values())[:4]],
                       'contacts': [{'name': i.get('name'), 'company': None} for i in ext[:8]],
                       'emails': sorted({(i.get('email') or '').lower() for i in ext if i.get('email')}),
                       'summary': clean_summary(summary), 'transcript': rid in with_transcript})
     items.sort(key=lambda x: x['start'] or '')
-    return {'items': items, 'scope': counts, 'windowStart': iso(window_start),
+    if ctx['call_class'] is not None:
+        return {'items': items, 'scope': counts, 'windowStart': iso(window_start), 'classification': 'strategy',
+                'definition': 'Fathom recordings Strategy classifies as prospect calls (records.jsonl, audience = prospect; '
+                              'rules in its CLASSIFICATION.md). Customer, internal and partner/other calls are not counted.'}
+    return {'items': items, 'scope': counts, 'windowStart': iso(window_start), 'classification': 'fallback',
+            'classificationNote': 'call classification unavailable (%s): the built-in call rule is used' % ctx['call_class_reason'],
             'definition': 'Fathom recordings with an external guest, not recorded by a CS owner, and not a customer call. '
                           'A call at a company with a Closed Won deal counts as a prospect call only before its first win; '
                           'a call is a customer call after the first win, at a company with a Renewal or Customer Success '
@@ -1327,43 +1614,36 @@ def link_recordings(meetings, calls):
 
 # ---------- outbound ----------
 def outbound(brain, ls, leads_by_email):
+    """Every Lemlist campaign with its tags (filters). outbound_reply_rate = replies / sends over all of them (r12)."""
     rows = brain.q('SELECT campaign_id, name, status, raw_json FROM lemlist_campaigns')
-    perf, other = [], []
+    camps = []
     for cid, name, status, raw in rows:
         try:
             r = json.loads(raw or '{}')
         except ValueError:
             r = {}
-        s = r.get('stats') if isinstance(r.get('stats'), dict) else {}
-        camp = ls.campaign(cid, name) or {}
-        kind = camp.get('kind') or 'unmapped'
-        replies = num(s.get('replied'))
-        invite = sum(num(st.get('replied')) or 0 for st in s.get('steps') or [] if st.get('taskType') == 'linkedinInvite')
-        row = {'id': str(cid), 'name': name, 'status': status, 'kind': kind, 'bucket': camp.get('bucket'),
-               'sent': num(s.get('messagesSent')), 'delivered': num(s.get('delivered')), 'repliesReported': replies,
+        st = r.get('stats') if isinstance(r.get('stats'), dict) else {}
+        camp = ls.campaign(cid, name)
+        tags, flags = (camp['tags'], camp['flags']) if camp else campaign_tags(None, name)
+        invite = sum(num(x.get('replied')) or 0 for x in st.get('steps') or [] if x.get('taskType') == 'linkedinInvite')
+        row = {'id': str(cid), 'name': name, 'status': status, 'tags': tags, 'flags': flags, 'bucket': (camp or {}).get('bucket'),
+               'sent': num(st.get('messagesSent')), 'delivered': num(st.get('delivered')), 'replies': num(st.get('replied')),
                'inviteReplies': invite or 0}
+        row['mostlyInvite'] = bool(row['replies'] and invite and invite / row['replies'] > 0.5)
         if leads_by_email is not None:
-            leads = [l for ls_ in leads_by_email.values() for l in ls_ if str(l.get('campaign_id')) == str(cid)]
-            replied = [l for l in leads if l.get('replied_at')]
-            row['replies'] = sum(1 for l in replied if not is_auto_reply(l.get('raw_json')))
-            row['autoReplies'] = len(replied) - row['replies']
-            row['replyBasis'] = 'leads'
-        else:
-            row['replies'] = None if replies is None else max(0, replies - (invite or 0))
-            row['replyBasis'] = 'campaign'
-        row['mostlyInvite'] = bool(replies and invite and invite / replies > 0.5)
-        row['rate'] = (row['replies'] / row['delivered']) if row['replies'] is not None and row['delivered'] else None
-        (perf if kind == 'outbound' and (row['sent'] or 0) > 0 else other).append(row)
-    perf.sort(key=lambda r: -(r['delivered'] or 0))
-    sent = sum(r['delivered'] or 0 for r in perf)
-    replies = sum(r['replies'] or 0 for r in perf)
-    basis = ('Real replies = leads with a reply that is not an auto-reply (Lemlist leads).' if leads_by_email is not None else
-             'Real replies = Lemlist\'s reply count minus replies on the LinkedIn connection-invite step, which are mostly '
-             'automatic accept messages. Other auto-replies (out-of-office) can\'t be separated until Lemlist leads are '
-             'synced (not yet synced).')
-    return {'campaigns': perf, 'excluded': [r for r in other if r['kind'] in ('customer', 'excluded', 'other', 'unmapped') or (r['sent'] or 0) == 0],
-            'delivered': sent, 'replies': replies, 'rate': (replies / sent) if sent else None, 'basis': basis,
-            'leadsSynced': leads_by_email is not None}
+            replied = [l for xs in leads_by_email.values() for l in xs if str(l.get('campaign_id')) == str(cid) and l.get('replied_at')]
+            row['autoReplies'] = sum(1 for l in replied if is_auto_reply(l.get('raw_json')))
+        row['rate'] = (row['replies'] / row['sent']) if row['replies'] is not None and row['sent'] else None
+        camps.append(row)
+    camps.sort(key=lambda r: (-(r['sent'] or 0), r['name']))
+    sends = sum(r['sent'] or 0 for r in camps)
+    replies = sum(r['replies'] or 0 for r in camps)
+    labels = {t['tag']: t['label'] for t in RULES['lemlist']['tags']}
+    labels['unmapped'] = 'Not in the mapping'
+    return {'campaigns': camps, 'sends': sends, 'replies': replies, 'rate': (replies / sends) if sends else None,
+            'count': len(camps), 'tagLabels': labels, 'leadsSynced': leads_by_email is not None,
+            'definition': RULES['lemlist']['replyRate']['about'] + ' Sends = Lemlist messages sent; replies = Lemlist\'s reply count '
+                          '(includes replies on the LinkedIn invite step and any auto-replies, flagged per campaign).'}
 
 
 # ---------- current page cross-check ----------
@@ -1410,6 +1690,9 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
         except (OSError, ValueError) as e:
             warn('warn: prior snapshot %s skipped: %s' % (p, e))
     ads = ads_section(brain, ls_doc, as_of)
+    for a in ads:
+        if ls.platform_check(a['key']):
+            a['check'] = ls.platform_check(a['key'])
     spend = budget(brain, as_of)
     ga4 = ga4_unassigned(brain)
     lead_insights = load_lead_insights(read_json(args.lead_insights, 'lead-insights', warn) if args.lead_insights else None)
@@ -1419,7 +1702,19 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
            'lemlist': lemlist_leads(brain), 'submissions': form_submissions(brain), 'memberships': list_memberships(brain),
            'form_names': {str(i): n for i, n in brain.q('SELECT form_id, name FROM hubspot_forms')} if brain.has('hubspot_forms') else {},
            'campaign_names': {str(i): n for i, n in brain.q('SELECT campaign_id, name FROM lemlist_campaigns')},
-           'lead_insights': lead_insights}
+           'lead_insights': lead_insights, 'contact_props': contact_props}
+    ctx['call_class'], ctx['call_class_reason'] = load_call_classification(args.call_classification, warn)
+    review = load_review_list(args.review_list)
+    ctx['review'] = review['byRow'] if review else {}
+    paid = None
+    if args.paid_export:
+        try:
+            paid = load_paid_export(args.paid_export, ls.platforms)
+        except (OSError, ValueError) as e:
+            warn('warn: paid export %s not used: %s' % (args.paid_export, e))
+    if paid is None:
+        paid = compute_paid_deals(deals, ctx)
+    ctx['paid_deals'] = paid['deals']
     ctx['customer_title'] = customer_title_matcher(comps)
     meetings = build_meetings(brain, ctx, as_of)
     ctx['meetings_by_company'] = meetings.pop('byCompany')
@@ -1427,8 +1722,13 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
     link_recordings(meetings, calls)
     leads = build_leads(brain, ctx)
     out_bound = outbound(brain, ls, ctx['lemlist'])
+    funnel = mql_funnel(brain, ctx, as_of)
     hl = headline(sales, stages)
     lost = [d for d in sales if d['lost']]
+    for d in lost:
+        # A loss created after the company's first win is an expansion at a customer, not new business.
+        made = parse_time(d['created'])
+        d['postWin'] = any(comps[c]['firstWon'] and made and made > comps[c]['firstWon'] for c in d['companyIds'] if c in comps)
     by_stage = {}
     for d in lost:
         by_stage.setdefault(d['stage'], []).append(d)
@@ -1440,7 +1740,8 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
         return {'id': d['id'], 'name': d['name'], 'stage': d['stage'], 'stageOrder': d['stageOrder'], 'amount': d['amount'],
                 'probability': d['probability'], 'weighted': money0(d['amount'] * d['probability']) if d['amount'] is not None and d['probability'] is not None else None,
                 'close': d['close'], 'created': d['created'], 'owner': d['owner'], 'onHold': d['onHold'], 'open': d['open'],
-                'won': d['won'], 'lost': d['lost'], 'lostReason': d['lostReason'],
+                'won': d['won'], 'lost': d['lost'], 'lostReason': d['lostReason'], 'postWin': d.get('postWin', False),
+                'paid': ({k: ctx['paid_deals'][d['id']][k] for k in ('platform', 'via', 'level', 'branded')} if d['id'] in ctx['paid_deals'] else None),
                 'company': next((comp_name[c] for c in d['companyIds'] if c in comp_name), None)}
     lost_doc = read_json(args.lost_reasons, 'lost-reasons', warn) if args.lost_reasons else None
     insights = read_json(args.insights, 'insights', warn) if args.insights else None
@@ -1450,16 +1751,25 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
                  'hubspotAt': iso(data_at), 'portalId': args.portal_id, 'provisional': provisional_label(ls_doc),
                  'leadSourcesAt': (ls_doc or {}).get('generated_at'),
                  'notSynced': [label for t, label in NEW_SOURCES if not brain.has(t)] + ([] if contact_props else ['HubSpot contact source fields']),
-                 'contactSourceFields': contact_props},
+                 'contactSourceFields': contact_props, 'leadInsights': len(lead_insights),
+                 'callClassification': (len(ctx['call_class']) if ctx['call_class'] is not None else None)},
         'freshness': fresh,
-        'flags': staleness(fresh, ads, spend, ga4, brain, contact_props, as_of),
+        'flags': staleness(fresh, ads, spend, ga4, brain, contact_props, as_of) + ([{'key': 'calls', 'label': 'Call classification unavailable',
+                  'text': calls.get('classificationNote', ''), 'level': 'warn'}] if calls.get('classification') == 'fallback' else []),
         'headline': {**hl, 'change': headline_change(sales, priors, data_at, as_of),
                      'definition': OPEN_DEF['definition']},
         'deals': [deal_row(d) for d in pipeline_deals],
         'closed': {'won': totals(won), 'lostByStage': [{'stage': k, **totals(v)} for k, v in sorted(by_stage.items(), key=lambda kv: -len(kv[1]))],
                    'lost': [deal_row(d) for d in lost], 'reasonsDoc': lost_doc,
-                   'reasonsNote': 'lost-reasons.json covers new-business Sales Pipeline deals only.'},
+                   'reasonsNote': 'lost-reasons.json covers new-business Sales Pipeline deals only; losses created after the company\'s first win (expansion at a customer) are listed apart.'},
         'leads': leads,
+        'mqlFunnel': funnel,
+        'paidDeals': paid_deals_view(paid, ctx['deal_by_id'], comp_name),
+        'reviewList': ({'path': os.path.basename(review['path']), 'rows': [{k: r.get(k) for k in ('row', 'company', 'sheet_source', 'hubspot_sources', 'evidence', 'action')} for r in review['rows']],
+                        'leadIds': {str(r): l['id'] for l in leads.get('items', []) for r in l['rows'] if r in ctx['review']}}
+                       if review else None),
+        'rules': {'answeredAt': RULES['answeredAt'], 'sourcePrimary': RULES['source']['primary'], 'mql': RULES['mql']['definition'],
+                  'mainForms': RULES['forms']['mainForms'], 'brandedFlag': RULES['ads']['brandedFlag']},
         'ads': ads,
         'spend': spend,
         'ga4': ga4,
@@ -1467,10 +1777,10 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
         'meetings': meetings,
         'calls': calls,
         'insights': insights,
-        'leadSources': {'uncertainForms': ls.uncertain_forms, 'eventLists': [{'id': l['id'], 'name': l.get('name'), 'show': l.get('show')} for l in ls.counted_event_lists],
+        'leadSources': {'eventLists': [{'id': l['id'], 'name': l.get('name'), 'show': l.get('show')} for l in ls.counted_event_lists],
                         'excludedLists': [{'id': l['id'], 'name': l.get('name'), 'why': l['excludedBecause'] or l.get('kind')}
                                           for l in ls.lists.values() if not l['counts']],
-                        'customerCampaigns': [c['name'] for c in ls.campaigns.values() if c['kind'] == 'customer'],
+                        'checks': {k: v for k, v in ls.checks.items()},
                         'loaded': ls_doc is not None},
         'scope': {'salesPipeline': SCOPE['salesPipelineId'], 'droppedPipelines': list(SCOPE['excludedPipelines'].values()),
                   'customerCompanies': len(removed_customers),
@@ -1493,9 +1803,23 @@ def audit_lines(d):
                  c['to']['count'], usd(c['to']['amount']), len(c['deals'])))
     lines.append('closed: ' + ', '.join('%s %d (%s)' % (x['stage'], x['count'], usd(x['amount'])) for x in d['closed']['lostByStage']))
     if l.get('connected'):
-        lines.append('leads: %d, MQL incl SQL %d (%.1f%%), conflicts %d' % (l['total'], l['mql'], 100 * (l['rate'] or 0), l['conflicts']))
+        lines.append('leads: %d (HubSpot-sourced %d, Sheet fallback %d), Sheet MQL incl SQL %d, review %d, other conflicts %d' % (
+            l['total'], l['hubspotSourced'], l['total'] - l['hubspotSourced'], l['mql'], l['reviewLeads'], l['conflicts']))
+    f = d['mqlFunnel']
+    lines.append('lead -> MQL (90 days, proposed): ' + ('%d / %d = %.1f%%' % (f['numerator'], f['denominator'], 100 * f['rate'])
+                                                         if f['available'] else 'hidden (%s)' % f['reason']))
+    o = d['outbound']
+    lines.append('outbound reply rate: %d / %d = %.1f%% over %d campaigns' % (o['replies'], o['sends'], 100 * (o['rate'] or 0), o['count']))
+    p = d['paidDeals']
+    lines.append('paid deals (%s): %d total, %d Sales Pipeline %s' % (p['basis'], p['total'], len(p['sales']), p['byPlatform']))
+    lines.append('calls (%s): %s' % (d['calls']['classification'], {k: v for k, v in d['calls']['scope'].items()}))
+    rl = [x for x in d['closed']['lost'] if not x['postWin']]
+    lines.append('lost reasons cover %d new-business deals (%d post-win expansions apart)' % (len(rl), len(d['closed']['lost']) - len(rl)))
+    if l.get('connected'):
         if l.get('openai'):
-            lines.append('OpenAI leads: %d confirmed, at most %d' % (l['openai']['confirmed'], l['openai']['atMost']))
+            o = l['openai']
+            lines.append('OpenAI leads: Lead Tracker notes %d named, at most %d; with HubSpot evidence %d named, at most %d' % (
+                o['trackerNamed'], o['trackerAtMost'], o['confirmed'], o['atMost']))
     lines.append('meetings: this month %d matched (+%d unmatched, +%d no contact), upcoming %d matched (+%d unmatched, +%d no contact)' % (
         m['thisMonth']['matched'], m['thisMonth']['unmatched'], m['thisMonth']['noContact'],
         m['upcoming']['matched'], m['upcoming']['unmatched'], m['upcoming']['noContact']))
@@ -1517,6 +1841,11 @@ def main(argv=None):
     ap.add_argument('--current-page', help='the current page data.json, to report what the redesign removes')
     ap.add_argument('--portal-id', help='HubSpot portal id, for record links')
     ap.add_argument('--as-of', help='ISO time the page is "as of" (default now)')
+    ap.add_argument('--call-classification', default=os.environ.get('CALL_CLASSIFICATION'),
+                    help="Strategy's per-call records.jsonl (default $CALL_CLASSIFICATION); without it the built-in call rule is used")
+    ap.add_argument('--review-list', default=os.environ.get('LEAD_SOURCE_REVIEW'), help='lead-source-review.csv (default $LEAD_SOURCE_REVIEW)')
+    ap.add_argument('--paid-export', default=os.environ.get('PAID_EXPORT'),
+                    help="Pipeline's deals export with derived.paid_platform (default $PAID_EXPORT); without it the rules run on synced fields")
     ap.add_argument('--out', required=True)
     ap.add_argument('--quiet', action='store_true')
     args = ap.parse_args(argv)

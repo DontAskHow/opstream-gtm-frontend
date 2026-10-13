@@ -226,7 +226,7 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
         ], x.deals, { sort: 'amount', noun: 'deals', noun1: 'deal', target: (d) => 'deal=' + d.id, active: (d) => s.deal === d.id, text: (d) => [d.name, d.reason, d.basis, d.competitor].join(' ') }) : null,
       }));
       body = table([{ label: 'Why lost' }, ...stagesSeen.map((st) => ({ label: esc(st), num: true, opt: true })), { label: 'Deals', num: true }, { label: 'Amount', num: true }], rows) +
-        `<p class="muted small">${esc(r.basis)} ${esc(c.reasonsNote)}</p>`;
+        `<p class="muted small">${esc(r.basis)} ${esc(c.reasonsNote)}${c.lost.some((d) => d.postWin) ? ` Expansion losses at customers (not categorized): ${c.lost.filter((d) => d.postWin).map((d) => link(esc(d.name), 'deal=' + d.id)).join(', ')}.` : ''}</p>`;
     }
     return `<h3>Closed</h3><div class="tiles">${tiles}</div>${body}`;
   }
@@ -241,73 +241,122 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     const period = s.lp || 'all';
     const items = leadsIn(v, period);
     const mql = items.filter((l) => l.mql).length;
-    const tiles = `<div class="tiles">${tile('Leads', int(items.length), 'companies on the Lead Tracker', ' data-fig="leads"')}${tile('MQL (incl. SQL)', int(mql), '', ' data-fig="mql"')}${tile('Lead → MQL', pct(items.length ? mql / items.length : null), '', ' data-fig="lead-mql"')}${tile('SQL', int(items.filter((l) => l.sql).length))}</div>`;
+    const f = v.mqlFunnel;
+    // The r12 lead → MQL rate shows only when its inputs exist; otherwise there is no tile at all.
+    const funnel = f && f.available ? tile(f.label, pct(f.rate), `<span class="num">${int(f.numerator)}</span> booked via book-a-demo ÷ <span class="num">${int(f.denominator)}</span> form-filling contacts`, ' data-fig="lead-mql-90"') : '';
+    const tiles = `<div class="tiles">${tile('Leads', int(items.length), 'companies on the Lead Tracker', ' data-fig="leads"')}${tile('Source from HubSpot', int(items.filter((l) => l.sourceBasis === 'hubspot').length), `of ${int(items.length)}; the rest fall back to the Lead Tracker`, ' data-fig="hubspot-sourced"')}${tile('Sheet MQL (incl. SQL)', int(mql), `${int(items.filter((l) => l.sql).length)} SQL · Lead Tracker dates`, ' data-fig="mql"')}${funnel}</div>`;
     const max = Math.max(1, ...L.sources.map((src) => items.filter((l) => l.source === src).length));
     const rows = L.sources.map((src) => {
       const xs = items.filter((l) => l.source === src);
-      const m = xs.filter((l) => l.mql).length;
-      const deals = xs.filter((l) => l.deals.length).length;
-      const pipe = xs.reduce((a, l) => a + (l.openAmount || 0), 0);
-      const flags = xs.filter((l) => l.flags.length).length;
       const open = s.src === src;
       return {
         toggle: 'src=' + src + '&sub=', expanded: open,
-        cells: [esc(src), `<span class="barcell">${bar(xs.length, max)}<span class="num">${int(xs.length)}</span></span>`, int(m), int(xs.filter((l) => l.sql).length), pct(xs.length ? m / xs.length : null), int(deals), usd(pipe), flags ? `<span class="warn-t">${int(flags)}</span>` : ''],
+        cells: [esc(src), `<span class="barcell">${bar(xs.length, max)}<span class="num">${int(xs.length)}</span></span>`, int(xs.filter((l) => l.sourceBasis === 'hubspot').length),
+          int(xs.filter((l) => l.mql).length), int(xs.filter((l) => l.deals.length).length), usd(xs.reduce((a, l) => a + (l.openAmount || 0), 0)),
+          xs.some((l) => l.review) ? `<span class="warn-t">${int(xs.filter((l) => l.review).length)}</span>` : ''],
         expand: open ? sourceDetail(v, s, src, xs) : null,
       };
     });
-    const tot = items.reduce((a, l) => a + (l.openAmount || 0), 0);
-    const cols = [{ label: 'Source' }, { label: 'Leads', num: true }, { label: 'MQL', num: true }, { label: 'SQL', num: true, opt: true }, { label: 'Lead → MQL', num: true, opt: true }, { label: 'With a deal', num: true, opt: true }, { label: 'Open pipeline', num: true, opt: true }, { label: 'Flags', num: true, opt: true }];
-    const tbl = table(cols, rows, { foot: ['All sources', int(items.length), int(mql), int(items.filter((l) => l.sql).length), pct(items.length ? mql / items.length : null), int(items.filter((l) => l.deals.length).length), usd(tot), ''] });
-    const ns = v.meta.notSynced.length ? `<p class="muted small">${chip('not yet synced', 'info')} ${esc(v.meta.notSynced.join(', '))}: sub-sources that need them say so. ${esc(L.definition)}</p>` : `<p class="muted small">${esc(L.definition)}</p>`;
-    return section('leads', 'Leads', `${esc(L.sheet.tab)} tab (${esc(L.sheet.title || 'Sheet')}) by Source. Sub-sources and platform splits come from lead-sources.json: ${chip(v.meta.provisional, 'warn')}`,
-      `${tiles}${tbl}${ns}${platformBlock(v)}${outboundBlock(v)}`, periodPicker('lp', period, LEAD_PERIODS));
+    const cols = [{ label: 'Source' }, { label: 'Leads', num: true }, { label: 'From HubSpot', num: true, opt: true }, { label: 'Sheet MQL', num: true }, { label: 'With a deal', num: true, opt: true }, { label: 'Open pipeline', num: true, opt: true }, { label: 'To review', num: true, opt: true }];
+    const tbl = table(cols, rows, { foot: ['All sources', int(items.length), int(items.filter((l) => l.sourceBasis === 'hubspot').length), int(mql), int(items.filter((l) => l.deals.length).length), usd(items.reduce((a, l) => a + (l.openAmount || 0), 0)), int(items.filter((l) => l.review).length)] });
+    const ns = v.meta.notSynced.length ? `<p class="muted small">${chip('not yet synced', 'info')} ${esc(v.meta.notSynced.join(', '))}: until they sync, most leads fall back to the Lead Tracker Source. ${esc(L.definition)}</p>` : `<p class="muted small">${esc(L.definition)}</p>`;
+    return section('leads', 'Leads', `${esc(L.sheet.tab)} companies; Source from HubSpot first (where the conversion happened), else the Lead Tracker. Rules: lead-sources.json + answers of ${esc(dateTime(v.rules.answeredAt))} ${chip(v.meta.provisional, 'warn')}`,
+      `${tiles}${tbl}${ns}${reviewBlock(v, s)}${paidDealsBlock(v, s)}${platformBlock(v)}${outboundBlock(v, s)}`, periodPicker('lp', period, LEAD_PERIODS));
   }
 
   function sourceDetail(v, s, src, xs) {
     const subs = new Map();
     for (const l of xs) { const k = l.subSource || 'No sub-source'; subs.set(k, (subs.get(k) || 0) + 1); }
     const chips = [...subs].sort((a, b) => b[1] - a[1]).map(([k, n]) => `<button type="button" class="chip chip-btn${s.sub === k ? ' on' : ''}" data-set="sub=${encodeURIComponent(s.sub === k ? '' : k)}" aria-pressed="${String(s.sub === k)}">${esc(k)} <b class="num">${int(n)}</b></button>`).join('');
-    const unconfirmed = xs.filter((l) => l.unconfirmed).length;
     let callout = '';
     if (src === 'Paid' && v.leads.platforms.length) {
-      callout = `<p class="small">${v.leads.platforms.map((p) => `<b>${esc(p.name)}</b>: ${int(p.confirmed)} named${p.confirmed !== p.inPaid ? ` (${int(p.confirmed - p.inPaid)} under another Source)` : ''}${p.possible ? `, at most ${int(p.atMost)} <span class="muted">(+${int(p.possible)} with no platform named whose note matches a ${esc(p.name)} conversion event)</span>` : ''}`).join(' · ')}</p>`;
+      callout = `<p class="small">${v.leads.platforms.map((p) => `<b>${esc(p.name)}</b>: ${int(p.confirmed)} named${p.confirmed !== p.trackerNamed ? ` (${int(p.trackerNamed)} by Lead Tracker notes alone)` : ''}${p.possible ? `, at most ${int(p.atMost)} <span class="muted">(+${int(p.possible)} with no platform named whose note matches a ${esc(p.name)} conversion event)</span>` : ''}`).join(' · ')}</p>`;
     }
     const rows = s.sub ? xs.filter((l) => (l.subSource || 'No sub-source') === s.sub) : xs;
     const lst = list('leads-' + src + '-' + (s.sub || ''), [
       { key: 'company', label: 'Company', cell: (l) => esc(l.company) + (l.tag ? ` <span class="tag">${esc(l.tag)}</span>` : '') },
       { key: 'leadDate', label: 'Lead date', cell: (l) => esc(date(l.leadDate)) },
-      { key: 'stage', label: 'Stage', sortVal: (l) => (l.sql ? 2 : l.mql ? 1 : 0), cell: (l) => (l.sql ? 'SQL' : l.mql ? 'MQL' : 'Lead') },
-      { key: 'subSource', label: 'Sub-source', opt: true, cell: (l) => esc(l.subSource || DASH) + (l.unconfirmed ? ' <span class="tag tag-warn">mapping unconfirmed</span>' : '') },
+      { key: 'basis', label: 'Source from', opt: true, sortVal: (l) => l.sourceBasis, cell: (l) => (l.sourceBasis === 'hubspot' ? 'HubSpot' : '<span class="muted">Lead Tracker</span>') },
+      { key: 'subSource', label: 'Sub-source', opt: true, cell: (l) => esc(l.subSource || DASH) },
       { key: 'owner', label: 'Owner', opt: true, cell: (l) => esc(l.owner) },
       { key: 'openAmount', label: 'Open pipeline', num: true, opt: true, cell: (l) => (l.deals.length ? usd(l.openAmount) : '') },
-      { key: 'flags', label: '', sortVal: (l) => l.flags.length, cell: (l) => (l.conflict ? '<span class="tag tag-warn">conflict</span>' : l.flags.length ? '<span class="tag">check</span>' : '') },
+      { key: 'flags', label: '', sortVal: (l) => l.flags.length, cell: (l) => (l.review ? '<span class="tag tag-warn">review</span>' : l.conflict ? '<span class="tag">check</span>' : '') },
     ], rows, { sort: 'leadDate', noun: 'leads', noun1: 'lead', target: (l) => 'lead=' + l.id, active: (l) => s.lead === l.id, text: (l) => [l.company, l.owner, l.subSource, l.notes.join(' ')].join(' ') });
-    return `<div class="chips">${chips}</div>${unconfirmed ? `<p class="small">${int(unconfirmed)} with a form mapping still unconfirmed.</p>` : ''}${callout}${lst}`;
+    return `<div class="chips">${chips}</div>${callout}${lst}`;
+  }
+
+  // The data-side review list (lead-source-review.csv), as given: HubSpot is used, the Sheet is unchanged.
+  function reviewBlock(v, s) {
+    const r = v.reviewList;
+    if (!r) return '';
+    const open = s.rv === '1';
+    const rows = [{
+      toggle: 'rv=1', expanded: open,
+      cells: [`Source disagreements to review <span class="muted small">(${esc(r.path)})</span>`, int(r.rows.length)],
+      expand: open ? list('review', [
+        { key: 'company', label: 'Company', cell: (x) => esc(x.company) },
+        { key: 'sheet_source', label: 'Lead Tracker', cell: (x) => esc(x.sheet_source) },
+        { key: 'hubspot_sources', label: 'HubSpot (used)', cell: (x) => esc(x.hubspot_sources) },
+        { key: 'evidence', label: 'Evidence', opt: true, cell: (x) => `<span class="small">${esc(x.evidence)}</span>` },
+      ], r.rows, { sort: 'company', dir: 'asc', noun: 'rows', noun1: 'row', target: (x) => (r.leadIds[x.row] ? 'lead=' + r.leadIds[x.row] : 'rv=1'), active: (x) => s.lead && r.leadIds[x.row] === s.lead, text: (x) => [x.company, x.sheet_source, x.hubspot_sources, x.evidence].join(' ') }) +
+        `<p class="muted small">${esc((r.rows[0] || {}).action || '')}. Nothing is written to the Sheet.</p>` : null,
+    }];
+    return `<h3>Review list</h3>` + table([{ label: 'List' }, { label: 'Rows', num: true }], rows);
+  }
+
+  function paidDealsBlock(v, s) {
+    const p = v.paidDeals;
+    if (!p) return '';
+    const plats = Object.keys(p.byPlatform).sort((a, b) => p.byPlatform[b] - p.byPlatform[a]);
+    const rows = plats.map((name) => {
+      const xs = p.sales.filter((d) => d.platform === name);
+      const open = s.pd === name;
+      return {
+        toggle: 'pd=' + encodeURIComponent(name), expanded: open,
+        cells: [esc(name), int(xs.length), int(xs.filter((d) => d.branded).length), int(xs.filter((d) => d.level === 'company').length), usd(xs.filter((d) => d.open).reduce((a, d) => a + (d.amount || 0), 0))],
+        expand: open ? list('paid-' + name, [
+          { key: 'name', label: 'Deal', cell: (d) => esc(d.name) + (d.branded ? ` <span class="tag">${esc(v.rules.brandedFlag)}</span>` : '') },
+          { key: 'stage', label: 'Stage', opt: true, cell: (d) => esc(d.stage) },
+          { key: 'amount', label: 'Amount', num: true, cell: (d) => usd(d.amount) },
+          { key: 'via', label: 'Evidence', opt: true, cell: (d) => esc(d.via || DASH) + (d.level === 'company' ? ' <span class="muted small">(company-level)</span>' : '') },
+        ], xs, { sort: 'amount', noun: 'deals', noun1: 'deal', target: (d) => 'deal=' + d.id, active: (d) => s.deal === d.id, text: (d) => [d.name, d.company, d.via].join(' ') }) : null,
+      };
+    });
+    return `<h3>Paid-attributed deals</h3>` + table([{ label: 'Platform' }, { label: 'Sales deals', num: true }, { label: v.rules.brandedFlag, num: true, opt: true }, { label: 'Company-level', num: true, opt: true }, { label: 'Open amount', num: true, opt: true }], rows,
+      { foot: ['All platforms', int(p.sales.length), int(p.branded), int(p.companyLevel), usd(p.sales.filter((d) => d.open).reduce((a, d) => a + (d.amount || 0), 0))] }) +
+      `<p class="muted small">${esc(p.basis)}${p.generatedAt ? ', ' + esc(dateTime(p.generatedAt)) : ''}: ${int(p.total)} paid deals in all, ${int(p.sales.length)} in the Sales Pipeline${p.otherPipelines ? ` (${int(p.otherPipelines)} in Renewal / Customer Success, not shown)` : ''}. A deal counts when one of its contacts has a paid signal (paid form, UTM with a paid medium or click id, paid_touch_campaign, original source); "company-level" means the signal is on another contact at the deal's company.</p>`;
   }
 
   function platformBlock(v) {
     if (!v.ads.length) return '';
     const rows = v.ads.map((a) => {
-      if (!a.connected) return { cells: [esc(a.name), DASH, DASH, '<span class="muted">no report in the data</span>', `<span class="muted small">${esc(a.how)}</span>`] };
+      const check = a.check ? `<div class="small" title="${esc(a.check)}">Pipeline check: ${esc(a.check.split(/\.\s/)[0].replace(/\.$/, ''))}.</div>` : '';
+      if (!a.connected) return { cells: [esc(a.name), DASH, DASH, '<span class="muted">no report in the data</span>' + check, `<span class="muted small">${esc(a.how)}</span>`] };
       const win = a.window ? `${esc(date(a.window.start))} – ${esc(date(a.window.end))}` : DASH;
       const ev = a.events && a.events.length ? `<div class="muted small">${a.events.some((e) => isNum(e.count)) ? a.events.filter((e) => isNum(e.count) && e.count > 0).slice(0, 8).map((e) => `${esc(e.name)} ${int(e.count)}`).join(' · ') : `${plural(a.events.length, 'configured event')}: ${a.events.map((e) => esc(e.name.split(' - ')[0])).join(', ')}`}</div>` : '';
       const lp = a.landingPages && a.landingPages.length ? `<div class="muted small">${int(a.landingPages[0].conversions)} on ${esc(a.landingPages[0].url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''))}</div>` : '';
-      const conv = `<span class="num">${int(a.conversions)}</span> ${esc(a.conversionType || 'conversions')}${isNum(a.allConversions) ? ` · <span class="num">${int(a.allConversions)}</span> all conversions` : ''}${ev}${lp}`;
+      const conv = `<span class="num">${int(a.conversions)}</span> ${esc(a.conversionType || 'conversions')}${isNum(a.allConversions) ? ` · <span class="num">${int(a.allConversions)}</span> all conversions` : ''}${ev}${lp}${check}`;
       return { cells: [esc(a.name) + (a.stale ? ' ' + chip('data ends ' + date(a.dataThrough), 'warn') : ''), usd(a.spend), `<span class="num">${int(a.spendDays)}</span> days<div class="muted small">${win}${a.window && a.window.basis === 'report window' ? ' (report window)' : ''}</div>`, conv, `<span class="small">${esc(a.how)}</span>`] };
     });
     return `<h3>Ad platforms: platform-reported events, not leads</h3><p class="muted small">Each platform counts its own conversion events. They are not companies or contacts and are not added to the lead counts above.</p>` +
       table([{ label: 'Platform' }, { label: 'Spend', num: true }, { label: 'Days with spend', num: true, opt: true }, { label: 'Reported events' }, { label: 'How the platform counts', opt: true }], rows);
   }
 
-  function outboundBlock(v) {
+  function outboundBlock(v, s) {
     const o = v.outbound;
     if (!o || !o.campaigns) return '';
-    const rows = o.campaigns.map((c) => ({ cells: [esc(c.name) + (c.mostlyInvite ? ` <span class="tag tag-warn" title="${esc(`${int(c.inviteReplies)} of ${int(c.repliesReported)} replies were on the LinkedIn invite step and are not counted`)}">replies look automatic</span>` : ''), esc(c.status), int(c.delivered), `${int(c.replies)}${c.replies !== c.repliesReported && isNum(c.repliesReported) ? ` <span class="muted small">of ${int(c.repliesReported)}</span>` : ''}`, pct(c.rate), '<span class="muted">not tracked</span>'] }));
-    const excluded = o.excluded.filter((c) => c.kind === 'customer').map((c) => esc(c.name));
-    return `<h3>Outbound (Lemlist): sales campaigns</h3>` + table([{ label: 'Campaign' }, { label: 'Status', opt: true }, { label: 'Delivered', num: true }, { label: 'Real replies', num: true }, { label: 'Reply rate', num: true }, { label: 'Opens / meetings', opt: true }], rows,
-      { foot: ['Sales campaigns', '', int(o.delivered), int(o.replies), pct(o.rate), ''] }) +
-      `<p class="muted small">${esc(o.basis)} Opens and meetings are not tracked in Lemlist (open tracking is off; meetings are booked in HubSpot). ${excluded.length ? `Not in outbound performance (customer → new company; kept as the "Customer job changer" lead sub-source): ${excluded.join(', ')}.` : ''}</p>`;
+    const tag = s.ot || '';
+    const xs = tag ? o.campaigns.filter((c) => c.tags.includes(tag)) : o.campaigns;
+    const counts = {};
+    for (const c of o.campaigns) for (const t of c.tags) counts[t] = (counts[t] || 0) + 1;
+    const chips = Object.keys(counts).map((t) => `<button type="button" class="chip chip-btn${tag === t ? ' on' : ''}" data-set="ot=${tag === t ? '' : t}" aria-pressed="${String(tag === t)}">${esc(o.tagLabels[t] || t)} <b class="num">${int(counts[t])}</b></button>`).join('');
+    const sends = xs.reduce((a, c) => a + (c.sent || 0), 0), replies = xs.reduce((a, c) => a + (c.replies || 0), 0);
+    const rows = xs.map((c) => ({ cells: [esc(c.name) + c.flags.map((f) => ` <span class="tag tag-warn">${esc(f)}</span>`).join('') + (c.mostlyInvite ? ` <span class="tag tag-warn" title="${esc(`${int(c.inviteReplies)} of ${int(c.replies)} replies came on the LinkedIn invite step`)}">replies look automatic</span>` : ''),
+      `<span class="small">${c.tags.map((t) => esc(o.tagLabels[t] || t)).join(', ')}</span>`, esc(c.status), int(c.sent), int(c.replies), pct(c.rate), '<span class="muted">not tracked</span>'] }));
+    return `<h3>Outbound (Lemlist)</h3><div class="tiles">${tile('Outbound reply rate', pct(o.rate), `<span class="num">${int(o.replies)}</span> replies ÷ <span class="num">${int(o.sends)}</span> sends, all ${int(o.count)} campaigns`, ' data-fig="reply-rate"')}</div><div class="chips">${chips}</div>` +
+      table([{ label: 'Campaign' }, { label: 'Tags', opt: true }, { label: 'Status', opt: true }, { label: 'Sends', num: true }, { label: 'Replies', num: true }, { label: 'Reply rate', num: true }, { label: 'Opens / meetings', opt: true }], rows,
+        { foot: [tag ? `Tagged ${esc(o.tagLabels[tag] || tag)}` : 'All campaigns', '', '', int(sends), int(replies), pct(sends ? replies / sends : null), ''] }) +
+      `<p class="muted small">${esc(o.definition)} Opens and meetings are not tracked in Lemlist (open tracking is off; meetings are booked in HubSpot).</p>`;
   }
 
   // ---------- meetings ----------
@@ -382,7 +431,9 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     const sc = C.scope;
     return section('calls', 'Calls', 'Fathom recordings, sales and prospect calls only.',
       tiles + table([{ label: 'Recorded by' }, { label: 'Calls', num: true }, { label: 'Sales Pipeline company', num: true, opt: true }, { label: 'With summary', num: true, opt: true }], rows) +
-      `<p class="muted small">${esc(C.definition)} Not counted: ${int(sc.internal)} internal-only, ${int(sc.cs)} recorded by CS owners, ${int(sc.customer)} customer calls, of ${int(sc.total)} recordings.</p>`,
+      (C.classification === 'strategy'
+        ? `<p class="muted small">${esc(C.definition)} Of ${int(sc.total)} recordings: <span data-fig="calls-prospect">${int(sc.prospect)}</span> prospect, ${int(sc.customer)} customer, ${int(sc.internal)} internal, ${int(sc.partner_other)} partner/other${sc.unclassified ? `, ${int(sc.unclassified)} not in the classification` : ''}.</p>`
+        : `<p class="small">${chip('call classification unavailable', 'warn')} ${esc(C.classificationNote || '')}</p><p class="muted small">${esc(C.definition)} Not counted: ${int(sc.internal)} internal-only, ${int(sc.cs)} recorded by CS owners, ${int(sc.customer)} customer calls, of ${int(sc.total)} recordings.</p>`),
       periodPicker('cp', period, CALL_PERIODS));
   }
 
@@ -402,7 +453,7 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
 
   function scopeFooter(v) {
     const cp = v.scope.currentPage;
-    return `<footer class="foot small muted"><p><b>Scope.</b> Sales Pipeline only; ${esc(v.scope.droppedPipelines.join(', '))} pipelines dropped. Closed Won Sales Pipeline deals stay in pipeline figures. Customer companies (${int(v.scope.customerCompanies)} in HubSpot: lifecycle customer, a Closed Won deal, or a Renewal / Customer Success deal) are excluded from meetings and calls only, with the call rule above.${cp ? ` Compared with the current page (built ${esc(dateTime(cp.builtAt))}), this removes ${int(cp.companies)} customer companies, their ${int(cp.meetings)} meetings and ${int(cp.recordings)} of ${int(cp.recordingsTotal)} recordings.` : ''}</p>
+    return `<footer class="foot small muted"><p><b>Scope.</b> Sales Pipeline only; ${esc(v.scope.droppedPipelines.join(', '))} pipelines dropped. Closed Won Sales Pipeline deals stay in pipeline figures. Customer companies (${int(v.scope.customerCompanies)} in HubSpot: lifecycle customer, a Closed Won deal, or a Renewal / Customer Success deal) are excluded from meetings only, with the call rule in the Meetings section. Calls follow ${v.calls.classification === 'strategy' ? 'Strategy\'s per-call classification' : 'the call rule (call classification unavailable)'}.${cp ? ` Compared with the current page (built ${esc(dateTime(cp.builtAt))}), this removes ${int(cp.companies)} customer companies, their ${int(cp.meetings)} meetings and ${int(cp.recordings)} of ${int(cp.recordingsTotal)} recordings.` : ''}</p>
 <p><b>Times</b> are America/Phoenix, labelled PT. <b>Lead-source mapping</b> is ${esc(v.meta.provisional)} (lead-sources.json${v.meta.leadSourcesAt ? ', ' + esc(dateTime(v.meta.leadSourcesAt)) : ''}). <b>Open pipeline:</b> ${esc(v.headline.definition)}</p></footer>`;
   }
 
@@ -414,7 +465,8 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     return drawer(esc(d.name), chip(d.stage, d.won ? 'ok' : d.lost ? 'neutral' : 'info') + (d.onHold ? chip('On Hold', 'warn') : ''), [
       ['Deal', kv([['Company', esc(d.company || DASH)], ['Amount', usd(d.amount)], ['Weighted', d.open ? usd(d.weighted) : null], ['Owner', esc(d.owner)],
         ['Close date', esc(date(d.close)) + (d.open && parseT(d.close) && parseT(d.close) < now ? ' <span class="warn-t">passed</span>' : '')], ['Created', esc(date(d.created))],
-        ['Lost reason', d.lost ? esc(d.lostReason || 'none recorded') : null], ['Lost category', d.lostCategory ? esc(d.lostCategory) + (d.lostBasis ? `<div class="muted small">${esc(d.lostBasis)}</div>` : '') : null]])],
+        ['Lost reason', d.lost ? esc(d.lostReason || 'none recorded') : null], ['Lost category', d.lostCategory ? esc(d.lostCategory) + (d.lostBasis ? `<div class="muted small">${esc(d.lostBasis)}</div>` : '') : (d.postWin ? '<span class="muted">expansion at a customer (created after the first win): not categorized</span>' : null)],
+        ['Paid', d.paid ? `${esc(d.paid.platform)}${d.paid.branded ? ` <span class="tag">${esc(v.rules.brandedFlag)}</span>` : ''} <span class="muted small">${esc(d.paid.via || '')}${d.paid.level === 'company' ? ', company-level' : ''} (${esc(v.paidDeals.basis)})</span>` : null]])],
       ['HubSpot', ext(hsUrl(v, '0-3', d.id), 'Open the deal in HubSpot') || '<span class="muted">No portal id given, so no link.</span>'],
     ]);
   }
@@ -422,17 +474,19 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
   function leadDrawer(v, id) {
     const l = v.leadIndex[id];
     if (!l) return drawer('Lead not found', '', [['', '<p>This lead is not in the data.</p>']]);
-    const ev = l.evidence.length ? `<ul class="plain">${l.evidence.map((e) => `<li><b>${esc(e.rule)}</b>: ${esc(e.source || 'no source')}${e.platform ? ' · ' + esc(e.platform) : ''} <span class="muted">${esc(e.detail || '')}</span>${e.unconfirmed ? ' <span class="tag tag-warn">mapping unconfirmed</span>' : ''}${e.at ? ` <span class="muted small">${esc(date(e.at))}</span>` : ''}</li>`).join('')}</ul>` : '<p class="muted">No HubSpot or Lemlist evidence (form, list, campaign and source fields are not yet synced).</p>';
+    const ev = l.evidence.length ? `<ul class="plain">${l.evidence.map((e) => `<li><b>${esc(e.rule)}</b>${e.decides ? '' : ' <span class="muted small">(evidence only)</span>'}: ${esc(e.source || 'no source')}${e.platform ? ' · ' + esc(e.platform) : ''}${e.branded ? ` <span class="tag">${esc(v.rules.brandedFlag)}</span>` : ''} <span class="muted">${esc(e.detail || '')}</span>${e.at ? ` <span class="muted small">${esc(date(e.at))}</span>` : ''}</li>`).join('')}</ul>` : `<p class="muted">No HubSpot or Lemlist evidence${v.meta.notSynced.length ? ' (form, list, campaign and source fields are not yet synced)' : ''}.</p>`;
     const ins = l.insight;
     const insight = ins ? kv([['Last call', esc(date(ins.lastCall)) + (ins.calls ? ` · ${plural(ins.calls, 'call')}` : '')], ['Summary', ins.text ? esc(ins.text) : null], ['Pains', ins.pains.length ? ins.pains.map(esc).join('<br>') : null], ['Objections', ins.objections.length ? esc(ins.objections.join(', ')) : null], ['Competitors', ins.competitors.length ? esc(ins.competitors.join(', ')) : null], ['Next step', ins.nextStep ? esc(ins.nextStep) : null], ['Risk', ins.risk.length ? ins.risk.map(esc).join('<br>') : null], ['Basis', ins.basis ? `<span class="muted">${esc(ins.basis)}</span>` : null]]) : '';
     const deals = l.deals.length ? `<ul class="plain">${l.deals.map((d) => `<li>${link(esc(d.name), 'deal=' + d.id)} · ${esc(d.stage)} · <span class="num">${usd(d.amount)}</span></li>`).join('')}</ul>` : '<p class="muted">No Sales Pipeline deal at this company.</p>';
     const meetings = l.meetings.length ? `<ul class="plain">${l.meetings.map((m) => `<li>${m.inList ? link(esc(m.title), 'mtg=' + m.id) : esc(m.title)} <span class="muted small">${esc(dateTime(m.start))} · ${esc(m.owner)}</span></li>`).join('')}</ul>` : '';
     const contacts = l.contacts.length ? `<ul class="plain">${l.contacts.map((c) => `<li>${esc(c.name || 'Unnamed contact')}${c.title ? ` <span class="muted">${esc(c.title)}</span>` : ''} <span class="muted small">${esc(c.lifecycle || '')}</span></li>`).join('')}</ul>${l.contactCount > l.contacts.length ? `<p class="muted small">${int(l.contactCount)} contacts in HubSpot</p>` : ''}` : '';
     const co = l.hubspot.companyIds[0];
-    return drawer(esc(l.company), chip(l.source, 'info') + (l.subSource ? chip(l.subSource, l.unconfirmed ? 'warn' : 'neutral') : '') + (l.tag ? chip(l.tag, 'neutral') : '') + (l.conflict ? chip('conflict', 'warn') : ''), [
-      ['Source', kv([['Source', esc(l.source) + ' <span class="muted small">Lead Tracker, column B (wins)</span>'], ['Rule that fired', esc(l.rule)], ['Sub-source', l.subSource ? esc(l.subSource) + ` <span class="muted small">${esc(v.meta.provisional)}</span>` : null],
+    return drawer(esc(l.company), chip(l.source, 'info') + (l.subSource ? chip(l.subSource, 'neutral') : '') + (l.tag ? chip(l.tag, 'neutral') : '') + (l.review ? chip('review', 'warn') : ''), [
+      ['Source', kv([['Source', esc(l.source) + ` <span class="muted small">${l.sourceBasis === 'hubspot' ? 'from HubSpot (primary)' : 'Lead Tracker fallback: no HubSpot evidence'}</span>`],
+        ['Rule that fired', esc(l.rule)], ['Lead Tracker Source', esc(l.sheetSource) + (l.sheetSource !== l.source ? ' <span class="tag tag-warn">differs: on the review list</span>' : '')],
+        ['Sub-source', l.subSource ? esc(l.subSource) + (l.tag ? ` <span class="tag">${esc(l.tag)}</span>` : '') + ` <span class="muted small">${esc(v.meta.provisional)}</span>` : null],
         ['Possible platforms', l.possiblePlatforms ? esc(l.possiblePlatforms.join(', ')) + ' <span class="muted small">(note matches a configured conversion event)</span>' : null]])],
-      ['Evidence', ev + (l.flags.length ? `<ul class="plain">${l.flags.map((f) => `<li><span class="tag tag-warn">${f.kind === 'conflict' ? 'conflict' : 'check'}</span> ${esc(f.text)}</li>`).join('')}</ul><p class="muted small">Flagged, not resolved: the Sheet's Source stays.</p>` : '')],
+      ['Evidence', ev + (l.flags.length ? `<ul class="plain">${l.flags.map((f) => `<li><span class="tag tag-warn">${f.kind === 'review' ? 'review' : f.kind === 'conflict' ? 'other evidence' : 'check'}</span> ${esc(f.text)}</li>`).join('')}</ul><p class="muted small">Flagged, not resolved: nothing is written to the Sheet.</p>` : '')],
       ['Dates', kv([['Lead', esc(date(l.leadDate))], ['MQL', esc(date(l.mqlDate))], ['SQL', esc(date(l.sqlDate))]])],
       ['Company', kv([['Owner (Sheet)', esc(l.owner)], ['HubSpot owner', l.companyOwner ? esc(l.companyOwner) : null], ['Lifecycle', l.lifecycle ? esc(l.lifecycle) : null], ['HubSpot match', esc(l.hubspot.matchRule || 'not matched to a HubSpot company')], ['HubSpot', co ? ext(hsUrl(v, '0-2', co), 'Open the company') || null : null]])],
       ['Deals', deals], ['Meetings', meetings], ['Contacts', contacts], ['Insight', insight],
@@ -449,6 +503,12 @@ ${sections.filter((s) => s && s[1]).map(([label, html]) => `<section class="dsec
     return drawer(esc(m.title), (m.matched ? chip('matched', 'ok') : chip(m.linked === false ? 'no contact linked' : 'unmatched', 'neutral')) + (kind === 'call' ? chip('Fathom', 'neutral') : ''), [
       [kind === 'call' ? 'Call' : 'Meeting', kv([['When', esc(dateTime(m.start))], [kind === 'call' ? 'Recorded by' : 'Owner', esc(kind === 'call' ? m.recorder : m.owner)], ['Outcome', m.outcome ? esc(m.outcome.toLowerCase()) : null], ['Why unmatched', m.matched ? null : esc(m.reason || DASH)], ['HubSpot', kind === 'call' ? null : ext(hsUrl(v, '0-47', m.id), 'Open the meeting') || null]])],
       ['Companies and deals', comps], ['Guests', people],
+      ['Strategy', m.strategy ? kv([['Classified', esc((m.strategy.reason || '').replace(/_/g, ' '))], ['Call type', m.strategy.callType ? esc(m.strategy.callType.replace(/_/g, ' ')) : null],
+        ['Deal at call time', m.strategy.deal ? link(esc(m.strategy.deal.name), 'deal=' + m.strategy.deal.id) + ` <span class="muted small">${esc(m.strategy.deal.stage || '')}</span>` : null],
+        ['Buyer roles', m.strategy.buyerRoles.length ? esc(m.strategy.buyerRoles.join(', ').replace(/_/g, ' ')) : null],
+        ['Competitors', m.strategy.competitors.length ? esc(m.strategy.competitors.join(', ')) : null],
+        ['Objections', m.strategy.objections.length ? m.strategy.objections.map((o) => `<b>${esc(o.category)}</b> <span class="muted">${esc(o.quote || '')}</span>`).join('<br>') : null],
+        ['Next steps', m.strategy.nextSteps.length ? m.strategy.nextSteps.map(esc).join('<br>') : null]]) : ''],
       ['Fathom summary', rec && rec.summary ? `<div class="summary">${esc(rec.summary).replace(/\n/g, '<br>')}</div>${rec.transcript ? '<p class="muted small">Transcript in Fathom.</p>' : ''}` : (kind === 'call' ? '<p class="muted">No summary.</p>' : '')],
     ]);
   }

@@ -70,17 +70,18 @@ Each goal's current value is computed in the page from the same data the overvie
 | `meetings_this_month` | CRM meetings starting this calendar month (PT), past and upcoming | ≥ target | — |
 | `meetings_upcoming` | CRM meetings starting from now on | ≥ target | — |
 | `commit_stage_amount` | Open amount of the open, non-On-Hold deals in the headline pipeline's commit stages (see below) | ≥ target | — |
-| `lead_to_mql_rate` | Percent of Lead Tracker rows with an MQL date (see below) | ≥ target | — |
+| `lead_to_mql_rate` | Distinct contacts who booked through the book-a-demo HubSpot meeting link ÷ distinct contacts with a form submission, trailing 90 days PT (proposed; see below) | ≥ target | — |
 | `unowned_lead_count` | Lead Tracker rows with no owner (see below) | ≤ target | — |
-| `outbound_reply_rate` | Lemlist replies ÷ sends × 100 over the **running** campaigns that report both | ≥ target | — |
+| `outbound_reply_rate` | Lemlist replies ÷ sends × 100 over **every** campaign, any status, that reports both | ≥ target | — |
 | `ai_share_of_voice` | Otterly AI share of voice (percent), only while Otterly is connected | ≥ target | — |
 | `closed_lost_to_competitor_count` | Closed-lost deals in the headline pipeline whose lost reason names `competitor` | ≤ target | — |
 
 Rules behind the new metrics. A value the data can't give shows "—" and the goal is neither met nor missed.
 
 - **Commit stages** are picked from HubSpot's stage metadata, never by name: every open stage of the headline pipeline with a stage probability of at least 0.7 (`COMMIT_PROBABILITY`). On Hold deals are left out, as on the Open amount tile. With no such stage the value is unknown. The goal shows which stages it counted.
-- **Leads** are the rows of the pipeline Sheet's Lead Tracker tab (`sheet-review.json` `leads[]`). Only rows in that Sheet count as leads. HubSpot contacts don't. The build keeps three counts (`leadTracker` in `data.js`: rows, rows with an MQL date, rows without an owner), never the rows. A row is unowned when its owner cell is blank or a placeholder such as "not assigned", "unassigned", "none" or "n/a". Rates are rounded to 0.1 percent.
-- **Outbound reply rate** counts running campaigns only, so paused and draft campaigns don't hold the current rate down or up. Campaigns that don't report sends or replies are skipped, and with no sends the rate is unknown.
+- **Unowned leads** are Lead Tracker rows (`leadTracker` in `data.js`: rows, rows with an MQL date, rows without an owner; never the rows). A row is unowned when its owner cell is blank or a placeholder such as "not assigned", "unassigned", "none" or "n/a".
+- **Lead → MQL rate** (r12, proposed) is per contact: contacts who booked through the book-a-demo HubSpot meeting link (meeting source `MEETINGS_PUBLIC` plus a booking-link match, via meeting → contact associations) ÷ contacts with at least one form submission, both over the trailing 90 days in PT. It reads `mqlFunnel` (`available`, `numerator`, `denominator`); while those HubSpot fields are not synced the value is unknown and the page hides the metric. Rates are rounded to 0.1 percent.
+- **Outbound reply rate** (r12) counts every Lemlist campaign in any status, including the job-changer, website-intent and Bad ICP campaigns; their tags are filters, not exclusions. Campaigns that don't report sends or replies are skipped, and with no sends the rate is unknown.
 - **AI share of voice** is Otterly's `shareOfVoice` as of its last successful fetch (`times.ai`). It's unknown when the Otterly source isn't connected.
 - **Closed lost to a competitor** matches `competitor` as a whole word or phrase, in any case, inside each closed-lost deal's lost reason (or a `competitor` field, if the deal carries one). "Rival" matches "went with rival" but not "rivalry". The count has no headline tile, but it cites the lost-reasons panel.
 

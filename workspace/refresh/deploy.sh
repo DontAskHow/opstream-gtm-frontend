@@ -8,6 +8,11 @@
 #   workspace/refresh/deploy.sh --enable   # also (re)enable the schedule
 #   workspace/refresh/deploy.sh --disabled # create or leave the schedule DISABLED
 #   workspace/refresh/deploy.sh --no-app   # skip uploading index.html/app.js/styles.css/vendor
+#   workspace/refresh/deploy.sh --onepage DIR
+#                                          # serve the one-page workspace: upload DIR/index.html (built by
+#                                          # scripts/workspace-data.py + onepage/build.mjs) as the preview's
+#                                          # index.html instead of the workspace app. Checked first with
+#                                          # onepage/deploy-check.mjs; its data is fixed at build time.
 #
 # Never uploads insights.json or lost-reasons.json: the Strategy seat publishes
 # those with refresh/publish-insights.mjs and refresh/publish-lost-reasons.mjs.
@@ -18,17 +23,21 @@ export AWS_PROFILE="${AWS_PROFILE:-opstream-deploy}"
 export AWS_REGION=us-east-2 AWS_DEFAULT_REGION=us-east-2
 export AWS_PAGER=""
 
-ENABLE=0; DISABLE=0; APP=1
-for a in "$@"; do
-  case "$a" in
+ENABLE=0; DISABLE=0; APP=1; ONEPAGE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
     --enable) ENABLE=1 ;;
     --disabled) DISABLE=1 ;;
     --no-app) APP=0 ;;
-    *) echo "unknown option $a" >&2; exit 2 ;;
+    --onepage) ONEPAGE="${2:?--onepage needs a directory}"; shift ;;
+    *) echo "unknown option $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# The one-page build is checked before anything touches AWS.
+if [ -n "$ONEPAGE" ]; then ONEPAGE_FILE=$(node "$ROOT/onepage/deploy-check.mjs" "$ONEPAGE") || exit 1; APP=0; fi
 ACCOUNT=080403790510
 FN=gtm-preview-refresh
 ROLE=gtm-preview-refresh-role
@@ -163,6 +172,12 @@ if [ "$APP" = 1 ]; then
   up charts.js vendor/gtm-charts.js "application/javascript; charset=utf-8"
   up insights.js vendor/insights.js "application/javascript; charset=utf-8"
   up lost-reasons.js vendor/lost-reasons.js "application/javascript; charset=utf-8"
+fi
+
+# ---------- one-page workspace (replaces the app's index.html) ----------
+if [ -n "$ONEPAGE" ]; then
+  aws s3 cp "$ONEPAGE_FILE" "s3://$PREVIEW_BUCKET/index.html" --content-type "text/html; charset=utf-8" --cache-control no-store --only-show-errors
+  echo "page      s3://$PREVIEW_BUCKET/index.html (one-page workspace from $ONEPAGE)"
 fi
 
 echo "function  $FN_ARN"

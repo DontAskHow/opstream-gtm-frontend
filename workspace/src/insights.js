@@ -193,17 +193,17 @@
       const priced = xs.filter((x) => num(x.amount) != null);
       out.commit_stage_amount = !xs.length ? 0 : priced.length ? priced.reduce((a, x) => a + x.amount, 0) : null;
     }
-    // Lead Tracker rows only (the pipeline Sheet's own list of leads).
+    // Lead Tracker rows: unowned leads only. lead_to_mql_rate (r12) is per contact: book-a-demo bookings ÷
+    // form-filling contacts over 90 days, from d.mqlFunnel; unknown (hidden) until those inputs are synced.
     const lt = d.leadTracker;
-    if (lt && num(lt.total) != null) {
-      out.lead_to_mql_rate = lt.total > 0 && num(lt.mql) != null ? pct1(lt.mql / lt.total) : null;
-      out.unowned_lead_count = num(lt.unowned);
-    }
-    // Running campaigns that report both sent and replied.
+    if (lt && num(lt.total) != null) out.unowned_lead_count = num(lt.unowned);
+    const f = d.mqlFunnel;
+    if (f && f.available === true && num(f.numerator) != null && num(f.denominator) > 0) out.lead_to_mql_rate = pct1(f.numerator / f.denominator);
+    // r12: every campaign in any status that reports both figures; tags are filters, not exclusions.
     if (d.outbound) {
-      const run = arr(d.outbound.campaigns).filter((c) => c && c.status === 'running' && num(c.sent) != null && num(c.replied) != null);
-      const sent = run.reduce((a, c) => a + c.sent, 0);
-      out.outbound_reply_rate = sent > 0 ? pct1(run.reduce((a, c) => a + c.replied, 0) / sent) : null;
+      const all = arr(d.outbound.campaigns).filter((c) => c && num(c.sent) != null && num(c.replied) != null);
+      const sent = all.reduce((a, c) => a + c.sent, 0);
+      out.outbound_reply_rate = sent > 0 ? pct1(all.reduce((a, c) => a + c.replied, 0) / sent) : null;
     }
     if (d.ai && d.ai.connected === true) out.ai_share_of_voice = num(d.ai.shareOfVoice);
     return out;

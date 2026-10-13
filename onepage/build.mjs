@@ -35,7 +35,8 @@ function lostView(closed) {
   const checked = doc ? lostReasons.validate(doc) : null;
   const valid = checked && checked.ok ? doc : null;
   const pipeline = SCOPE.salesPipelineId;
-  const deals = closed.lost.map((d) => ({ id: lostReasons.dealKey(d.id), lost: true, pipeline, name: d.name, amount: d.amount, lostReason: d.lostReason }));
+  // New business only: a loss created after the company's first win is an expansion at a customer.
+  const deals = closed.lost.filter((d) => !d.postWin).map((d) => ({ id: lostReasons.dealKey(d.id), lost: true, pipeline, name: d.name, amount: d.amount, lostReason: d.lostReason }));
   const cat = lostReasons.categorize({ closedLost: { pipeline }, deals }, valid);
   const stageOf = Object.fromEntries(closed.lost.map((d) => [d.id, d.stage]));
   const rows = cat.rows.map((r) => ({
