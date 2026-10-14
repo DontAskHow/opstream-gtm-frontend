@@ -46,7 +46,11 @@ stop the others:
   hubspot_imports           the import log
   hubspot_contact_backfill  only with HUBSPOT_CONTACT_BACKFILL=1 (or restart,
                             which starts over once per value): re-reads
-                            every contact's properties once
+                            every contact's properties once. Contact
+                            properties added to OBJECT_TYPES (the
+                            hs_v2_date_entered_* lifecycle dates, say) reach
+                            contacts stored earlier only through a new
+                            restart value
   hubspot_meeting_backfill  the same for meetings, with HUBSPOT_MEETING_BACKFILL;
                             each backfill reads at most HUBSPOT_BACKFILL_MAX_PAGES
                             (default 150) pages a run and resumes next run
@@ -95,6 +99,9 @@ def hs_request(client, method, url, body=None, search=False):
             return status, payload
         time.sleep(delay)
 
+# HubSpot's standard contact lifecycle stages, for their entry-date properties.
+LIFECYCLE_STAGES = ("subscriber", "lead", "marketingqualifiedlead", "salesqualifiedlead", "opportunity",
+                    "customer", "evangelist", "other")
 # object_type -> (modified-date property, [properties to fetch])
 OBJECT_TYPES = {
     "contacts": ("lastmodifieddate", ["city", "company", "country", "createdate", "email",
@@ -112,7 +119,14 @@ OBJECT_TYPES = {
         # platform and AI referral (config/lead-rules.json reporting.adLeads).
         "hs_analytics_first_url", "hs_analytics_first_referrer",
         "hs_lifecyclestage_marketingqualifiedlead_date",
-        "hs_lifecyclestage_salesqualifiedlead_date", "hs_lifecyclestage_customer_date"]),
+        "hs_lifecyclestage_salesqualifiedlead_date", "hs_lifecyclestage_customer_date",
+        # Lifecycle stage entry dates. Portals on HubSpot's newer lifecycle
+        # properties return the hs_v2_date_entered_* ones and leave out the
+        # hs_lifecyclestage_*_date ones above; HubSpot leaves out any property a
+        # portal does not have, so asking for both is safe. Custom stages'
+        # hs_v2_date_entered_<id> come from discover_contact_props().
+        *("hs_v2_date_entered_" + stage for stage in LIFECYCLE_STAGES),
+        *("hs_lifecyclestage_%s_date" % stage for stage in ("subscriber", "opportunity", "evangelist", "other"))]),
     "companies": ("hs_lastmodifieddate", ["annualrevenue", "city", "country", "createdate",
         "domain", "hs_lastmodifieddate", "hs_object_id", "hubspot_owner_id", "industry",
         "lifecyclestage", "name", "numberofemployees", "phone", "state"]),
@@ -146,8 +160,9 @@ OBJECT_TYPES = {
         "hs_lastmodifieddate", "hs_object_id", "hs_product_id", "name", "price", "quantity"]),
 }
 # NOTE: tickets deliberately excluded (outside registered scope).
-# Portal-defined contact properties fetched when the portal has them.
-CUSTOM_CONTACT_PROP = re.compile(r"^(paid_touch_campaign|utm_\w+)$", re.I)
+# Portal-defined contact properties fetched when the portal has them, and the
+# entry dates of any custom lifecycle stage (hs_v2_date_entered_<stage id>).
+CUSTOM_CONTACT_PROP = re.compile(r"^(paid_touch_campaign|utm_\w+|hs_v2_date_entered_\w+)$", re.I)
 # Meeting properties naming the booking (meetings) link, by name or label,
 # fetched when GET /crm/v3/properties/meetings lists them.
 MEETING_LINK_NAME = re.compile(r"booking|meetings?_link|scheduling_page", re.I)
@@ -648,9 +663,9 @@ def discover_props(client, otype, wanted, what, log):
 
 
 def discover_contact_props(client, log):
-    """Custom paid_touch_campaign / utm_* contact properties, when the portal has them."""
+    """Custom paid_touch_campaign / utm_* contact properties and lifecycle stage entry dates, when the portal has them."""
     return discover_props(client, "contacts", lambda p: CUSTOM_CONTACT_PROP.match(str(p["name"])),
-                          "custom attribution properties", log)
+                          "custom attribution and lifecycle date properties", log)
 
 
 def discover_meeting_props(client, log):

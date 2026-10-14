@@ -1,15 +1,18 @@
 """workspace.json 'strategy' (docs/workspace-strategy.md), built by scripts/workspace-data.py from a synthetic brain.db:
-contact lifecycle and conversion fields, meeting-link bookings, contact -> deal ids and dealstage entry times. Also:
-the rest of workspace.json is the same with or without it, the over-budget fallbacks, and the privacy rules.
+contact lifecycle and conversion fields, meeting-link bookings, contact -> deal ids and dealstage entry times, leads
+by first form fill month, scheduling pages. Also: the rest of workspace.json is the same with or without it, the
+over-budget fallbacks, the privacy rules, and the lifecycle date properties hubspot_sync.py asks for.
 Every company, person, id and figure is invented.
 
     timeout 300 python3 -m unittest scripts/tests/test_workspace_strategy.py
 """
 import importlib.util
 import json
+import logging
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -22,6 +25,9 @@ PAT = 'quill'  # synthetic; real scrub patterns never enter the repo
 SALES = wd.SCOPE['salesPipelineId']
 DEMO_PAGE = wd.RULES['mql']['bookingLinkIds'][0]
 PUBLIC = wd.REPORTING['meetings']['sourceValue']
+INTERNAL = wd.REPORTING['contacts']['internalDomains'][0]
+CAREERS = wd.REPORTING['contacts']['excludedFormNamePrefixes'][0]
+DEMO_SLUG = 'synthetic-rep/website-book-a-demo'
 
 
 class Strategy(unittest.TestCase):
@@ -71,15 +77,28 @@ class Strategy(unittest.TestCase):
                 hs_lifecyclestage_marketingqualifiedlead_date='2026-01-05T12:30:00.123Z',
                 hs_lifecyclestage_salesqualifiedlead_date='2026-01-10T00:00:00.000Z',
                 first_conversion_event_name='Demo form: Pricing page', first_conversion_date='2026-01-03T00:00:00.000Z',
-                recent_conversion_event_name='Meetings Link: book-a-demo', recent_conversion_date='2026-01-04T00:00:00.000Z',
+                recent_conversion_event_name='Meetings Link: ' + DEMO_SLUG, recent_conversion_date='2026-01-04T00:00:00.000Z',
                 num_conversion_events='2')
         link('deals', '901', 'contacts', '101')
         contact('102', 'b102@alpha.example')                                   # on deal 902 via the extras only
         contact('103', 'c103@gmail.com', first_conversion_event_name='Contact form: %s page' % PAT,
                 num_conversion_events='1')                                     # converted, free mail
         contact('104', 'd104@alpha.example')                                   # nothing past a lead date: left out
-        contact('105', 'e105@alpha.example', 'marketingqualifiedlead')         # stage past lead only
+        contact('105', 'e105@alpha.example', 'marketingqualifiedlead',         # stage past lead only; HubSpot's v2
+                hs_v2_date_entered_lead='2026-01-02T00:00:00.000Z',            # dates win over the older ones
+                hs_v2_date_entered_marketingqualifiedlead='2026-01-07T00:00:00.000Z',
+                hs_v2_date_entered_opportunity='2026-02-01T00:00:00.000Z')
         contact('106', 'f106@alpha.example')                                   # booked twice on another page
+        # Form fills only (left out of the core rows), counted by the month (UTC-7) of the first fill, or out.
+        fill = lambda i, email, event, at, life='lead': contact(i, email, life, first_conversion_event_name=event,
+                                                                  first_conversion_date=at, num_conversion_events='1')
+        fill('107', 'g107@beta.example', 'Pricing | Beta: Contact form', '2026-02-10T08:00:00.000Z')
+        fill('108', 'h108@beta.example', 'Home | Beta: Hero email', '2026-03-01T03:00:00.000Z')  # Feb 28 in UTC-7
+        fill('109', 'i109@beta.example', 'Pricing | Beta: Contact form', '2026-02-11T00:00:00.000Z', 'customer')
+        fill('110', 'j110@' + INTERNAL, 'Pricing | Beta: Contact form', '2026-02-12T00:00:00.000Z')
+        fill('111', 'k111@beta.example', 'Synthetic Engineer | Beta: %s' % CAREERS, '2026-02-13T00:00:00.000Z')
+        fill('112', 'l112@beta.example', 'Meetings Link: ' + DEMO_SLUG, '2026-02-14T00:00:00.000Z')
+        contact('113', 'm113@beta.example', num_conversion_events='0')       # no conversion: not a lead
         # Meetings: 101 had a sales meeting before booking through the book-a-demo page.
         meeting = lambda i, created, source, page=None, *cids: (obj('meetings', i, {
             'hs_createdate': created, 'hs_meeting_start_time': created, 'hs_meeting_source': source,
@@ -90,6 +109,7 @@ class Strategy(unittest.TestCase):
         meeting('7003', '2026-03-02T00:00:00.000Z', PUBLIC, '777', '106')
         meeting('7004', '2026-03-01T00:00:00.000Z', PUBLIC, '777', '106')
         meeting('7005', '2026-03-03T00:00:00.000Z', None, None, '104')          # no source: not a booking
+        meeting('7006', '2026-02-14T00:00:00.000Z', PUBLIC, DEMO_PAGE, '112')
         con.commit()
         con.close()
         return db
@@ -119,14 +139,15 @@ class Strategy(unittest.TestCase):
         s = out['strategy']
         self.assertEqual((s['available'], s['version'], s['contactsScope']), (True, 1, 'all'))
         rows = self.rows(s)
-        self.assertEqual(sorted(rows), ['101', '102', '103', '105', '106'])  # 104: nothing past a lead date
+        # 104: nothing past a lead date; 113: no conversion
+        self.assertEqual(sorted(rows), ['101', '102', '103', '105', '106', '107', '108', '109', '110', '111', '112'])
         ev = s['conversionEvents']
         a = rows['101']
-        self.assertEqual({k: a[k] for k in ('lifecyclestage', 'leadAt', 'mqlAt', 'sqlAt', 'customerAt')},
+        self.assertEqual({k: a[k] for k in ('lifecyclestage', 'leadAt', 'mqlAt', 'sqlAt', 'opportunityAt', 'customerAt')},
                          {'lifecyclestage': 'opportunity', 'leadAt': '2026-01-01T00:00:00Z', 'mqlAt': '2026-01-05T12:30:00Z',
-                          'sqlAt': '2026-01-10T00:00:00Z', 'customerAt': None})
+                          'sqlAt': '2026-01-10T00:00:00Z', 'opportunityAt': None, 'customerAt': None})
         self.assertEqual((ev[a['firstConversion']], a['firstConversionAt'], ev[a['recentConversion']], a['recentConversionAt'],
-                          a['conversions']), ('Demo form: Pricing page', '2026-01-03T00:00:00Z', 'Meetings Link: book-a-demo',
+                          a['conversions']), ('Demo form: Pricing page', '2026-01-03T00:00:00Z', 'Meetings Link: ' + DEMO_SLUG,
                                               '2026-01-04T00:00:00Z', 2))
         self.assertEqual({k: a[k] for k in ('firstMeetingSource', 'bookings', 'firstBookingAt', 'firstBookingPage', 'bookADemo',
                                             'dealIds', 'scope')},
@@ -134,7 +155,11 @@ class Strategy(unittest.TestCase):
                           'firstBookingPage': DEMO_PAGE, 'bookADemo': True, 'dealIds': ['901'], 'scope': None})
         self.assertEqual((rows['102']['dealIds'], rows['102']['bookings'], rows['102']['firstConversion']), (['902'], 0, None))
         self.assertEqual((rows['103']['scope'], rows['103']['conversions'], rows['103']['dealIds']), ('freeMail', 1, []))
-        self.assertEqual((rows['105']['lifecyclestage'], rows['105']['mqlAt']), ('marketingqualifiedlead', None))
+        e = rows['105']
+        self.assertEqual({k: e[k] for k in ('lifecyclestage', 'leadAt', 'mqlAt', 'sqlAt', 'opportunityAt', 'customerAt')},
+                         {'lifecyclestage': 'marketingqualifiedlead', 'leadAt': '2026-01-02T00:00:00Z',
+                          'mqlAt': '2026-01-07T00:00:00Z', 'sqlAt': None, 'opportunityAt': '2026-02-01T00:00:00Z',
+                          'customerAt': None})
         f = rows['106']
         self.assertEqual((f['bookings'], f['firstBookingAt'], f['firstBookingPage'], f['bookADemo'], f['firstMeetingSource']),
                          (2, '2026-03-01T00:00:00Z', '777', False, PUBLIC))
@@ -144,11 +169,25 @@ class Strategy(unittest.TestCase):
                                     'entered': [['s1', '2026-01-01T00:00:00Z'], ['s2', '2026-02-01T10:00:00Z']]})
         self.assertIsNone(h['902']['entered'])
         self.assertEqual([(x['id'], x['label']) for x in s['stages']], [('s1', 'SQL'), ('s2', 'Demo meeting')])
-        self.assertEqual(s['counts'], {'contacts': 5, 'withDeals': 2, 'contactDealPairs': 2, 'withConversions': 2, 'bookers': 2,
-                                       'bookADemo': 1, 'byLifecycle': {'lead': 3, 'marketingqualifiedlead': 1, 'opportunity': 1},
-                                       'byScope': {'freeMail': 1, 'in': 4}, 'deals': 2, 'dealsWithHistory': 1})
-        self.assertEqual(s['synced']['lifecycleDates'], ['leadAt', 'mqlAt', 'sqlAt'])
+        self.assertEqual(s['counts'], {'contacts': 11, 'withDeals': 2, 'contactDealPairs': 2, 'withConversions': 8, 'bookers': 3,
+                                       'bookADemo': 2, 'byLifecycle': {'customer': 1, 'lead': 8, 'marketingqualifiedlead': 1,
+                                                                       'opportunity': 1},
+                                       'byScope': {'customer': 1, 'freeMail': 1, 'in': 8, 'internal': 1}, 'deals': 2,
+                                       'dealsWithHistory': 1})
+        self.assertEqual(s['synced']['lifecycleDates'], ['leadAt', 'mqlAt', 'sqlAt', 'opportunityAt'])
         self.assertTrue(s['synced']['dealContactsReread'] and s['synced']['stageHistory'] and s['synced']['schedulingPage'])
+
+    def test_lead_first_fills_by_month(self):
+        s = self.build()['strategy']
+        # 101 (Jan 3), 107 (Feb 10) and 108 (Mar 1 03:00 UTC = Feb 28 in UTC-7) count; the rest are out by reason.
+        self.assertEqual(s['leadFirstFillsByMonth'], {'2026-01': 1, '2026-02': 2})
+        self.assertEqual(s['leadFirstFillsOut'], {'careers': 1, 'customer': 1, 'freeMail': 1, 'internal': 1, 'meetingLink': 1})
+
+    def test_booking_pages(self):
+        s = self.build()['strategy']
+        self.assertEqual(s['bookingPages'], {
+            '777': {'bookings': 2, 'contacts': 1, 'slug': None, 'slugContacts': 0, 'bookADemo': False},
+            DEMO_PAGE: {'bookings': 2, 'contacts': 2, 'slug': DEMO_SLUG, 'slugContacts': 2, 'bookADemo': True}})
 
     def test_ids_only_and_scrubbed(self):
         s = json.dumps(self.build()['strategy'], ensure_ascii=False)
@@ -175,15 +214,58 @@ class Strategy(unittest.TestCase):
             out = self.build()
         s = out['strategy']
         self.assertTrue(s['available'])
-        self.assertTrue(s['contactsScope'].startswith('core:'))
-        self.assertEqual(sorted(self.rows(s)), ['101', '102', '105', '106'])  # 103 only converted
-        self.assertEqual(s['conversionEvents'], ['Demo form: Pricing page', 'Meetings Link: book-a-demo'])
+        self.assertEqual(s['contactsScope'], wd.STRATEGY_CORE)
+        self.assertEqual(sorted(self.rows(s)), ['101', '102', '105', '106', '109', '112'])  # 103, 107, 108, 110, 111 only converted
+        self.assertEqual(s['conversionEvents'], ['Demo form: Pricing page', 'Meetings Link: ' + DEMO_SLUG,
+                                                 'Pricing | Beta: Contact form'])
         self.assertEqual(s['dealStageHistory'], full['strategy']['dealStageHistory'])
         self.assertLess(self.size(out), self.size(full))
+        # The lead totals are over every contact, whatever the rows keep.
+        for k in ('leadFirstFillsByMonth', 'leadFirstFillsOut', 'bookingPages'):
+            self.assertEqual(s[k], full['strategy'][k])
+        # Core still over: customers without a deal (109) go too.
+        with mock.patch.object(wd, 'MAX_BYTES', self.size(out) - 1):
+            lean = self.build()['strategy']
+        self.assertEqual(lean['contactsScope'], wd.STRATEGY_CORE + '; customers without a deal left out')
+        self.assertEqual(sorted(self.rows(lean)), ['101', '102', '105', '106', '112'])
+        self.assertEqual(lean['leadFirstFillsByMonth'], full['strategy']['leadFirstFillsByMonth'])
         with mock.patch.object(wd, 'MAX_BYTES', rest + 100):
             out = self.build()
         self.assertEqual((out['strategy']['available'], out['fresh'] == full['fresh']), (False, True))
         self.assertIn('budget', out['strategy']['reason'])
+
+
+class SyncLifecycleDates(unittest.TestCase):
+    """hubspot_sync.py asks HubSpot for every lifecycle stage's entry date, and lists custom stages' ones."""
+
+    @classmethod
+    def setUpClass(cls):
+        sync_dir = os.path.join(HERE, '..', '..', 'refresh', 'brain-sync')
+        sys.path.insert(0, sync_dir)
+        try:
+            s = importlib.util.spec_from_file_location('hubspot_sync_strategy', os.path.join(sync_dir, 'hubspot_sync.py'))
+            cls.hs = importlib.util.module_from_spec(s)
+            s.loader.exec_module(cls.hs)
+        finally:
+            sys.path.remove(sync_dir)
+
+    def test_contact_properties(self):
+        props = self.hs.OBJECT_TYPES['contacts'][1]
+        for stage in ('subscriber', 'lead', 'marketingqualifiedlead', 'salesqualifiedlead', 'opportunity', 'customer',
+                      'evangelist', 'other'):
+            self.assertIn('hs_v2_date_entered_' + stage, props)
+            self.assertIn('hs_lifecyclestage_%s_date' % stage, props)
+        for _key, (v2, old) in wd.LIFECYCLE_DATES:  # every date workspace-data.py reads is requested
+            self.assertEqual((v2 in props, old in props), (True, True))
+
+    def test_custom_stage_dates_discovered(self):
+        listed = [{'name': n} for n in ('hs_v2_date_entered_1234567', 'hs_v2_date_exited_1234567', 'utm_source',
+                                        'favorite_color', 'hs_v2_date_entered_lead')]
+        client = mock.Mock(api_base='https://api.example', request=mock.Mock(return_value=(200, {'results': listed})))
+        with mock.patch.object(self.hs.pace, 'min_interval', 0):
+            got = self.hs.discover_contact_props(client, logging.getLogger('test'))
+        self.assertEqual(got, ['hs_v2_date_entered_1234567', 'hs_v2_date_entered_lead', 'utm_source'])
+        self.assertEqual(client.request.call_args.args, ('GET', 'https://api.example/crm/v3/properties/contacts'))
 
 
 if __name__ == '__main__':
