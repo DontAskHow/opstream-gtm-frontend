@@ -610,3 +610,20 @@ with sync_playwright() as p:
   assert.equal(st.cpWeek, 'true', 'a section never changed keeps This week');
   assert.deepEqual((await next('done')).errors, []);
 });
+
+test('Lambda package (deploy.sh file list) alone trial-renders the synthetic workspace.json', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const sh = readFileSync(join(root, 'workspace/refresh/deploy.sh'), 'utf8');
+  const list = sh.match(/files = \[([\s\S]*?)\]/)[1].match(/"([^"]+)"/g).map((x) => x.slice(1, -1));
+  const pkg = mkdtempSync(join(tmpdir(), 'lambda-pkg-'));
+  try {
+    for (const f of list) { mkdirSync(dirname(join(pkg, f)), { recursive: true }); writeFileSync(join(pkg, f), readFileSync(join(root, f))); }
+    writeFileSync(join(pkg, 'ws.json'), WS);
+    writeFileSync(join(pkg, 'check.mjs'), `import { readFileSync } from 'node:fs';
+import { validateWorkspace } from './workspace/refresh/workspace-json.mjs';
+const v = validateWorkspace(readFileSync(new URL('./ws.json', import.meta.url), 'utf8'), [${JSON.stringify(SYNTHETIC_SCRUB)}]);
+process.stdout.write(JSON.stringify(v.errors));`);
+    const out = execFileSync(process.execPath, [join(pkg, 'check.mjs')], { cwd: pkg, encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(out), [], 'a file the trial render needs is missing from the Lambda package');
+  } finally { rmSync(pkg, { recursive: true, force: true }); }
+});
