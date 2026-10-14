@@ -2372,13 +2372,73 @@ def build_fresh(brain, ctx, stages, freshness_rows, sections, as_of):
 
 # ---------- strategy (docs/workspace-strategy.md) ----------
 STRATEGY_VERSION = 1
-# Contact lifecycle dates the sync fetches (hubspot_sync.py OBJECT_TYPES), as strategy.contacts columns.
-LIFECYCLE_DATES = [('leadAt', 'hs_lifecyclestage_lead_date'), ('mqlAt', 'hs_lifecyclestage_marketingqualifiedlead_date'),
-                   ('sqlAt', 'hs_lifecyclestage_salesqualifiedlead_date'), ('customerAt', 'hs_lifecyclestage_customer_date')]
+# Contact lifecycle stage entry dates the sync fetches (hubspot_sync.py OBJECT_TYPES), as strategy.contacts columns:
+# hs_v2_date_entered_<stage> (HubSpot's current property), else the older hs_lifecyclestage_<stage>_date.
+LIFECYCLE_DATES = [(key, ('hs_v2_date_entered_' + stage, 'hs_lifecyclestage_%s_date' % stage)) for key, stage in (
+    ('leadAt', 'lead'), ('mqlAt', 'marketingqualifiedlead'), ('sqlAt', 'salesqualifiedlead'),
+    ('opportunityAt', 'opportunity'), ('customerAt', 'customer'))]
 PAST_LEAD_STAGES = {'marketingqualifiedlead', 'salesqualifiedlead', 'opportunity', 'customer', 'evangelist'}
 STRATEGY_FIELDS = ['id', 'lifecyclestage'] + [k for k, _p in LIFECYCLE_DATES] + [
     'firstConversion', 'firstConversionAt', 'recentConversion', 'recentConversionAt', 'conversions',
     'firstMeetingSource', 'bookings', 'firstBookingAt', 'firstBookingPage', 'bookADemo', 'dealIds', 'scope']
+
+
+# HubSpot's conversion event name for a meetings-link booking: 'Meetings Link: <link slug>'.
+MEETING_LINK_EVENT = 'Meetings Link: '
+
+
+class FirstFills:
+    """Leads by the month (PT) of their first form fill, over every contact (strategy.leadFirstFillsByMonth), so the
+    lead totals stay whole when strategy.contacts is cut to the core contacts. A contact counts when its
+    first_conversion_event_name is a form fill, in the reporting rules' waterfall (submission_out): customers out,
+    then careers forms ('Open Position', and forms lead-sources.json marks not a lead source), then internal and
+    free-mail addresses. A first conversion that is a meetings-link booking is no form fill. The rest are in
+    leadFirstFillsOut by reason."""
+
+    def __init__(self, ctx):
+        self.ls, self.scope = ctx['ls'], ctx['scope']
+        self.by_month, self.out = Counter(), Counter()
+
+    def add(self, c, why):
+        p = c['props']
+        event = str(p.get('first_conversion_event_name') or '').strip()
+        if not event and not num(p.get('num_conversion_events')):
+            return
+        form = self.ls.form_for_event(event)
+        if why and why[0] == 'customer':
+            reason = 'customer'
+        elif not event:
+            reason = 'noEventName'
+        elif event.startswith(MEETING_LINK_EVENT):
+            reason = 'meetingLink'
+        elif self.scope.careers_event(event) or (form and (self.scope.form_excluded(form) or not self.ls.form_is_lead(form))):
+            reason = 'careers'
+        elif why:
+            reason = why[0]
+        else:
+            t = parse_time(p.get('first_conversion_date'))
+            if t:
+                self.by_month[t.astimezone(TZ).strftime('%Y-%m')] += 1
+                return
+            reason = 'noDate'
+        self.out[reason] += 1
+
+
+def booking_pages(pages, book_ids, contacts):
+    """Scheduling page id -> its meeting-link bookings, the contacts on them, and the link slug most of those contacts'
+    conversion events name ('Meetings Link: <slug>', first or recent). HubSpot keeps no page name on a meeting, so the
+    slug is the sync's only evidence of which link a page id is."""
+    out = {}
+    for pid in sorted(pages, key=id_order):
+        pg, slugs = pages[pid], Counter()
+        for cid in pg['contacts']:
+            p = (contacts.get(cid) or {}).get('props') or {}
+            slugs.update({str(e)[len(MEETING_LINK_EVENT):].strip() for e in (p.get('first_conversion_event_name'),
+                          p.get('recent_conversion_event_name')) if str(e or '').startswith(MEETING_LINK_EVENT)})
+        top = sorted(slugs.items(), key=lambda kv: (-kv[1], kv[0]))[:1]
+        out[pid] = {'bookings': pg['bookings'], 'contacts': len(pg['contacts']), 'slug': top[0][0] if top else None,
+                    'slugContacts': top[0][1] if top else 0, 'bookADemo': pid in book_ids}
+    return out
 
 
 def utc_s(v):
@@ -2394,7 +2454,7 @@ def id_order(i):
 def build_strategy(brain, ctx, stages, deals):
     """Contacts with their lifecycle dates, conversion events, meeting-link bookings and deal ids, and every deal's
     dealstage history with the time it entered each stage. Ids only: no names, emails or titles. Returns the section
-    and the set of 'core' contact ids kept when the file is over budget."""
+    and the smaller contact sets kept, in turn, when the file is over budget: [(contactsScope, ids), ...]."""
     contacts, assoc = ctx['contacts'], ctx['assoc']
     deal_contacts = {}  # contact -> deal ids: hubspot_associations, plus the deal extras' periodic re-read
     if 'contact_ids' in brain.cols('hubspot_deal_extras'):
@@ -2405,15 +2465,16 @@ def build_strategy(brain, ctx, stages, deals):
             except (TypeError, ValueError):
                 pass
     dates = {}
-    fields = [p for _k, p in LIFECYCLE_DATES]
+    fields = [p for _k, props in LIFECYCLE_DATES for p in props]
     for row in brain.objects('contacts', fields):
         if any(row[1:]):
-            dates[str(row[0])] = [utc_s(v) for v in row[1:]]
+            vals = row[1:]
+            dates[str(row[0])] = [utc_s(vals[2 * n] or vals[2 * n + 1]) for n in range(len(LIFECYCLE_DATES))]
     # Meetings: the earliest one's source per contact, and the meeting-link bookings (config reporting.meetings),
     # with their scheduling page (config mql: the book-a-demo page ids).
     mcfg, qcfg = REPORTING['meetings'], RULES['mql']
     book_ids = {str(i) for i in qcfg['bookingLinkIds']}
-    first_meeting, booked = {}, {}
+    first_meeting, booked, pages = {}, {}, {}
     mfields = [mcfg['sourceProperty'], qcfg['bookingLinkProperty'], mcfg['timeProperty'], 'hs_meeting_start_time']
     for mid, source, page, created, start in brain.objects('meetings', mfields):
         if not source:
@@ -2421,6 +2482,10 @@ def build_strategy(brain, ctx, stages, deals):
         t = parse_time(created) or parse_time(start)
         key = (iso(t) or '9999', str(mid))
         public = str(source).upper() == mcfg['sourceValue']
+        if public and page:
+            pg = pages.setdefault(str(page), {'bookings': 0, 'contacts': set()})
+            pg['bookings'] += 1
+            pg['contacts'].update(assoc.get('meetings', str(mid), 'contacts'))
         for cid in assoc.get('meetings', str(mid), 'contacts'):
             if cid not in first_meeting or key < first_meeting[cid][0]:
                 first_meeting[cid] = (key, str(source))
@@ -2430,18 +2495,21 @@ def build_strategy(brain, ctx, stages, deals):
                 b['demo'] = b['demo'] or str(page or '') in book_ids
                 if b['first'] is None or key < b['first'][0]:
                     b['first'] = (key, utc_s(created) or utc_s(start), str(page) if page else None)
-    rows, core = [], set()
+    rows, core, lean, lead_fills = [], set(), set(), FirstFills(ctx)
     for cid in sorted(contacts, key=id_order):
         c, p = contacts[cid], contacts[cid]['props']
         deal_ids = sorted(set(assoc.get('contacts', cid, 'deals')) | deal_contacts.get(cid, set()), key=id_order)
         conv = num(p.get('num_conversion_events'))
         life = dates.get(cid) or [None] * len(LIFECYCLE_DATES)
         b = booked.get(cid)
+        why = ctx['scope'].contact(cid)
         if deal_ids or b or any(life[1:]) or (c['lifecycle'] or '').lower() in PAST_LEAD_STAGES:
             core.add(cid)
+            if deal_ids or not why or why[0] != 'customer':
+                lean.add(cid)
         elif not (conv or p.get('first_conversion_event_name')):
             continue
-        why = ctx['scope'].contact(cid)
+        lead_fills.add(c, why)
         rows.append([cid, c['lifecycle'] or None, *life,
                      p.get('first_conversion_event_name') or None, utc_s(p.get('first_conversion_date')),
                      p.get('recent_conversion_event_name') or None, utc_s(p.get('recent_conversion_date')),
@@ -2465,13 +2533,18 @@ def build_strategy(brain, ctx, stages, deals):
         'version': STRATEGY_VERSION, 'contract': 'docs/workspace-strategy.md', 'available': True,
         'about': 'For Strategy: contacts with a deal, a conversion event, a meeting-link booking or a lifecycle stage past '
                  'lead, with their HubSpot lifecycle dates, conversion events, bookings and deal ids; and every deal\'s '
-                 'dealstage history (propertiesWithHistory) as the time it entered each stage. HubSpot ids only.',
+                 'dealstage history (propertiesWithHistory) as the time it entered each stage; leads by the month of '
+                 'their first form fill, over every contact; and each meeting-link scheduling page with the link slug '
+                 'its bookers\' conversion events name. HubSpot ids only.',
         'contactsScope': 'all',
         'stages': [{'pipeline': pid, 'pipelineLabel': m['pipeline'], 'id': sid, 'label': m['label'], 'order': m['order'],
                     'closed': m['closed']} for (pid, sid), m in sorted(stages.items(), key=lambda kv: (kv[0][0], kv[1]['order'], kv[0][1]))],
         'contacts': {'fields': STRATEGY_FIELDS, 'rows': rows},
         'dealStageHistory': history,
-        'synced': {'lifecycleDates': [k for k, prop in LIFECYCLE_DATES if synced('contacts', prop)],
+        'leadFirstFillsByMonth': dict(sorted(lead_fills.by_month.items())),
+        'leadFirstFillsOut': dict(sorted(lead_fills.out.items())),
+        'bookingPages': booking_pages(pages, book_ids, contacts),
+        'synced': {'lifecycleDates': [k for k, props in LIFECYCLE_DATES if any(synced('contacts', p) for p in props)],
                    'conversionEvents': synced('contacts', 'first_conversion_event_name'),
                    'conversionCount': synced('contacts', 'num_conversion_events'),
                    'meetingSource': synced('meetings', mcfg['sourceProperty']),
@@ -2479,10 +2552,13 @@ def build_strategy(brain, ctx, stages, deals):
                    'stageHistory': any(d.get('stageHistory') is not None for d in deals),
                    'dealContactsReread': 'contact_ids' in brain.cols('hubspot_deal_extras')},
     }
-    return section, core
+    return section, [(STRATEGY_CORE, core), (STRATEGY_CORE + '; customers without a deal left out', lean)]
 
 
-def strategy_finish(section, core=None):
+STRATEGY_CORE = 'core: contacts with a deal, a booking or a lifecycle stage past lead (workspace.json over budget)'
+
+
+def strategy_finish(section, core=None, scope=None):
     """Row conversion-event names -> an index into strategy.conversionEvents, and the counts; optionally only the
     core contacts (over budget)."""
     s = dict(section)
@@ -2497,7 +2573,7 @@ def strategy_finish(section, core=None):
     s['contacts'] = {'fields': f, 'rows': rows}
     s['conversionEvents'] = events
     if core is not None:
-        s['contactsScope'] = 'core: contacts with a deal, a booking or a lifecycle stage past lead (workspace.json over budget)'
+        s['contactsScope'] = scope or STRATEGY_CORE
     hist = s['dealStageHistory'].values()
     s['counts'] = {'contacts': len(rows), 'withDeals': sum(1 for x in col('dealIds') if x),
                    'contactDealPairs': sum(len(x) for x in col('dealIds')),
@@ -2515,17 +2591,18 @@ def strategy_unavailable(reason):
 
 def add_strategy(out, build_section, scrub, warn):
     """out['strategy'], added after every other section is final (and within budget), so they are the same with or
-    without it. Over budget it keeps the core contacts only, then leaves the section out; never fails the file."""
+    without it. Over budget it keeps the core contacts only, then the core contacts less customers without a deal, then
+    leaves the section out; never fails the file."""
     try:
-        section, core = build_section()
+        section, smaller = build_section()
     except Exception as e:
         warn('warn: strategy left out: %s: %s' % (type(e).__name__, e))
         out['strategy'] = strategy_unavailable('left out: building it failed (%s)' % type(e).__name__)
         return
     size = lambda doc: len(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
     base = size(out) + len(',"strategy":')
-    for keep in (None, core):
-        s = scrub.deep(strategy_finish(section, keep))
+    for scope, keep in [(None, None)] + smaller:
+        s = scrub.deep(strategy_finish(section, keep, scope))
         if scrub.hit(json.dumps(s, ensure_ascii=False)):
             out['strategy'] = strategy_unavailable('left out: a scrub pattern was still in it')
             return
@@ -2818,8 +2895,10 @@ def audit_lines(d):
     st = d.get('strategy') or {}
     if st.get('available'):
         k = st['counts']
-        lines.append('strategy: %d contacts (%s; %d with deals, %d bookers), %d deals (%d with stage history)' % (
-            k['contacts'], st['contactsScope'].split(':')[0], k['withDeals'], k['bookers'], k['deals'], k['dealsWithHistory']))
+        lines.append('strategy: %d contacts (%s; %d with deals, %d bookers), %d deals (%d with stage history), '
+                     '%d leads by first form fill, lifecycle dates synced: %s' % (
+            k['contacts'], st['contactsScope'].split(':')[0], k['withDeals'], k['bookers'], k['deals'], k['dealsWithHistory'],
+            sum(st['leadFirstFillsByMonth'].values()), ', '.join(st['synced']['lifecycleDates']) or 'none'))
     else:
         lines.append('strategy: %s' % st.get('reason', 'missing'))
     return lines
