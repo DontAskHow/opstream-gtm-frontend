@@ -437,24 +437,30 @@ def _chunks(xs, n):
 
 
 def sync_deal_extras(client, con, changed_deal_ids, log):
-    """Store per-deal companyIds (primary first), hubspot_owner_id history and dealstage history.
+    """Store per-deal companyIds (primary first), contactIds, hubspot_owner_id history and dealstage history.
 
-    Two read-only batch endpoints: v4 deal->company associations (100 ids a call;
-    the association labels say which company is primary) and v3 deals batch read
-    with propertiesWithHistory (50 ids a call; search cannot return history).
+    Three read-only batch endpoints: v4 deal->company and deal->contact
+    associations (100 ids a call; the association labels say which company is
+    primary) and v3 deals batch read with propertiesWithHistory (50 ids a call;
+    search cannot return history).
     The dealstage history says which stage a deal was in when a meeting was
-    booked (config/lead-rules.json reporting.meetings).
-    Changed deals and deals without extras (or stored before stage_history
-    existed) are read every run; all deals once every EXTRAS_FULL_HOURS. A full
-    pass over 600 deals is about 18 calls.
+    booked (config/lead-rules.json reporting.meetings) and when it entered each
+    stage (workspace.json strategy). The contact ids catch association edits
+    that move neither object's modified date, so hubspot_associations misses them.
+    Changed deals and deals without extras (or stored before stage_history or
+    contact_ids existed) are read every run; all deals once every
+    EXTRAS_FULL_HOURS. A full pass over 600 deals is about 24 calls.
     """
     con.execute("CREATE TABLE IF NOT EXISTS hubspot_deal_extras ("
                 "deal_id TEXT PRIMARY KEY, company_ids TEXT, owner_history TEXT, refreshed_at TEXT)")
     # Rows written before this column existed get it on their next read (below: they count as missing).
-    if "stage_history" not in {r[1] for r in con.execute("PRAGMA table_info(hubspot_deal_extras)")}:
-        con.execute("ALTER TABLE hubspot_deal_extras ADD COLUMN stage_history TEXT")
+    cols = {r[1] for r in con.execute("PRAGMA table_info(hubspot_deal_extras)")}
+    for col in ("stage_history", "contact_ids"):
+        if col not in cols:
+            con.execute("ALTER TABLE hubspot_deal_extras ADD COLUMN %s TEXT" % col)
     all_ids = [r[0] for r in con.execute("SELECT hs_id FROM hubspot_objects WHERE object_type='deals'")]
-    have = {r[0] for r in con.execute("SELECT deal_id FROM hubspot_deal_extras WHERE stage_history IS NOT NULL")}
+    have = {r[0] for r in con.execute("SELECT deal_id FROM hubspot_deal_extras "
+                                      "WHERE stage_history IS NOT NULL AND contact_ids IS NOT NULL")}
     last_full, _run, _note = get_sync_state("hubspot_extras")
     full = True
     try:
@@ -477,6 +483,15 @@ def sync_deal_extras(client, con, changed_deal_ids, log):
             prim = [t for t in tos if any(x.get("typeId") == PRIMARY_COMPANY_TYPE_ID for x in t.get("associationTypes") or [])]
             order = prim + [t for t in tos if t not in prim]
             companies[str((row.get("from") or {}).get("id"))] = [str(t.get("toObjectId")) for t in order]
+    contacts = {}
+    for part in _chunks(wanted, 100):
+        status, payload = hs_request(client, "POST", client.api_base + "/crm/v4/associations/deals/contacts/batch/read",
+                                     body={"inputs": [{"id": i} for i in part]})
+        if status not in (200, 207) or not isinstance(payload, dict):
+            raise RuntimeError("HubSpot deal->contact associations returned HTTP %s" % status)
+        for row in payload.get("results") or []:
+            contacts[str((row.get("from") or {}).get("id"))] = sorted(
+                {str(t.get("toObjectId")) for t in row.get("to") or [] if t.get("toObjectId")})
     history, stages = {}, {}
 
     def newest_first(hist):
@@ -498,17 +513,18 @@ def sync_deal_extras(client, con, changed_deal_ids, log):
     now = datetime.now(timezone.utc).isoformat()
     for deal_id in wanted:
         con.execute(
-            "INSERT INTO hubspot_deal_extras(deal_id, company_ids, owner_history, stage_history, refreshed_at) "
-            "VALUES(?,?,?,?,?) ON CONFLICT(deal_id) DO UPDATE SET company_ids=excluded.company_ids, "
-            "owner_history=excluded.owner_history, stage_history=excluded.stage_history, "
-            "refreshed_at=excluded.refreshed_at",
-            (deal_id, json.dumps(companies.get(deal_id, [])), json.dumps(history.get(deal_id, [])),
-             json.dumps(stages.get(deal_id, [])), now))
+            "INSERT INTO hubspot_deal_extras(deal_id, company_ids, contact_ids, owner_history, stage_history, refreshed_at) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(deal_id) DO UPDATE SET company_ids=excluded.company_ids, "
+            "contact_ids=excluded.contact_ids, owner_history=excluded.owner_history, "
+            "stage_history=excluded.stage_history, refreshed_at=excluded.refreshed_at",
+            (deal_id, json.dumps(companies.get(deal_id, [])), json.dumps(contacts.get(deal_id, [])),
+             json.dumps(history.get(deal_id, [])), json.dumps(stages.get(deal_id, [])), now))
     con.commit()
     if full:
         set_sync_state("hubspot_extras", now, "full refresh of %d deals" % len(wanted))
-    log.info("deal extras: %s refresh of %d deals (%d with a company, %d with owner history, %d with stage history)",
-             "full" if full else "incremental", len(wanted), sum(1 for i in wanted if companies.get(i)),
+    log.info("deal extras: %s refresh of %d deals (%d with a company, %d with a contact, %d with owner history, "
+             "%d with stage history)", "full" if full else "incremental", len(wanted),
+             sum(1 for i in wanted if companies.get(i)), sum(1 for i in wanted if contacts.get(i)),
              sum(1 for i in wanted if history.get(i)), sum(1 for i in wanted if stages.get(i)))
     return len(wanted)
 

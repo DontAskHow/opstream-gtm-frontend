@@ -11,9 +11,10 @@ the hidden owner rendered as "Unassigned" (shared/workspace-scope.json), and the
 Oct 13 2026 reporting rules (config/lead-rules.json "reporting", ReportingScope):
 customers, free-mail and internal addresses and careers forms out of the form
 counts, meeting bookings, ad-platform leads and a separate lead -> MQL figure,
-all in added fields (existing fields keep their meaning). 'fresh' (added last) carries
+all in added fields (existing fields keep their meaning). 'fresh' carries
 the record sets the fresh frontend read from its one-time extract, under the same rules
-(docs/workspace-fresh.md). Lead
+(docs/workspace-fresh.md). 'strategy' (added last) carries contact lifecycle and conversion
+fields, contact -> deal ids and dealstage entry times, by HubSpot id (docs/workspace-strategy.md). Lead
 sources are mapped from lead-sources.json only, so a mapping change edits that
 file. Tables the sync has not written yet (forms, lists, imports, Lemlist leads,
 contact source fields) are used when present and listed as "not yet synced"
@@ -2369,6 +2370,172 @@ def build_fresh(brain, ctx, stages, freshness_rows, sections, as_of):
     }
 
 
+# ---------- strategy (docs/workspace-strategy.md) ----------
+STRATEGY_VERSION = 1
+# Contact lifecycle dates the sync fetches (hubspot_sync.py OBJECT_TYPES), as strategy.contacts columns.
+LIFECYCLE_DATES = [('leadAt', 'hs_lifecyclestage_lead_date'), ('mqlAt', 'hs_lifecyclestage_marketingqualifiedlead_date'),
+                   ('sqlAt', 'hs_lifecyclestage_salesqualifiedlead_date'), ('customerAt', 'hs_lifecyclestage_customer_date')]
+PAST_LEAD_STAGES = {'marketingqualifiedlead', 'salesqualifiedlead', 'opportunity', 'customer', 'evangelist'}
+STRATEGY_FIELDS = ['id', 'lifecyclestage'] + [k for k, _p in LIFECYCLE_DATES] + [
+    'firstConversion', 'firstConversionAt', 'recentConversion', 'recentConversionAt', 'conversions',
+    'firstMeetingSource', 'bookings', 'firstBookingAt', 'firstBookingPage', 'bookADemo', 'dealIds', 'scope']
+
+
+def utc_s(v):
+    """Any HubSpot time -> ISO UTC to the second (shorter than iso(); strategy.contacts is the largest table)."""
+    t = parse_time(v)
+    return t.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ') if t else None
+
+
+def id_order(i):
+    return (len(i), i)  # HubSpot ids are numbers: shorter sorts first
+
+
+def build_strategy(brain, ctx, stages, deals):
+    """Contacts with their lifecycle dates, conversion events, meeting-link bookings and deal ids, and every deal's
+    dealstage history with the time it entered each stage. Ids only: no names, emails or titles. Returns the section
+    and the set of 'core' contact ids kept when the file is over budget."""
+    contacts, assoc = ctx['contacts'], ctx['assoc']
+    deal_contacts = {}  # contact -> deal ids: hubspot_associations, plus the deal extras' periodic re-read
+    if 'contact_ids' in brain.cols('hubspot_deal_extras'):
+        for did, raw in brain.q('SELECT deal_id, contact_ids FROM hubspot_deal_extras WHERE contact_ids IS NOT NULL'):
+            try:
+                for cid in json.loads(raw) or []:
+                    deal_contacts.setdefault(str(cid), set()).add(str(did))
+            except (TypeError, ValueError):
+                pass
+    dates = {}
+    fields = [p for _k, p in LIFECYCLE_DATES]
+    for row in brain.objects('contacts', fields):
+        if any(row[1:]):
+            dates[str(row[0])] = [utc_s(v) for v in row[1:]]
+    # Meetings: the earliest one's source per contact, and the meeting-link bookings (config reporting.meetings),
+    # with their scheduling page (config mql: the book-a-demo page ids).
+    mcfg, qcfg = REPORTING['meetings'], RULES['mql']
+    book_ids = {str(i) for i in qcfg['bookingLinkIds']}
+    first_meeting, booked = {}, {}
+    mfields = [mcfg['sourceProperty'], qcfg['bookingLinkProperty'], mcfg['timeProperty'], 'hs_meeting_start_time']
+    for mid, source, page, created, start in brain.objects('meetings', mfields):
+        if not source:
+            continue
+        t = parse_time(created) or parse_time(start)
+        key = (iso(t) or '9999', str(mid))
+        public = str(source).upper() == mcfg['sourceValue']
+        for cid in assoc.get('meetings', str(mid), 'contacts'):
+            if cid not in first_meeting or key < first_meeting[cid][0]:
+                first_meeting[cid] = (key, str(source))
+            if public:
+                b = booked.setdefault(cid, {'n': 0, 'first': None, 'demo': False})
+                b['n'] += 1
+                b['demo'] = b['demo'] or str(page or '') in book_ids
+                if b['first'] is None or key < b['first'][0]:
+                    b['first'] = (key, utc_s(created) or utc_s(start), str(page) if page else None)
+    rows, core = [], set()
+    for cid in sorted(contacts, key=id_order):
+        c, p = contacts[cid], contacts[cid]['props']
+        deal_ids = sorted(set(assoc.get('contacts', cid, 'deals')) | deal_contacts.get(cid, set()), key=id_order)
+        conv = num(p.get('num_conversion_events'))
+        life = dates.get(cid) or [None] * len(LIFECYCLE_DATES)
+        b = booked.get(cid)
+        if deal_ids or b or any(life[1:]) or (c['lifecycle'] or '').lower() in PAST_LEAD_STAGES:
+            core.add(cid)
+        elif not (conv or p.get('first_conversion_event_name')):
+            continue
+        why = ctx['scope'].contact(cid)
+        rows.append([cid, c['lifecycle'] or None, *life,
+                     p.get('first_conversion_event_name') or None, utc_s(p.get('first_conversion_date')),
+                     p.get('recent_conversion_event_name') or None, utc_s(p.get('recent_conversion_date')),
+                     int(conv) if conv is not None else None,
+                     first_meeting[cid][1] if cid in first_meeting else None,
+                     b['n'] if b else 0, b['first'][1] if b else None, b['first'][2] if b else None, bool(b and b['demo']),
+                     deal_ids, why[0] if why else None])
+    history = {}
+    for d in sorted(deals, key=lambda d: id_order(d['id'])):
+        entered = None
+        if d.get('stageHistory') is not None:
+            entered = []
+            for h in sorted(d['stageHistory'], key=lambda h: parse_time(h.get('timestamp')) or datetime.min.replace(tzinfo=timezone.utc)):
+                sid, t = str(h.get('value') or ''), utc_s(h.get('timestamp'))
+                if sid and t and (not entered or entered[-1][0] != sid):  # a re-save of the same stage is no entry
+                    entered.append([sid, t])
+        history[d['id']] = {'pipeline': d['pipeline'], 'stageId': d['stageId'], 'created': utc_s(d['created']),
+                            'entered': entered}
+    synced = lambda kind, prop: bool(brain.q("SELECT 1 FROM hubspot_objects WHERE object_type=? AND json_type(properties_json, '$.%s') IS NOT NULL LIMIT 1" % prop, (kind,)))
+    section = {
+        'version': STRATEGY_VERSION, 'contract': 'docs/workspace-strategy.md', 'available': True,
+        'about': 'For Strategy: contacts with a deal, a conversion event, a meeting-link booking or a lifecycle stage past '
+                 'lead, with their HubSpot lifecycle dates, conversion events, bookings and deal ids; and every deal\'s '
+                 'dealstage history (propertiesWithHistory) as the time it entered each stage. HubSpot ids only.',
+        'contactsScope': 'all',
+        'stages': [{'pipeline': pid, 'pipelineLabel': m['pipeline'], 'id': sid, 'label': m['label'], 'order': m['order'],
+                    'closed': m['closed']} for (pid, sid), m in sorted(stages.items(), key=lambda kv: (kv[0][0], kv[1]['order'], kv[0][1]))],
+        'contacts': {'fields': STRATEGY_FIELDS, 'rows': rows},
+        'dealStageHistory': history,
+        'synced': {'lifecycleDates': [k for k, prop in LIFECYCLE_DATES if synced('contacts', prop)],
+                   'conversionEvents': synced('contacts', 'first_conversion_event_name'),
+                   'conversionCount': synced('contacts', 'num_conversion_events'),
+                   'meetingSource': synced('meetings', mcfg['sourceProperty']),
+                   'schedulingPage': synced('meetings', qcfg['bookingLinkProperty']),
+                   'stageHistory': any(d.get('stageHistory') is not None for d in deals),
+                   'dealContactsReread': 'contact_ids' in brain.cols('hubspot_deal_extras')},
+    }
+    return section, core
+
+
+def strategy_finish(section, core=None):
+    """Row conversion-event names -> an index into strategy.conversionEvents, and the counts; optionally only the
+    core contacts (over budget)."""
+    s = dict(section)
+    f = STRATEGY_FIELDS
+    rows = [list(r) for r in s['contacts']['rows'] if core is None or r[0] in core]
+    events = sorted({r[i] for r in rows for i in (f.index('firstConversion'), f.index('recentConversion')) if r[i]})
+    pos = {e: n for n, e in enumerate(events)}
+    for r in rows:
+        for i in (f.index('firstConversion'), f.index('recentConversion')):
+            r[i] = pos.get(r[i])
+    col = lambda name: [r[f.index(name)] for r in rows]
+    s['contacts'] = {'fields': f, 'rows': rows}
+    s['conversionEvents'] = events
+    if core is not None:
+        s['contactsScope'] = 'core: contacts with a deal, a booking or a lifecycle stage past lead (workspace.json over budget)'
+    hist = s['dealStageHistory'].values()
+    s['counts'] = {'contacts': len(rows), 'withDeals': sum(1 for x in col('dealIds') if x),
+                   'contactDealPairs': sum(len(x) for x in col('dealIds')),
+                   'withConversions': sum(1 for x, y in zip(col('conversions'), col('firstConversion')) if x or y is not None),
+                   'bookers': sum(1 for x in col('bookings') if x), 'bookADemo': sum(1 for x in col('bookADemo') if x),
+                   'byLifecycle': dict(sorted(Counter(x or 'none' for x in col('lifecyclestage')).items())),
+                   'byScope': dict(sorted(Counter(x or 'in' for x in col('scope')).items())),
+                   'deals': len(s['dealStageHistory']), 'dealsWithHistory': sum(1 for h in hist if h['entered'] is not None)}
+    return s
+
+
+def strategy_unavailable(reason):
+    return {'version': STRATEGY_VERSION, 'contract': 'docs/workspace-strategy.md', 'available': False, 'reason': reason}
+
+
+def add_strategy(out, build_section, scrub, warn):
+    """out['strategy'], added after every other section is final (and within budget), so they are the same with or
+    without it. Over budget it keeps the core contacts only, then leaves the section out; never fails the file."""
+    try:
+        section, core = build_section()
+    except Exception as e:
+        warn('warn: strategy left out: %s: %s' % (type(e).__name__, e))
+        out['strategy'] = strategy_unavailable('left out: building it failed (%s)' % type(e).__name__)
+        return
+    size = lambda doc: len(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+    base = size(out) + len(',"strategy":')
+    for keep in (None, core):
+        s = scrub.deep(strategy_finish(section, keep))
+        if scrub.hit(json.dumps(s, ensure_ascii=False)):
+            out['strategy'] = strategy_unavailable('left out: a scrub pattern was still in it')
+            return
+        if base + size(s) <= MAX_BYTES:
+            out['strategy'] = s
+            return
+    warn('warn: workspace.json over %d bytes with strategy; strategy left out' % MAX_BYTES)
+    out['strategy'] = strategy_unavailable('left out: workspace.json would be over its %d MiB budget' % (MAX_BYTES // 1048576))
+
+
 # ---------- outbound ----------
 def outbound(brain, ls, leads_by_email):
     """Every Lemlist campaign with its tags (filters). outbound_reply_rate = replies / sends over all of them (r12)."""
@@ -2596,6 +2763,8 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
         warn('warn: workspace.json over %d bytes; fresh left out' % MAX_BYTES)
         out['fresh'] = {'version': FRESH_VERSION, 'contract': 'docs/workspace-fresh.md', 'available': False,
                         'reason': 'left out: workspace.json would be over its %d MiB budget' % (MAX_BYTES // 1048576)}
+    # Added last, after the budget check above, so it never pushes fresh (or anything else) out.
+    add_strategy(out, lambda: build_strategy(brain, ctx, stages, deals), scrub, warn)
     return out
 
 
@@ -2646,6 +2815,13 @@ def audit_lines(d):
     if cp:
         lines.append('current page: removes %d customer companies, %d meetings, %d of %d recordings' % (
             cp['companies'], cp['meetings'], cp['recordings'], cp['recordingsTotal']))
+    st = d.get('strategy') or {}
+    if st.get('available'):
+        k = st['counts']
+        lines.append('strategy: %d contacts (%s; %d with deals, %d bookers), %d deals (%d with stage history)' % (
+            k['contacts'], st['contactsScope'].split(':')[0], k['withDeals'], k['bookers'], k['deals'], k['dealsWithHistory']))
+    else:
+        lines.append('strategy: %s' % st.get('reason', 'missing'))
     return lines
 
 
