@@ -368,8 +368,8 @@ class RulesE2E(unittest.TestCase):
 
 
 class DealExtrasMigration(unittest.TestCase):
-    """The live table predates stage_history: a 4-column hubspot_deal_extras with rows. An incremental run (no deal
-    changed, extras refreshed recently) adds the column and re-reads every old row once; a deal HubSpot no longer
+    """The live table predates stage_history and contact_ids: a 4-column hubspot_deal_extras with rows. An incremental
+    run (no deal changed, extras refreshed recently) adds the columns and re-reads every old row once; a deal HubSpot no longer
     returns gets "[]" so it is not re-read forever; the next run reads nothing; an old-image upsert (a rollback)
     keeps the history."""
     OLD = ["901", "902", "903", "904", "905", "906", "999"]  # 999: stored, but HubSpot returns nothing for it
@@ -379,6 +379,7 @@ class DealExtrasMigration(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp(prefix="extras-migration-"))
         cls.world = fakes.FakeWorld(cls.tmp).start()
         portal(cls.world.hubspot, cls.world.now)
+        cls.world.hubspot.link("deals", 901, "contacts", 201)
         sync_dir = cls.tmp / "brain-sync"
         shutil.copytree(SYNC_SRC, sync_dir, ignore=shutil.ignore_patterns("logs", "__pycache__"))
         cls.db = cls.tmp / "brain.db"
@@ -425,7 +426,7 @@ class DealExtrasMigration(unittest.TestCase):
         for proc, _ in self.runs:
             self.assertEqual(proc.returncode, 0, proc.stdout[-3000:] + proc.stderr[-3000:])
         cols = [r[1] for r in self.q("PRAGMA table_info(hubspot_deal_extras)")]
-        self.assertEqual(cols, ["deal_id", "company_ids", "owner_history", "refreshed_at", "stage_history"])
+        self.assertEqual(cols, ["deal_id", "company_ids", "owner_history", "refreshed_at", "stage_history", "contact_ids"])
         # Run 1: no deal changed, so the batch read is exactly the rows stored before the column existed.
         first, second = (reqs for _, reqs in self.runs)
         self.assertEqual(self.batch_ids(first), sorted(self.OLD))
@@ -434,8 +435,13 @@ class DealExtrasMigration(unittest.TestCase):
         self.assertEqual([h["value"] for h in json.loads(rows["901"])], ["15879262", "943743501"])
         self.assertEqual(rows["999"], "[]")  # not returned: empty, not NULL
         self.assertNotIn(None, rows.values())
+        assoc_ids = lambda reqs: sorted(x["id"] for r in reqs if r.path == "/crm/v4/associations/deals/contacts/batch/read"
+                                        for x in r.json()["inputs"])
+        self.assertEqual(assoc_ids(first), sorted(self.OLD))
+        self.assertEqual(dict(self.q("SELECT deal_id, contact_ids FROM hubspot_deal_extras")),
+                         {i: '["201"]' if i == "901" else "[]" for i in self.OLD})
         # Run 2: nothing to re-read.
-        self.assertEqual(self.batch_ids(second), [])
+        self.assertEqual((self.batch_ids(second), assoc_ids(second)), ([], []))
         self.assertIn("deal extras: nothing to refresh", self.runs[1][0].stdout + self.runs[1][0].stderr)
 
     def test_old_image_upsert_keeps_the_history(self):

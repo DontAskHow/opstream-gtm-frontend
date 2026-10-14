@@ -167,7 +167,21 @@ class FreshE2E(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stderr[-3000:])
         self.assertEqual((self.fresh["version"], self.fresh["contract"]), (1, "docs/workspace-fresh.md"))
         self.assertTrue((ROOT / self.fresh["contract"]).is_file())
-        self.assertEqual(list(self.data)[-1], "fresh")
+        self.assertEqual(list(self.data)[-2:], ["fresh", "strategy"])  # strategy (docs/workspace-strategy.md) after it
+
+    def test_strategy_from_the_synced_db(self):
+        # The real sync's dealstage history and meetings, through to workspace.json strategy (ids only).
+        s = self.data["strategy"]
+        self.assertTrue(s["available"], s.get("reason"))
+        self.assertEqual(s["dealStageHistory"]["901"]["entered"],
+                         [["943743501", "2026-01-05T00:00:00Z"], ["15879262", "2026-02-01T00:00:00Z"]])
+        row = next(dict(zip(s["contacts"]["fields"], r)) for r in s["contacts"]["rows"] if r[0] == "201")
+        self.assertEqual({k: row[k] for k in ("lifecyclestage", "conversions", "bookings", "firstBookingAt", "firstMeetingSource")},
+                         {"lifecyclestage": "opportunity", "conversions": 3, "bookings": 2,
+                          "firstBookingAt": "2026-03-02T17:00:00Z", "firstMeetingSource": "MEETINGS_PUBLIC"})
+        self.assertEqual(s["conversionEvents"][row["recentConversion"]], "Meetings Link: acme/demo")
+        self.assertTrue(s["synced"]["dealContactsReread"])
+        self.assertNotIn("@", json.dumps(s))
 
     def test_page_is_the_same_without_fresh(self):
         # The built page embeds its view, a copy of the data (every key), in one JSON script block; the markup it
