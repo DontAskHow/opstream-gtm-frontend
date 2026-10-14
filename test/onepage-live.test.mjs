@@ -15,7 +15,7 @@ import { createRequire } from 'node:module';
 import { refresh } from '../workspace/refresh/handler.mjs';
 import { contentHash, textHash, validateWorkspace, stripVolatile, PROBLEMS, SCHEMA_VERSION } from '../workspace/refresh/workspace-json.mjs';
 import { renderAppHtml } from '../onepage/build.mjs';
-import { withheldDocument } from '../workspace/refresh/workspace-json.mjs';
+import { withheldDocument, staleness, STALE, MAX_AGE_MINUTES, WORKSPACE_STALE_MINUTES, FRESH_STALE_MINUTES } from '../workspace/refresh/workspace-json.mjs';
 const withheldDoc = () => withheldDocument('2026-10-13T17:00:00Z');
 
 const require = createRequire(import.meta.url);
@@ -82,7 +82,9 @@ function world({ patterns = [SYNTHETIC_SCRUB] } = {}) {
   };
   w.cfg = { dataBucket: 'B-data', latestKey: 'published/LATEST.json', previewBucket: 'B-preview', dataKey: 'data.js', refreshKey: 'refresh.json',
     hubspotCacheKey: '_state/hubspot-live.json', maxSnapshotFileBytes: 5e6, tmp: w.tmp, livePull: false, staleMinutes: 1e6,
-    workspaceKey: 'workspace.json', scrubPatterns: patterns };
+    workspaceKey: 'workspace.json', scrubPatterns: patterns,
+    // Off unless a test sets them (the copy-on-age and stale tests below).
+    workspaceMaxAgeMinutes: 1e6, workspaceStaleMinutes: 1e6, freshStaleMinutes: 1e6 };
   w.run = (advanceMin = 15) => { clock += advanceMin * 60e3; return refresh(w.deps, { cfg: w.cfg, now: () => new Date(clock), log: () => {} }); };
   w.wsPuts = () => w.puts.filter((p) => p.key === 'workspace.json').length;
   w.refreshDoc = () => JSON.parse(s3.get('preview/refresh.json'));
@@ -292,6 +294,177 @@ test('Lambda: a newly matching scrub pattern replaces the live copy with a withh
   assert.equal(back.workspace.status, 'uploaded');
   assert.equal(JSON.parse(w.s3.get('preview/workspace.json')).withheld, undefined);
   assert.match(page.withheldView(JSON.parse(withheldDoc())), /withheld[\s\S]*next clean snapshot/);
+});
+
+// The build time and every available fresh.<section>.fetchedAt, as a later sync of the same data writes them.
+const stampAll = (text, gen, fetched = gen) => {
+  const d = JSON.parse(restamp(text, gen));
+  for (const sec of Object.values(d.fresh || {})) if (sec && sec.available === true) sec.fetchedAt = fetched;
+  return JSON.stringify(d);
+};
+const at = (hhmm) => `2026-10-13T${hhmm}:00Z`;
+const ms = (iso) => new Date(iso).toISOString(); // the function's own times carry milliseconds
+const FRESH_SECTIONS = Object.entries(JSON.parse(WS).fresh || {}).filter(([, x]) => x && x.available === true).map(([k]) => k);
+
+test('Lambda: unchanged content is copied again once the live copy is older than WORKSPACE_MAX_AGE_MIN and the snapshot is newer', async (t) => {
+  const w = world();
+  t.after(w.done);
+  w.cfg.workspaceMaxAgeMinutes = 25;
+  assert.ok(FRESH_SECTIONS.length >= 2, 'the synthetic workspace.json has fresh sections');
+  w.publish(stampAll(WS, at('16:00'), at('15:58')));
+  const r1 = await w.run(); // 16:15
+  assert.deepEqual([r1.workspace.status, r1.workspace.reason], ['uploaded', 'content']);
+  let doc = w.refreshDoc();
+  assert.equal(doc.workspace.writtenAt, ms(at('16:15')));
+  assert.deepEqual(doc.workspace.freshAt, Object.fromEntries(FRESH_SECTIONS.map((k) => [k, at('15:58')])));
+  // Same content, newer times; the live copy (built 16:00) is 30 min old at 16:30: copied, reason refresh-age.
+  const newer = stampAll(WS, at('16:20'), at('16:18'));
+  w.publish(newer);
+  const r2 = await w.run(); // 16:30
+  assert.deepEqual([r2.workspace.status, r2.workspace.reason, r2.workspace.uploaded], ['uploaded', 'refresh-age', true]);
+  assert.equal(w.wsPuts(), 2);
+  assert.equal(w.s3.get('preview/workspace.json'), newer, 'the page bucket has the newer file');
+  assert.equal(JSON.parse(w.s3.get('preview/workspace.json')).fresh[FRESH_SECTIONS[0]].fetchedAt, at('16:18'), 'fresh.*.fetchedAt moves');
+  doc = w.refreshDoc();
+  assert.deepEqual([doc.workspace.status, doc.workspace.reason, doc.workspace.publishedGeneratedAt, doc.workspace.writtenAt], ['uploaded', 'refresh-age', at('16:20'), ms(at('16:30'))]);
+  assert.equal(doc.workspace.stamps.forTextSha256, textHash(newer));
+  assert.equal(doc.workspace.sha256, doc.workspace.publishedSha256, 'same content hash as before');
+  // Newer again, but the live copy (16:20) is exactly 25 min old at 16:45: not older than the limit, kept.
+  w.publish(stampAll(WS, at('16:35'), at('16:33')));
+  const r3 = await w.run(); // 16:45
+  assert.deepEqual([r3.workspace.status, r3.workspace.uploaded], ['unchanged', false]);
+  assert.equal(w.refreshDoc().workspace.writtenAt, ms(at('16:30')));
+  assert.equal(w.refreshDoc().workspace.freshAt[FRESH_SECTIONS[0]], at('16:18'), 'the live copy’s times, not the snapshot’s');
+  // 17:00: 40 min old and the snapshot is newer: copied.
+  const r4 = await w.run();
+  assert.deepEqual([r4.workspace.status, r4.workspace.reason], ['uploaded', 'refresh-age']);
+  assert.equal(w.wsPuts(), 3);
+  // The same file as the live copy is never copied again, however old.
+  const r5 = await w.run(45); // 17:45
+  assert.deepEqual([r5.workspace.status, r5.workspace.uploaded], ['unchanged', false]);
+  // A snapshot older than the live copy (an out-of-order pointer) is not copied either.
+  w.publish(stampAll(WS, at('15:00')));
+  assert.equal((await w.run()).workspace.status, 'unchanged');
+  assert.equal(w.wsPuts(), 3);
+  // A content change still uploads at once, whatever the age.
+  const changed = JSON.parse(stampAll(WS, at('18:10'))); changed.headline.open.count += 1;
+  w.publish(JSON.stringify(changed));
+  const r6 = await w.run(); // 18:15
+  assert.deepEqual([r6.workspace.status, r6.workspace.reason], ['uploaded', 'content']);
+  assert.equal(w.notes.length, 0, 'no alarm');
+  // The page: an uploaded copy is shown as current (no last-good banner).
+  const live = w.s3.get('preview/workspace.json');
+  const v = buildView(JSON.parse(live), w.refreshDoc(), textHash(live));
+  assert.deepEqual([v.live.status, v.live.problem], ['uploaded', null]);
+  assert.ok(!page.header(v, { now: Date.parse(at('18:16')) }).includes('Showing the last good data'));
+});
+
+test('Lambda: workspace-stale and fresh-stale in refresh.json failing: not while the sync keeps publishing; alarmed (with a daily reminder) once the live copy stops moving', async (t) => {
+  const w = world();
+  t.after(w.done);
+  // fresh at 90 (not the default 75) so the two limits fall on different 15-minute runs here.
+  Object.assign(w.cfg, { workspaceMaxAgeMinutes: 25, workspaceStaleMinutes: 60, freshStaleMinutes: 90 });
+  // A quiet period at the normal cadence: the sync republishes unchanged content every 30 min
+  // (fetched 3 min before), and the function runs every 15. Nothing is flagged.
+  let clock = Date.parse(at('16:00')); // after each run: that run's time
+  const iso = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z');
+  for (let i = 0; i < 12; i++) {
+    if (i % 2 === 0) w.publish(stampAll(WS, iso(clock + 12 * 60e3), iso(clock + 10 * 60e3)));
+    const r = await w.run(); clock += 15 * 60e3;
+    assert.deepEqual(r.failing, [], `run ${i}`);
+  }
+  assert.equal(w.notes.length, 0);
+  let doc = w.refreshDoc();
+  assert.deepEqual(doc.failing, []);
+  assert.ok(Number.isFinite(doc.workspace.writtenAgeMinutes) && doc.workspace.writtenAgeMinutes <= 30, JSON.stringify(doc.workspace));
+  assert.deepEqual(Object.keys(doc.workspace.freshAges).sort(), [...FRESH_SECTIONS].sort());
+  const lastWritten = Date.parse(doc.workspace.writtenAt);
+  const lastFetched = Date.parse(doc.workspace.freshAt[FRESH_SECTIONS[0]]);
+  // The sync stops publishing. The live copy ages; past 60 min since it was written: workspace-stale.
+  let r;
+  do { r = await w.run(); clock += 15 * 60e3; } while (!r.failing.length);
+  const firstFlag = clock;
+  assert.deepEqual(r.failing, ['workspace-stale']);
+  assert.ok(firstFlag - lastWritten > 60 * 60e3 && firstFlag - lastWritten <= 75 * 60e3);
+  assert.equal(w.notes.length, 1);
+  assert.match(w.notes[0].subject, /GTM preview refresh: workspace-stale/);
+  assert.match(w.notes[0].message, /workspace\.json on the page: last written .* min ago\); fresh section ages \(min\):/);
+  doc = w.refreshDoc();
+  assert.deepEqual(doc.failing, ['workspace-stale']);
+  assert.ok(doc.workspace.writtenAgeMinutes > 60);
+  // The page shows nothing new: these are not workspace.problem.
+  assert.deepEqual([doc.workspace.status, doc.workspace.problem], ['unchanged', null]);
+  assert.ok(!page.header(buildView(JSON.parse(w.s3.get('preview/workspace.json')), doc), { now: firstFlag }).includes('Showing the last good data'));
+  // Past 90 min since the fetch: fresh-stale too (a change of the set: one more alarm).
+  do { r = await w.run(); clock += 15 * 60e3; } while (r.failing.length < 2);
+  assert.deepEqual(r.failing, ['workspace-stale', 'fresh-stale']);
+  assert.ok(clock - lastFetched > 90 * 60e3);
+  assert.ok(Object.values(w.refreshDoc().workspace.freshAges).every((a) => a > 90));
+  assert.equal(w.notes.length, 2);
+  // Unlike the workspace.json problems these are not quiet: the daily reminder fires.
+  await w.run(15); clock += 15 * 60e3;
+  assert.equal(w.notes.length, 2);
+  r = await w.run(60 * 24); clock += 60 * 24 * 60e3;
+  assert.equal(w.notes.length, 3);
+  assert.match(w.notes[2].message, /^reminder\./);
+  // The sync publishes again: the newer copy goes up (refresh-age) and both clear.
+  w.publish(stampAll(WS, iso(clock + 11 * 60e3), iso(clock + 9 * 60e3)));
+  r = await w.run(); clock += 15 * 60e3;
+  assert.deepEqual([r.workspace.status, r.workspace.reason, r.failing], ['uploaded', 'refresh-age', []]);
+  assert.equal(w.notes.length, 4);
+  assert.match(w.notes[3].subject, /problems cleared/);
+});
+
+test('Lambda: fresh-stale alone when a section stopped syncing; unavailable sections are ignored; times recorded before this change fill in', async (t) => {
+  const w = world();
+  t.after(w.done);
+  Object.assign(w.cfg, { workspaceMaxAgeMinutes: 25, workspaceStaleMinutes: 60, freshStaleMinutes: 75 });
+  // Built now, but one section's source last synced 2 hours ago.
+  const d = JSON.parse(stampAll(WS, at('16:10'), at('16:08')));
+  const [stuck, other] = FRESH_SECTIONS;
+  d.fresh[stuck].fetchedAt = at('14:10');
+  w.publish(JSON.stringify(d));
+  const r = await w.run(); // 16:15
+  assert.equal(r.workspace.status, 'uploaded');
+  assert.deepEqual(r.failing, ['fresh-stale']);
+  assert.equal(r.workspace.freshAges[stuck], 125);
+  assert.equal(r.workspace.freshAges[other], 7);
+  assert.equal(w.notes.length, 1);
+  assert.match(w.notes[0].subject, /fresh-stale/);
+  // The same section unavailable (its source not synced): it has no time, so it is not judged.
+  delete d.fresh[stuck].fetchedAt; d.fresh[stuck] = { available: false, reason: 'not synced' };
+  d.meta.generatedAt = at('16:20');
+  w.publish(JSON.stringify(d));
+  const r2 = await w.run(); // 16:30: refresh-age upload
+  assert.deepEqual([r2.workspace.status, r2.failing], ['uploaded', []]);
+  assert.ok(!(stuck in w.refreshDoc().workspace.freshAt));
+  // refresh.json from before this change (no writtenAt, no freshAt): the build time stands in for
+  // the write time, and the fresh times are read from the snapshot when it is the live file.
+  const old = w.refreshDoc();
+  delete old.workspace.writtenAt; delete old.workspace.freshAt; delete old.workspace.freshAges; delete old.workspace.writtenAgeMinutes;
+  w.s3.set('preview/refresh.json', JSON.stringify(old));
+  const r3 = await w.run(); // 16:45, same file as live
+  assert.equal(r3.workspace.status, 'unchanged');
+  const doc = w.refreshDoc();
+  assert.equal(doc.workspace.writtenAt, null);
+  assert.equal(doc.workspace.writtenAgeMinutes, 25, 'from publishedGeneratedAt 16:20');
+  assert.equal(doc.workspace.freshAt[other], at('16:08'));
+  assert.deepEqual(r3.failing, []);
+});
+
+test('staleness: defaults, the worst normal case (the 6-hourly skip window) does not flag, unknown times never flag', () => {
+  assert.deepEqual([MAX_AGE_MINUTES, WORKSPACE_STALE_MINUTES, FRESH_STALE_MINUTES], [25, 60, 75]);
+  const now = at('19:00');
+  const min = (m) => new Date(Date.parse(now) - m * 60e3).toISOString();
+  // Around the skip window the live copy can be ~45-60 min old and its fetch times ~12 min older.
+  assert.deepEqual(staleness({ writtenAt: min(60), freshAt: { won: min(72), calls: min(72) } }, now).failing, []);
+  assert.deepEqual(staleness({ writtenAt: min(61), freshAt: { won: min(72) } }, now).failing, [STALE.workspace]);
+  const s = staleness({ writtenAt: min(10), freshAt: { won: min(76), calls: min(5), submissions: null } }, now);
+  assert.deepEqual([s.failing, s.writtenAgeMinutes, s.freshAges], [[STALE.fresh], 10, { won: 76, calls: 5, submissions: null }]);
+  assert.deepEqual(staleness({ writtenAt: null, publishedGeneratedAt: min(90), freshAt: null }, now), { failing: [STALE.workspace], writtenAgeMinutes: 90, freshAges: null });
+  assert.deepEqual(staleness({}, now), { failing: [], writtenAgeMinutes: null, freshAges: null });
+  assert.deepEqual(staleness({ writtenAt: 'garbage', freshAt: { won: 'garbage' } }, now).failing, []);
+  assert.deepEqual(staleness({ writtenAt: min(31), freshAt: { won: min(31) } }, now, { workspaceStaleMinutes: 30, freshStaleMinutes: 30 }).failing, [STALE.workspace, STALE.fresh]);
 });
 
 test('page (no browser): stamps, the 45-minute amber, the last-good banner, the error view', () => {

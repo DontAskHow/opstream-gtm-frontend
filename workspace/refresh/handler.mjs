@@ -7,7 +7,10 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync
 import { join } from 'node:path';
 import { readInputs } from '../build.mjs';
 import { compose, stamp, sha256, refreshDoc, alarmDecision, problems, isHubspotExport, hubspotLive } from './compose.mjs';
-import { publishWorkspace, scrubPatterns, WORKSPACE_FILE, PROBLEMS as WORKSPACE_PROBLEMS } from './workspace-json.mjs';
+import { publishWorkspace, scrubPatterns, staleness, WORKSPACE_FILE, PROBLEMS as WORKSPACE_PROBLEMS, MAX_AGE_MINUTES, WORKSPACE_STALE_MINUTES, FRESH_STALE_MINUTES } from './workspace-json.mjs';
+
+// A minutes setting from the environment; unset, empty, negative or not a number: the default.
+const envMinutes = (name, dflt) => { const n = Number(process.env[name] ?? ''); return process.env[name]?.trim() && Number.isFinite(n) && n >= 0 ? n : dflt; };
 
 export const CONFIG = {
   region: process.env.AWS_REGION || 'us-east-2',
@@ -19,6 +22,11 @@ export const CONFIG = {
   // The one-page workspace's data (onepage/), copied from the snapshot run when its content changes.
   workspaceKey: WORKSPACE_FILE,
   scrubPatterns: scrubPatterns(),
+  // Unchanged workspace.json is copied again once the live copy is this old (and the snapshot's is newer).
+  workspaceMaxAgeMinutes: envMinutes('WORKSPACE_MAX_AGE_MIN', MAX_AGE_MINUTES),
+  // refresh.json `failing` gets workspace-stale / fresh-stale past these (workspace-json.mjs STALE).
+  workspaceStaleMinutes: envMinutes('WORKSPACE_STALE_MIN', WORKSPACE_STALE_MINUTES),
+  freshStaleMinutes: envMinutes('FRESH_STALE_MIN', FRESH_STALE_MINUTES),
   topicArn: process.env.TOPIC_ARN || 'arn:aws:sns:us-east-2:080403790510:opstream-gtm-refresh-failures',
   // The sync job publishes every 15 minutes; an older pointer than this alarms.
   staleMinutes: Number(process.env.SNAPSHOT_STALE_MINUTES || 60),
@@ -151,6 +159,7 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
       text: snap.workspaceText, tooLarge: snap.workspaceTooLarge, patterns: cfg.scrubPatterns || [], nowIso: now().toISOString(),
       // LATEST.json's mode: 'sync-only' runs write workspace.json; the 6-hourly full run (no mode) does not.
       snapshotMode: snap.meta.mode ?? null,
+      maxAgeMinutes: cfg.workspaceMaxAgeMinutes ?? MAX_AGE_MINUTES,
     })
     : { block: null, problem: null, uploaded: false };
   let live = null;
@@ -186,7 +195,15 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
 
   const failing = problems({ live, hubspotMode: data.refresh.hubspot, snapshotPublishedAt: snap.meta.publishedAt, nowMs: Date.parse(nowIso), staleMinutes: cfg.staleMinutes });
   if (ws.problem) failing.push(ws.problem);
+  // The live copy's own age, after this run's upload (if any).
+  const age = ws.block ? staleness(ws.block, nowIso, { workspaceStaleMinutes: cfg.workspaceStaleMinutes ?? WORKSPACE_STALE_MINUTES, freshStaleMinutes: cfg.freshStaleMinutes ?? FRESH_STALE_MINUTES }) : null;
+  if (age) {
+    failing.push(...age.failing);
+    ws.block.writtenAgeMinutes = age.writtenAgeMinutes;
+    ws.block.freshAges = age.freshAges;
+  }
   // Workspace problems alarm once when they start (and when they clear), with no daily reminder.
+  // workspace-stale and fresh-stale are not among them: they remind daily, like snapshot-stale.
   const alarm = alarmDecision({ failing, prev, nowMs: Date.parse(nowIso), quiet: Object.values(WORKSPACE_PROBLEMS) });
   let lastAlarmAt = prev.lastAlarmAt ?? null;
   if (alarm.send) {
@@ -196,6 +213,7 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
     ];
     if (failing.includes('snapshot-stale')) lines.push(`LATEST.json is older than ${cfg.staleMinutes} minutes: is the sync job running?`);
     if (ws.block) lines.push(`workspace.json: ${ws.block.status}${ws.problem ? ' (' + ws.problem + (ws.block.errors.length ? ': ' + ws.block.errors.join('; ') : '') + '); the page keeps the last good copy from ' + (ws.block.publishedGeneratedAt || 'never') : ''}`);
+    if (age?.failing.length) lines.push(`workspace.json on the page: last written ${ws.block.writtenAt || ws.block.publishedGeneratedAt || 'never'} (${age.writtenAgeMinutes ?? '?'} min ago); fresh section ages (min): ${age.freshAges ? Object.entries(age.freshAges).map(([k, a]) => `${k} ${a ?? '?'}`).join(', ') || 'none' : 'unknown'}. Is the sync job publishing?`);
     if (live) for (const k of ['hubspot', 'lemlist', 'fathom']) lines.push(`${k}: ${live[k].ok ? 'ok' : 'FAILED - ' + live[k].error}`);
     if (live?.hubspot.rotated) lines.push('HubSpot returned a new refresh token. It was NOT saved (this function cannot write secrets); check opstream-gtm/hubspot-oauth.');
     await deps.notify(
@@ -213,7 +231,7 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
   const summary = {
     changed, sha256: hash, snapshot: snap.runId, snapshotPublishedAt: snap.meta.publishedAt ?? null, livePull: !!live,
     failing, alarm: alarm.send ? alarm.reason : null, hubspotMode: data.refresh.hubspot, deals: data.deals.length,
-    workspace: ws.block ? { status: ws.block.status, uploaded: ws.uploaded, sha256: ws.block.sha256, problem: ws.problem } : null,
+    workspace: ws.block ? { status: ws.block.status, ...(ws.block.reason ? { reason: ws.block.reason } : {}), uploaded: ws.uploaded, sha256: ws.block.sha256, problem: ws.problem, writtenAgeMinutes: ws.block.writtenAgeMinutes ?? null, freshAges: ws.block.freshAges ?? null } : null,
     ...(live ? { sources: Object.fromEntries(Object.entries(live).map(([k, r]) => [k, { ok: r.ok, ms: r.ms, ...(r.ok ? { detail: r.detail } : { error: r.error }) }])) } : {}),
     ms: Date.now() - started.getTime(),
   };

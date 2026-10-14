@@ -18,7 +18,16 @@
 #                                          # inside by onepage/build.mjs --data); its data is fixed at build time.
 #   workspace/refresh/deploy.sh --restore-app
 #                                          # put the workspace app's index.html back even when the live page is
-#                                          # the one-page workspace (without it, a plain deploy leaves that page).
+#                                          # another page (without it, a plain deploy leaves any index.html that
+#                                          # carries a gtm-page tag, e.g. onepage-app or fresh-workspace).
+#   workspace/refresh/deploy.sh --lambda-only
+#                                          # update only the function's code and environment: no IAM, log group,
+#                                          # schedule, alarm or concurrency change, and no file in the preview bucket
+#                                          # (index.html, app.js, ...) is touched. The function must already exist.
+#
+# The function's environment: LIVE_PULL=0, the scrub patterns (below), and the optional minute settings
+# WORKSPACE_MAX_AGE_MIN, WORKSPACE_STALE_MIN, FRESH_STALE_MIN (workspace-json.mjs): set in the deploy
+# shell to change them, else the current function's values are kept (unset: the code's defaults).
 #
 # Scrub patterns (people who must never appear) are never in the repo. Pass them as
 # WORKSPACE_SCRUB_PATTERNS (comma list) or WORKSPACE_SCRUB_PATTERNS_FILE; they go into the
@@ -34,7 +43,7 @@ export AWS_PROFILE="${AWS_PROFILE:-opstream-deploy}"
 export AWS_REGION=us-east-2 AWS_DEFAULT_REGION=us-east-2
 export AWS_PAGER=""
 
-ENABLE=0; DISABLE=0; APP=1; ONEPAGE=""; ONEPAGE_APP=0; RESTORE_APP=0
+ENABLE=0; DISABLE=0; APP=1; ONEPAGE=""; ONEPAGE_APP=0; RESTORE_APP=0; LAMBDA_ONLY=0
 TMP=""; ONEPAGE_APP_DIR=""
 trap 'rm -rf "$TMP" "$ONEPAGE_APP_DIR"' EXIT
 while [ $# -gt 0 ]; do
@@ -45,12 +54,18 @@ while [ $# -gt 0 ]; do
     --onepage) ONEPAGE="${2:?--onepage needs a directory}"; shift ;;
     --onepage-app) ONEPAGE_APP=1 ;;
     --restore-app) RESTORE_APP=1 ;;
+    --lambda-only) LAMBDA_ONLY=1 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
   shift
 done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [ "$LAMBDA_ONLY" = 1 ]; then
+  [ -n "$ONEPAGE" ] || [ "$ONEPAGE_APP" = 1 ] || [ "$RESTORE_APP" = 1 ] || [ "$ENABLE" = 1 ] || [ "$DISABLE" = 1 ] && {
+    echo "--lambda-only updates the function only; it does not combine with --onepage, --onepage-app, --restore-app, --enable or --disabled" >&2; exit 2; }
+  APP=0
+fi
 # The one-page build is checked before anything touches AWS.
 if [ -n "$ONEPAGE" ]; then ONEPAGE_FILE=$(node "$ROOT/onepage/deploy-check.mjs" "$ONEPAGE") || exit 1; APP=0; fi
 [ -n "$ONEPAGE" ] && [ "$ONEPAGE_APP" = 1 ] && { echo "--onepage and --onepage-app are exclusive" >&2; exit 2; }
@@ -87,6 +102,7 @@ FN_ARN=arn:aws:lambda:$AWS_REGION:$ACCOUNT:function:$FN
 [ "$(aws sts get-caller-identity --query Account --output text)" = "$ACCOUNT" ] || { echo "wrong AWS account" >&2; exit 1; }
 TMP="$(mktemp -d)"
 
+if [ "$LAMBDA_ONLY" != 1 ]; then
 # ---------- log group (14-day retention) ----------
 aws logs create-log-group --log-group-name "$LOG_GROUP" 2>/dev/null || true
 aws logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days 14
@@ -141,6 +157,7 @@ else
 fi
 aws iam put-role-policy --role-name "$SCHED_ROLE" --policy-name invoke-gtm-preview-refresh --policy-document "file://$TMP/policy-sched.json"
 SCHED_ROLE_ARN=$(aws iam get-role --role-name "$SCHED_ROLE" --query Role.Arn --output text)
+fi
 
 # ---------- package (code only; the snapshot is read at run time) ----------
 ( cd "$ROOT" && python3 - "$TMP/fn.zip" <<'PY'
@@ -170,7 +187,35 @@ if [ -z "$SCRUB" ]; then
   echo "warning: no scrub patterns; the function will keep the last good workspace.json and alarm workspace-scrub-patterns-missing" >&2
 fi
 # Written to a private file and passed as file://, so the patterns never appear on a command line.
-( umask 077; SCRUB="$SCRUB" python3 -c 'import json,os; v={"LIVE_PULL":"0"}; s=os.environ["SCRUB"]; v.update({"WORKSPACE_SCRUB_PATTERNS":s} if s else {}); print(json.dumps({"Variables":v}))' > "$TMP/env.json" )
+# The current environment (it holds the patterns too) is read into a private file for the minute settings.
+( umask 077; aws lambda get-function-configuration --function-name "$FN" --query 'Environment.Variables' --output json > "$TMP/env-now.json" 2>/dev/null || true )
+( umask 077; SCRUB="$SCRUB" python3 - "$TMP/env-now.json" > "$TMP/env.json" <<'PY'
+import json, os, sys
+try:
+    now = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    now = None
+now = now if isinstance(now, dict) else {}
+v = {"LIVE_PULL": "0"}
+if os.environ["SCRUB"]:
+    v["WORKSPACE_SCRUB_PATTERNS"] = os.environ["SCRUB"]
+for k in ("WORKSPACE_MAX_AGE_MIN", "WORKSPACE_STALE_MIN", "FRESH_STALE_MIN"):
+    x = os.environ.get(k, "").strip() or str(now.get(k) or "").strip()
+    if x:
+        v[k] = x
+print(json.dumps({"Variables": v}))
+PY
+)
+rm -f "$TMP/env-now.json"
+if [ "$LAMBDA_ONLY" = 1 ]; then
+  aws lambda get-function --function-name "$FN" >/dev/null 2>&1 || { echo "--lambda-only: $FN does not exist; run a full deploy first" >&2; exit 1; }
+  aws lambda update-function-code --function-name "$FN" --zip-file "fileb://$TMP/fn.zip" --architectures arm64 >/dev/null
+  aws lambda wait function-updated-v2 --function-name "$FN"
+  aws lambda update-function-configuration --function-name "$FN" --environment "file://$TMP/env.json" >/dev/null
+  aws lambda wait function-updated-v2 --function-name "$FN"
+  echo "function  $FN_ARN (code and environment only; IAM, schedule, alarm and the preview bucket's files untouched)"
+  exit 0
+fi
 FN_CONFIG=(--runtime nodejs20.x --handler workspace/refresh/handler.handler --role "$ROLE_ARN"
   --memory-size 512 --timeout 120 --environment "file://$TMP/env.json"
   --description "GTM preview refresh: published snapshot -> data.js when changed (no AI, no provider APIs)"
@@ -218,6 +263,8 @@ if [ "$APP" = 1 ]; then
   LIVE_PAGE=$(aws s3api head-object --bucket "$PREVIEW_BUCKET" --key index.html --query 'Metadata."gtm-page"' --output text 2>/dev/null || true)
   if [ "$LIVE_PAGE" = "onepage-app" ] && [ "$RESTORE_APP" != 1 ]; then
     echo "index.html is the one-page workspace: left as it is (pass --restore-app to put the workspace app back)" >&2
+  elif [ -n "$LIVE_PAGE" ] && [ "$LIVE_PAGE" != "None" ] && [ "$RESTORE_APP" != 1 ]; then
+    echo "index.html carries gtm-page=$LIVE_PAGE: left as it is (pass --restore-app to put the workspace app back)" >&2
   else
     up index.html index.html "text/html; charset=utf-8"
   fi

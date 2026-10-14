@@ -1,7 +1,9 @@
 // workspace.json: the one-page workspace's data, written by scripts/workspace-data.py
 // inside the sync job and published with each snapshot run. Every refresh run checks the
 // published copy (including a trial render with the page's own code) and copies it to the
-// preview bucket only when its content changed (timestamps aside). A missing or invalid copy
+// preview bucket when its content changed (timestamps aside), or when the live copy is older
+// than WORKSPACE_MAX_AGE_MIN and the snapshot's copy is newer, so the times in the file (the
+// fresh frontend reads fresh.*.fetchedAt from it) keep moving in a quiet period. A missing or invalid copy
 // keeps the last good one, except when a newly added scrub pattern matches: then the live
 // copy is replaced by a small "withheld" document, because the name must not stay visible.
 import { createHash } from 'node:crypto';
@@ -19,6 +21,19 @@ export const PROBLEMS = {
 };
 // What the page reads without a guard (onepage/page.cjs, view.cjs).
 export const REQUIRED_KEYS = ['meta', 'freshness', 'flags', 'headline', 'deals', 'closed', 'leads', 'ads', 'meetings', 'calls', 'scope', 'rules'];
+
+// refresh.json `failing` entries for a live copy that has stopped moving. They alarm like the
+// snapshot problems (daily reminder), and the page does not show them: it reads `workspace.status`
+// and `workspace.problem`, which these leave alone.
+export const STALE = { workspace: 'workspace-stale', fresh: 'fresh-stale' };
+// Defaults (the Lambda's environment overrides them; handler.mjs CONFIG). The sync job republishes
+// unchanged content every ~30 min (refresh/run.py PUBLISH_MAX_AGE_MIN=25) and this function runs
+// every 15, so in a quiet period the live copy is rewritten every 30-45 min and, around the
+// 6-hourly job's skip window, up to ~60 min; its fresh.*.fetchedAt run ~12 min older than that.
+// The stale limits sit above those, so the normal cadence never flags.
+export const MAX_AGE_MINUTES = 25;
+export const WORKSPACE_STALE_MINUTES = 60;
+export const FRESH_STALE_MINUTES = 75;
 
 // Keys whose values say only *when* (the same set the sync job's content hash ignores,
 // refresh/run.py VOLATILE_KEYS), plus a successful source's per-run detail.
@@ -110,6 +125,29 @@ export function workspaceStamps(doc, forTextSha256) {
   };
 }
 
+// fresh.<section>.fetchedAt of each available section (docs/workspace-fresh.md), or null without `fresh`.
+export function freshTimes(doc) {
+  const f = doc && doc.fresh;
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return null;
+  const out = {};
+  for (const [k, s] of Object.entries(f)) if (s && typeof s === 'object' && !Array.isArray(s) && s.available === true) out[k] = s.fetchedAt ?? null;
+  return out;
+}
+
+// How old the live copy is: when this function last wrote it (before writtenAt was recorded: the
+// build time of the file it wrote, which is earlier) and each fresh section's fetch time. Unknown
+// or unparseable times are reported as null and never flag.
+export function staleness(block, nowIso, { workspaceStaleMinutes = WORKSPACE_STALE_MINUTES, freshStaleMinutes = FRESH_STALE_MINUTES } = {}) {
+  const now = Date.parse(nowIso);
+  const ageMin = (iso) => { const t = Date.parse(iso ?? ''); return Number.isFinite(t) ? Math.round((now - t) / 60e3) : null; };
+  const writtenAge = ageMin(block?.writtenAt ?? block?.publishedGeneratedAt);
+  const freshAges = block?.freshAt ? Object.fromEntries(Object.entries(block.freshAt).map(([k, at]) => [k, ageMin(at)])) : null;
+  const failing = [];
+  if (writtenAge != null && writtenAge > workspaceStaleMinutes) failing.push(STALE.workspace);
+  if (freshAges && Object.values(freshAges).some((a) => a != null && a > freshStaleMinutes)) failing.push(STALE.fresh);
+  return { failing, writtenAgeMinutes: writtenAge, freshAges };
+}
+
 // Served in place of the data when a newly matching scrub pattern is found. The page shows it as a notice.
 export function withheldDocument(nowIso) {
   return JSON.stringify({
@@ -128,7 +166,7 @@ const put = (deps, bucket, key, text, sha) => deps.put(bucket, key, text, { cont
 // workspace.json has been seen for longer than this.
 export const MISSING_GRACE_MINUTES = 60;
 
-export async function publishWorkspace({ deps, previewBucket, key = WORKSPACE_FILE, text, tooLarge = false, runId, prev = {}, patterns, nowIso, snapshotMode = 'sync-only', graceMinutes = MISSING_GRACE_MINUTES }) {
+export async function publishWorkspace({ deps, previewBucket, key = WORKSPACE_FILE, text, tooLarge = false, runId, prev = {}, patterns, nowIso, snapshotMode = 'sync-only', graceMinutes = MISSING_GRACE_MINUTES, maxAgeMinutes = MAX_AGE_MINUTES }) {
   const pSha = patterns.length ? patternsHash(patterns) : null;
   // When a sync-only snapshot last brought a good workspace.json (a run before this field existed: its check time).
   const seenAt = prev.workspaceSeenAt ?? (['uploaded', 'unchanged'].includes(prev.status) ? prev.checkedAt ?? null : null);
@@ -137,6 +175,8 @@ export async function publishWorkspace({ deps, previewBucket, key = WORKSPACE_FI
     publishedGeneratedAt: prev.publishedGeneratedAt ?? null, publishedRunId: prev.publishedRunId ?? null,
     publishedPatternsSha256: prev.publishedPatternsSha256 ?? null, withheld: !!prev.withheld, runId: runId ?? null, checkedAt: nowIso,
     snapshotMode: snapshotMode ?? null, workspaceSeenAt: seenAt,
+    // When this function last wrote the live copy, and that copy's fresh.<section>.fetchedAt.
+    writtenAt: prev.writtenAt ?? null, freshAt: prev.freshAt ?? null,
   };
   const keep = (problem, errors, note) => ({
     block: { ...base, status: base.withheld ? 'withheld' : 'kept-last-good', problem, errors: errors || [], sha256: null, stamps: base.withheld ? null : prev.stamps ?? null, ...(note ? { note } : {}) },
@@ -162,23 +202,32 @@ export async function publishWorkspace({ deps, previewBucket, key = WORKSPACE_FI
       await put(deps, previewBucket, key, doc, tSha);
       return {
         block: { ...base, status: 'withheld', problem: PROBLEMS.withheld, errors: v.errors, sha256: null, publishedSha256: null, publishedTextSha256: tSha,
-          publishedGeneratedAt: nowIso, publishedRunId: null, publishedPatternsSha256: pSha, withheld: true, stamps: null },
+          publishedGeneratedAt: nowIso, publishedRunId: null, publishedPatternsSha256: pSha, withheld: true, stamps: null, writtenAt: nowIso, freshAt: null },
         problem: PROBLEMS.withheld, uploaded: true,
       };
     }
     return keep(base.withheld ? PROBLEMS.withheld : PROBLEMS.invalid, v.errors);
   }
   const sha = contentHash(v.doc);
-  if (sha === base.publishedSha256 && !base.withheld) {
-    // Same content as the live copy, now also checked against the current patterns.
-    return { block: { ...base, status: 'unchanged', problem: null, errors: [], sha256: sha, publishedPatternsSha256: pSha, workspaceSeenAt: nowIso, stamps: workspaceStamps(v.doc, base.publishedTextSha256) }, problem: null, uploaded: false };
-  }
   const tSha = textHash(text);
+  const generatedAt = v.doc.meta?.generatedAt ?? v.doc.meta?.asOf ?? null;
+  const sameContent = sha === base.publishedSha256 && !base.withheld;
+  // Same content, but the live copy is older than maxAgeMinutes and this one is newer: upload it
+  // anyway, so the times in the file move (an unknown live time counts as old).
+  const liveAt = Date.parse(base.publishedGeneratedAt ?? '');
+  const refreshAge = sameContent && tSha !== base.publishedTextSha256
+    && !(Date.parse(nowIso) - liveAt <= maxAgeMinutes * 60e3) && !(Date.parse(generatedAt ?? '') <= liveAt);
+  if (sameContent && !refreshAge) {
+    // Same content as the live copy, now also checked against the current patterns.
+    // The same text is the same file: its fresh times are the live copy's (fills them in after deploy).
+    const freshAt = tSha === base.publishedTextSha256 ? freshTimes(v.doc) : base.freshAt;
+    return { block: { ...base, status: 'unchanged', problem: null, errors: [], sha256: sha, publishedPatternsSha256: pSha, workspaceSeenAt: nowIso, freshAt, stamps: workspaceStamps(v.doc, base.publishedTextSha256) }, problem: null, uploaded: false };
+  }
   await put(deps, previewBucket, key, text, tSha);
   return {
-    block: { ...base, status: 'uploaded', problem: null, errors: [], sha256: sha, publishedSha256: sha, publishedTextSha256: tSha,
-      publishedGeneratedAt: v.doc.meta?.generatedAt ?? v.doc.meta?.asOf ?? null, publishedRunId: runId ?? null, publishedPatternsSha256: pSha,
-      withheld: false, workspaceSeenAt: nowIso, stamps: workspaceStamps(v.doc, tSha) },
+    block: { ...base, status: 'uploaded', reason: refreshAge ? 'refresh-age' : 'content', problem: null, errors: [], sha256: sha, publishedSha256: sha, publishedTextSha256: tSha,
+      publishedGeneratedAt: generatedAt, publishedRunId: runId ?? null, publishedPatternsSha256: pSha,
+      withheld: false, workspaceSeenAt: nowIso, writtenAt: nowIso, freshAt: freshTimes(v.doc), stamps: workspaceStamps(v.doc, tSha) },
     problem: null, uploaded: true,
   };
 }

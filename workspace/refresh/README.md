@@ -9,7 +9,7 @@ EventBridge Scheduler gtm-preview-refresh-15m (rate 15 min, no flex window, 0 re
        build workspace/lib/project.mjs buildData(), the same code as workspace/build.mjs
        put   s3://opstream-gtm-preview-db5553a4/data.js       only when sha256(content) changed
        put   s3://opstream-gtm-preview-db5553a4/refresh.json  every successful check
-       put   s3://opstream-gtm-preview-db5553a4/workspace.json  the run's workspace.json, checked, only when its content changed
+       put   s3://opstream-gtm-preview-db5553a4/workspace.json  the run's workspace.json, checked, when its content changed (or the live copy is old)
        on problems / errors -> SNS opstream-gtm-refresh-failures; Errors alarm gtm-preview-refresh-errors -> same topic
 ```
 
@@ -24,11 +24,11 @@ EventBridge Scheduler gtm-preview-refresh-15m (rate 15 min, no flex window, 0 re
 The sync job writes `workspace.json` (scripts/workspace-data.py) into each published run. Every run, `workspace-json.mjs`:
 
 - **checks** it: the scrub patterns (from the function's `WORKSPACE_SCRUB_PATTERNS`, set by `deploy.sh`) on the raw text before parsing and on every decoded string after; valid JSON (the error never quotes the file); `schemaVersion` 1; every top-level section the page reads; and a trial render with the page's own code (`onepage/view.cjs`, `onepage/page.cjs`, packaged with the function). Patterns are never logged or sent in alarms, only their position.
-- **copies** it to the preview bucket (`no-store`, `x-amz-meta-sha256`) only when the sha256 of its content without timestamps (the sync job's volatile keys) differs from the live copy. Unchanged content uploads nothing; `refresh.json.workspace.stamps` carries the newer timestamps, keyed by `forTextSha256` to the live object's text, and the page applies them only to that exact file.
+- **copies** it to the preview bucket (`no-store`, `x-amz-meta-sha256`) when the sha256 of its content without timestamps (the sync job's volatile keys) differs from the live copy (`reason: "content"`), or when the content is the same but the live copy's `publishedGeneratedAt` is older than `WORKSPACE_MAX_AGE_MIN` (default 25) and the snapshot's file is a different, newer one (`reason: "refresh-age"`), so the times inside the file (the fresh frontend reads `fresh.*.fetchedAt`) keep moving. Otherwise unchanged content uploads nothing; `refresh.json.workspace.stamps` carries the newer timestamps, keyed by `forTextSha256` to the live object's text, and the page applies them only to that exact file.
 - **keeps the last good copy** when the run has no `workspace.json` (`snapshot-has-no-workspace-json`), the file fails a check (`workspace-json-invalid`), or the function has no scrub patterns (`workspace-scrub-patterns-missing`). Only the sync-only job (`LATEST.json` `mode: "sync-only"`) writes `workspace.json`; a snapshot from the 6-hourly full job (any other mode, or none) without it keeps the last good copy quietly (`note` in refresh.json, no alarm, no page banner) as long as a sync-only snapshot with a good copy was seen in the last 60 minutes (`workspace.workspaceSeenAt`). Past that, or with nothing seen since deploy, it alarms `snapshot-has-no-workspace-json` as before. A sync-only snapshot without the file alarms at once.
 - **withholds** the live copy when a scrub pattern matches the latest snapshot and the live copy was never checked against the current pattern set (a newly added pattern): it PutObjects a small `{"withheld": true, …}` document over `workspace.json` (`workspace-withheld-scrub-match`), and the page shows a notice. The next clean snapshot is uploaded again.
 
-Each problem alarms once when it starts and once when it clears (no daily reminder), and the page shows "Showing the last good data: …". `refresh.json.workspace` holds `status` (`uploaded` / `unchanged` / `kept-last-good` / `withheld`), `problem`, `errors`, `sha256`, `publishedSha256`, `publishedTextSha256`, `publishedGeneratedAt`, `publishedRunId`, `publishedPatternsSha256` (a hash of the pattern set, never the patterns), `withheld`, `checkedAt` and `stamps`. The step runs before the `data.js` build, so a problem there never holds it back.
+Each problem alarms once when it starts and once when it clears (no daily reminder), and the page shows "Showing the last good data: …". `refresh.json.workspace` holds `status` (`uploaded` / `unchanged` / `kept-last-good` / `withheld`), `problem`, `errors`, `sha256`, `publishedSha256`, `publishedTextSha256`, `publishedGeneratedAt`, `publishedRunId`, `publishedPatternsSha256` (a hash of the pattern set, never the patterns), `withheld`, `checkedAt` and `stamps`; and, added later, `reason` (on `uploaded`), `writtenAt` (when the function last wrote the live copy), `freshAt` (that copy's `fresh.<section>.fetchedAt`, available sections only), `writtenAgeMinutes` and `freshAges` (minutes, at this run). The step runs before the `data.js` build, so a problem there never holds it back.
 
 ## Change detection (why `data.js` isn't uploaded every run)
 
@@ -40,7 +40,7 @@ Each problem alarms once when it starts and once when it clears (no daily remind
 
 ## Alarms
 
-The function publishes to `opstream-gtm-refresh-failures` when its set of problems changes (and once when they clear). While a problem continues, it publishes again once a day. The problems are `snapshot-stale` (LATEST.json older than `SNAPSHOT_STALE_MINUTES`, default 60) and `snapshot-has-no-hubspot-export`. Any exception publishes the error text and fails the invocation. The CloudWatch alarm `gtm-preview-refresh-errors` (Errors ≥ 1 in 15 min) also notifies the topic. **The topic has no subscriptions today**, so add one (for example an email) to actually receive these.
+The function publishes to `opstream-gtm-refresh-failures` when its set of problems changes (and once when they clear). While a problem continues, it publishes again once a day. The problems are `snapshot-stale` (LATEST.json older than `SNAPSHOT_STALE_MINUTES`, default 60), `snapshot-has-no-hubspot-export`, `workspace-stale` (the live `workspace.json` last written more than `WORKSPACE_STALE_MIN`, default 60, minutes ago; before `writtenAt` was recorded, its build time stands in) and `fresh-stale` (any available `fresh.<section>.fetchedAt` in the live copy more than `FRESH_STALE_MIN`, default 75, minutes old). Unknown times never flag. The two stale limits sit above the normal cadence: in a quiet period the live copy is rewritten every 30-45 minutes, up to about 60 around the 6-hourly job's skip window, and its fetch times run about 12 minutes older. Neither shows on the page (it reads `workspace.status` and `workspace.problem`, which they leave alone). Any exception publishes the error text and fails the invocation. The CloudWatch alarm `gtm-preview-refresh-errors` (Errors ≥ 1 in 15 min) also notifies the topic. **The topic has no subscriptions today**, so add one (for example an email) to actually receive these.
 
 ## CloudFront invalidation: not used
 
@@ -66,12 +66,13 @@ workspace/refresh/deploy.sh             # idempotent: roles, log group, function
 workspace/refresh/deploy.sh --enable    # ... and enable the schedule
 workspace/refresh/deploy.sh --disabled  # ... and create/leave it DISABLED
 WORKSPACE_SCRUB_PATTERNS_FILE=… workspace/refresh/deploy.sh --onepage-app   # serve the one-page workspace (see onepage/README.md)
+workspace/refresh/deploy.sh --lambda-only # function code and environment only: no IAM, schedule, alarm or bucket file
 workspace/refresh/gtm-preview-refresh-off.sh        # off switch (get-schedule, then update-schedule with State DISABLED)
 ON=1 workspace/refresh/gtm-preview-refresh-off.sh   # back on
 aws lambda invoke --profile opstream-deploy --region us-east-2 --function-name gtm-preview-refresh --payload '{"dryRun":true}' /tmp/out.json   # read-only check
 ```
 
-`deploy.sh` also uploads the page's code (`index.html`, `app.js`, `styles.css`, `vendor/gtm-charts.js`, `vendor/insights.js`, `vendor/lost-reasons.js`) unless you pass `--no-app`. Neither the function nor `deploy.sh` writes `insights.json` or `lost-reasons.json`; the Strategy seat publishes those (`publish-insights.mjs`, `publish-lost-reasons.mjs`). `/workspace/gtm-preview-teardown.sh` deletes the schedule, alarm, function, log group and both roles before it removes the distribution and bucket.
+`deploy.sh` also uploads the page's code (`index.html`, `app.js`, `styles.css`, `vendor/gtm-charts.js`, `vendor/insights.js`, `vendor/lost-reasons.js`) unless you pass `--no-app` (or `--lambda-only`). An `index.html` that carries a `gtm-page` tag (`onepage-app`, `fresh-workspace`) is left alone unless `--restore-app`. The minute settings (`WORKSPACE_MAX_AGE_MIN`, `WORKSPACE_STALE_MIN`, `FRESH_STALE_MIN`) go into the function's environment when set in the deploy shell; otherwise the function's current values are kept. Neither the function nor `deploy.sh` writes `insights.json` or `lost-reasons.json`; the Strategy seat publishes those (`publish-insights.mjs`, `publish-lost-reasons.mjs`). `/workspace/gtm-preview-teardown.sh` deletes the schedule, alarm, function, log group and both roles before it removes the distribution and bucket.
 
 ## LIVE_PULL (off, not granted)
 

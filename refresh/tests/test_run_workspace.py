@@ -19,6 +19,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -154,6 +155,70 @@ class WorkspaceStepE2E(unittest.TestCase):
         change = json.loads(self.store.get_bytes(third + run.WORKSPACE_JSON))["headline"]["change"]
         self.assertEqual([(d["kind"], d["fromAmount"], d["amount"]) for d in change["deals"]],
                          [("amount", 1000, 1500)])
+
+    def backdate_latest(self, minutes):
+        """LATEST.json as if it were published `minutes` ago (pointer otherwise unchanged)."""
+        latest = json.loads(self.store.get_bytes("published/LATEST.json"))
+        latest["publishedAt"] = (run.datetime.now(run.timezone.utc) - run.timedelta(minutes=minutes)).isoformat()
+        self.store.put_bytes("published/LATEST.json", json.dumps(latest).encode())
+        return latest
+
+    def test_republishes_unchanged_content_once_latest_is_old(self):
+        code, log, first = self.publish()
+        self.assertEqual(code, 0, log)
+        ws1 = json.loads(self.store.get_bytes(first + run.WORKSPACE_JSON))
+        self.assertEqual(ws1["fresh"]["won"]["fetchedAt"], "2026-10-13T10:00:00Z")
+        # A later sync that changed nothing but its fetch time. LATEST.json 10 minutes old: nothing published.
+        self.edit_brain("UPDATE sync_outcomes SET at=?, last_ok_at=? WHERE source='hubspot'", LATER, LATER)
+        self.backdate_latest(10)
+        code, log, again = self.publish()
+        self.assertEqual(code, 0, log)
+        self.assertIn("no change", log)
+        self.assertNotIn("republish", log)
+        self.assertEqual(again, first)
+        # Turned off (PUBLISH_MAX_AGE_MIN=0): an hour-old LATEST.json still publishes nothing.
+        self.backdate_latest(60)
+        code, log, again = self.publish(PUBLISH_MAX_AGE_MIN="0")
+        self.assertIn("no change", log)
+        self.assertEqual(again, first)
+        # Past the default 25 minutes: the same content is published again, with the new times.
+        old = self.backdate_latest(30)
+        time.sleep(1.1)  # run ids have one-second resolution
+        code, log, second = self.publish()
+        self.assertEqual(code, 0, log)
+        self.assertIn("republish: unchanged content, last publish 30 min old", log)
+        self.assertNotIn("no change", log)
+        self.assertNotEqual(second, first, log)
+        self.assertIn("published " + second.split("/")[1], log)
+        latest = json.loads(self.store.get_bytes("published/LATEST.json"))
+        self.assertEqual((latest["mode"], latest["contentHash"]), ("sync-only", old["contentHash"]))
+        self.assertLess(run.publish_age_min(latest), 1)
+        ws2 = json.loads(self.store.get_bytes(second + run.WORKSPACE_JSON))
+        self.assertEqual(ws2["fresh"]["won"]["fetchedAt"], "2026-10-13T10:15:00Z", "the fetch times move")
+        self.assertEqual(ws2["headline"]["open"], ws1["headline"]["open"])
+        self.assertTrue(self.store.exists(first + run.WORKSPACE_JSON), "the previous run is kept (prune unchanged)")
+        # Straight after: a fresh LATEST.json, nothing to republish.
+        code, log, third = self.publish()
+        self.assertIn("no change", log)
+        self.assertEqual(third, second)
+        # A lower max age from the environment.
+        self.backdate_latest(6)
+        code, log, _ = self.publish(PUBLISH_MAX_AGE_MIN="5")
+        self.assertIn("republish: unchanged content, last publish 6 min old", log)
+        self.assertLess(run.publish_age_min(json.loads(self.store.get_bytes("published/LATEST.json"))), 1)
+
+    def test_republish_age_parsing(self):
+        now = run.datetime(2026, 10, 13, 12, 0, tzinfo=run.timezone.utc)
+        self.assertEqual(run.publish_age_min({"publishedAt": "2026-10-13T11:30:00+00:00"}, now), 30)
+        self.assertEqual(run.publish_age_min({"publishedAt": "2026-10-13T11:50:00Z"}, now), 10)
+        self.assertIsNone(run.publish_age_min({}, now))
+        self.assertIsNone(run.publish_age_min({"publishedAt": "yesterday"}, now))
+        with mock.patch.dict(os.environ, {"PUBLISH_MAX_AGE_MIN": ""}):
+            self.assertEqual(run.republish_due({"publishedAt": "2026-10-13T11:40:00Z"}, now), (False, 20))
+            self.assertEqual(run.republish_due({"publishedAt": "2026-10-13T11:35:00Z"}, now), (True, 25))
+            self.assertEqual(run.republish_due({}, now), (True, None), "no time on the pointer: publish")
+        with mock.patch.dict(os.environ, {"PUBLISH_MAX_AGE_MIN": "soon"}):
+            self.assertEqual(run.republish_due({"publishedAt": "2026-10-13T11:35:00Z"}, now), (True, 25), "unreadable: the default")
 
     def edit_brain(self, sql, *args):
         path = self.tmp / "edit.db"

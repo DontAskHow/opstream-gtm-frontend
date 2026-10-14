@@ -96,13 +96,17 @@ test('deploy.sh --onepage-app builds and checks the data-less page, then needs A
 
 // A fake `aws` for the whole --onepage-app run: logs every call's arguments and answers the
 // queries deploy.sh makes. FAKE_FUNCTION_ERROR, FAKE_REFRESH, FAKE_NO_WORKSPACE and
-// FAKE_INDEX_META steer the invoke -> check -> upload sequence.
+// FAKE_INDEX_META steer the invoke -> check -> upload sequence. FAKE_CURRENT_ENV is the function's
+// current environment (JSON); FAKE_ENV_OUT receives the environment file deploy.sh sends.
 const FAKE_AWS = `#!/bin/bash
 echo "$*" >> "$FAKE_LOG"
 case "$1 $2" in
   "sts get-caller-identity") echo 080403790510 ;;
   "iam get-role") [[ "$*" == *--query* ]] && echo arn:aws:iam::080403790510:role/fake ;;
-  "lambda get-function-configuration") echo "\${FAKE_CURRENT_PATTERNS:-None}" ;;
+  "lambda get-function-configuration")
+    if [[ "$*" == *"--query Environment.Variables --"* ]]; then echo "\${FAKE_CURRENT_ENV:-null}"; else echo "\${FAKE_CURRENT_PATTERNS:-None}"; fi ;;
+  "lambda update-function-configuration")
+    for a in "$@"; do [[ "$a" == file://* ]] && [ -n "$FAKE_ENV_OUT" ] && cp "\${a#file://}" "$FAKE_ENV_OUT"; done ;;
   "lambda invoke")
     out="\${@: -1}"; echo '{"ok":true}' > "$out"
     if [ -n "$FAKE_FUNCTION_ERROR" ]; then echo '{"StatusCode":200,"FunctionError":"Unhandled"}'; else echo '{"StatusCode":200}'; fi ;;
@@ -196,4 +200,42 @@ test('deploy.sh: a patterns file with only comments stops with a message', () =>
     assert.match(r.stderr, /has no patterns/);
     assert.equal(r.calls.length, 0);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('deploy.sh --lambda-only: function code and environment only; IAM, schedule, alarm and every bucket file untouched', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'onepage-deploy-env-'));
+  try {
+    const envOut = join(dir, 'env.json');
+    const r = deployRun(['--lambda-only'], {
+      FAKE_CURRENT_PATTERNS: SYNTHETIC_SCRUB, FAKE_INDEX_META: 'fresh-workspace', FAKE_ENV_OUT: envOut,
+      FAKE_CURRENT_ENV: JSON.stringify({ LIVE_PULL: '0', WORKSPACE_SCRUB_PATTERNS: SYNTHETIC_SCRUB, WORKSPACE_STALE_MIN: '45', OTHER: 'dropped' }),
+      FRESH_STALE_MIN: '80',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const verbs = r.calls.map((c) => c.split(' ').slice(0, 2).join(' '));
+    assert.deepEqual([...new Set(verbs)].sort(), ['lambda get-function', 'lambda get-function-configuration', 'lambda update-function-code', 'lambda update-function-configuration', 'lambda wait', 'sts get-caller-identity']);
+    const conf = r.calls.find((c) => c.startsWith('lambda update-function-configuration'));
+    assert.match(conf, /^lambda update-function-configuration --function-name gtm-preview-refresh --environment file:\/\/\S+$/, 'environment only: runtime, role, memory, timeout unchanged');
+    assert.ok(!r.calls.some((c) => /^(s3|s3api|iam|scheduler|cloudwatch|logs) /.test(c)), 'no bucket, IAM, schedule, alarm or log group call');
+    assert.ok(!r.calls.join('\n').toLowerCase().includes(SYNTHETIC_SCRUB), 'patterns never on a command line');
+    assert.match(r.stdout, /code and environment only/);
+    // Patterns and minute settings kept from the current function; a setting given now wins.
+    assert.deepEqual(JSON.parse(readFileSync(envOut, 'utf8')).Variables,
+      { LIVE_PULL: '0', WORKSPACE_SCRUB_PATTERNS: SYNTHETIC_SCRUB, WORKSPACE_STALE_MIN: '45', FRESH_STALE_MIN: '80' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  for (const extra of ['--onepage-app', '--restore-app', '--enable', '--disabled']) {
+    const r = deployRun(['--lambda-only', extra], { WORKSPACE_SCRUB_PATTERNS: SYNTHETIC_SCRUB });
+    assert.equal(r.status, 2, extra);
+    assert.match(r.stderr, /does not combine/);
+    assert.equal(r.calls.length, 0, extra);
+  }
+});
+
+test('a plain deploy leaves any tagged index.html (the fresh frontend) unless --restore-app', () => {
+  const r = deployRun([], { FAKE_CURRENT_PATTERNS: SYNTHETIC_SCRUB, FAKE_INDEX_META: 'fresh-workspace' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /index\.html carries gtm-page=fresh-workspace: left as it is/);
+  assert.ok(!r.calls.some((c) => /src\/index\.html s3:/.test(c)));
+  const untagged = deployRun([], { FAKE_CURRENT_PATTERNS: SYNTHETIC_SCRUB });
+  assert.ok(untagged.calls.some((c) => /src\/index\.html s3:/.test(c)), 'an untagged index.html is the workspace app: updated');
 });

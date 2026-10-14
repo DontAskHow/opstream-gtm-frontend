@@ -761,6 +761,11 @@ WORKSPACE_TIMEOUT_S = int(os.environ.get("WORKSPACE_TIMEOUT_S") or 120)
 # "no change" 15 minutes after a change.
 HASH_IGNORED = {WORKSPACE_JSON: (("headline", "change"),)}
 LOCK_KEY = "locks/sync-only.json"
+# The content hash ignores times, so a quiet period publishes nothing and the
+# published fetch times (workspace.json fresh.*.fetchedAt among them) stop
+# moving. Once LATEST.json is older than this, unchanged content is published
+# again with its new times. PUBLISH_MAX_AGE_MIN=0 turns it off.
+PUBLISH_MAX_AGE_MIN = 25
 PHOENIX = timezone(timedelta(hours=-7))  # America/Phoenix has no DST.
 EXIT_SYNC_FAILED = 4
 
@@ -860,6 +865,29 @@ def acquire_lock(store, ttl_min):
         log("lock is %.0f min old, past ttl %d. Taking it over." % (age, ttl_min))
         store.delete(LOCK_KEY)
     return False
+
+
+def publish_age_min(latest, now=None):
+    """Minutes since LATEST.json's publishedAt, or None when it has none (or it does not parse)."""
+    try:
+        at = datetime.fromisoformat(str(latest.get("publishedAt") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return ((now or datetime.now(timezone.utc)) - at).total_seconds() / 60
+
+
+def republish_due(latest, now=None):
+    """(due, age in minutes) for unchanged content: due when LATEST.json is older than PUBLISH_MAX_AGE_MIN."""
+    try:
+        max_age = float(os.environ.get("PUBLISH_MAX_AGE_MIN", "").strip() or PUBLISH_MAX_AGE_MIN)
+    except ValueError:
+        max_age = PUBLISH_MAX_AGE_MIN
+    age = publish_age_min(latest, now)
+    if max_age <= 0:
+        return False, age
+    return age is None or age >= max_age, age
 
 
 def carry_forward_ai(store, latest, out):
@@ -1064,8 +1092,11 @@ def _sync_only(store, published, state_prefix, brain_key):
         log("WARNING: sources not synced: " + "; ".join(skipped))
     code = EXIT_SYNC_FAILED if failed or skipped or exported is None or not lead_tracker else 0
     if new_hash == old_hash:
-        log("no change (content %s matches %s). Published nothing. %s" % (new_hash[:12], latest.get("runId"), timing))
-        return code
+        due, age = republish_due(latest)
+        if not due:
+            log("no change (content %s matches %s). Published nothing. %s" % (new_hash[:12], latest.get("runId"), timing))
+            return code
+        log("republish: unchanged content, last publish %s min old" % ("unknown" if age is None else "%d" % age))
 
     _, tag_now = store.get_with_tag(latest_key)
     if tag_now != latest_tag:

@@ -42,7 +42,12 @@ between the 6-hourly full refresh runs without calling OpenAI.
    Facts-only AI files are skipped, and so is `workspace.json`'s
    `headline.change` (see below). If the hash matches LATEST
    (`contentHash` when a sync-only run published it, otherwise the hash of
-   the published files), the run logs `no change` and publishes nothing.
+   the published files), the run logs `no change` and publishes nothing,
+   unless LATEST's `publishedAt` is older than `PUBLISH_MAX_AGE_MIN`
+   (default 25; 0 turns it off). Then it logs `republish: unchanged content,
+   last publish N min old` and publishes anyway, so the published fetch
+   times (`workspace.json` `fresh.*.fetchedAt` among them) keep moving in a
+   quiet period: about every 30 minutes at the 15-minute schedule.
 9. Otherwise it publishes `published/<runId>/` the same way the full run
    does. Before writing `LATEST.json` it re-reads it and writes with
    `If-Match`, so a 6-hourly publish that lands meanwhile wins. LATEST gets

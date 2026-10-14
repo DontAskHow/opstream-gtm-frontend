@@ -7,7 +7,7 @@ One page, one question per section: **Pipeline** (where are we?), **Leads** (whe
 ```
 sync job (has brain.db)            scripts/workspace-data.py --inputs-dir … --prior … --out out/workspace.json
   └─ publishes published/<runId>/  (workspace.json rides along with the snapshot; LATEST.json moves)
-preview refresh Lambda (15 min)    validates it, copies it to the preview bucket only when its content changed
+preview refresh Lambda (15 min)    validates it, copies it to the preview bucket when its content changed (or the live copy is over 25 min old and a newer one is in)
   └─ s3://<preview>/workspace.json + refresh.json (.workspace: status, sha256, newest timestamps)
 index.html (no data)               fetches workspace.json + refresh.json (no-store), renders client-side
 ```
@@ -103,7 +103,7 @@ WORKSPACE_SCRUB_PATTERNS_FILE=/path/outside/repo/scrub-patterns.txt workspace/re
 
 builds the data-less page and checks it (before any AWS call), updates the refresh Lambda (code, write-only IAM on `workspace.json`, the scrub patterns in its environment, passed as a private `file://` so they never appear on a command line), then runs the function once (`--cli-read-timeout 150`, longer than its 120 s timeout, so the CLI never runs it twice). It uploads `index.html` (marked `gtm-page=onepage-app`) only when the run did not fail (`FunctionError`), `refresh.json` `.workspace.status` is `uploaded` or `unchanged`, and `workspace.json` is in the bucket; otherwise the live page is left as it is.
 
-A plain `deploy.sh` (for example, to rotate the patterns or update the function) leaves a live one-page `index.html` alone; `--restore-app` puts the older workspace app back. `deploy.sh --onepage DIR` still uploads a page with data inside (a static fallback).
+A plain `deploy.sh` (for example, to rotate the patterns or update the function) leaves a live one-page (or any `gtm-page`-tagged) `index.html` alone, and `deploy.sh --lambda-only` touches no bucket file at all; `--restore-app` puts the older workspace app back. `deploy.sh --onepage DIR` still uploads a page with data inside (a static fallback).
 
 When a newly added pattern matches the latest snapshot, the function replaces the live `workspace.json` with a small "withheld" document (by PutObject; it has no delete permission) and the page shows a notice instead of data until a clean snapshot arrives.
 
