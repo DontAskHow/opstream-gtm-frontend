@@ -238,6 +238,18 @@ print(json.dumps({'open': [o[0], round(o[1]), round(o[2])], 'onHold': [h[0], rou
   assert.match(html, /provisional \(awaiting \w+\)/);
   for (const pat of scrubPatterns()) assert.ok(!html.toLowerCase().includes(pat) && !text.toLowerCase().includes(pat), 'scrubbed');
   assert.ok(!/HubSpot bridge|Sheet-active|recordsOpenCount|recordsDealCount|unmatchedRecordings|<h2[^>]*>This week/i.test(html), 'bridge, records counts and the This week section are dropped');
+  // fresh (docs/workspace-fresh.md): the same rules as the counts next to it; ids, not people.
+  const f = d.fresh;
+  check('fresh.submissions = the counted form fills', f.submissions.count, d.forms.total);
+  check('fresh.meetings = the counted bookings', f.meetings.count, d.meetings.bookings.counted);
+  check('fresh.meetings.oct13.overall = bookings after the rules', f.meetings.oct13.overall, d.meetings.bookings.afterRules);
+  check('fresh.won within the Sales wins', f.won.count <= d.closed.won.count, true);
+  const listed = new Map(d.meetings.items.map((m) => [m.id, m.title]));
+  check('fresh meeting titles only where the meetings list shows them', f.meetings.items.every((m) => !('hs_meeting_title' in m) || listed.get(m.id) === m.hs_meeting_title), true);
+  const shownSteps = new Set(d.calls.items.flatMap((c) => (c.strategy && c.strategy.nextSteps) || []));
+  check('fresh next steps only where the calls list shows them', Object.values(f.calls.dealActivity).every((a) => !a.nextStep || shownSteps.has(a.nextStep)), true);
+  const ownText = JSON.stringify({ ...f, meetings: f.meetings.items.map(({ hs_meeting_title: _t, ...m }) => m), calls: Object.values(f.calls.dealActivity).map(({ nextStep: _s, ...a }) => a) });
+  check('fresh carries no email address', /[\w.+-]+@[\w-]+\.[a-z]{2,}/i.test(ownText), false);
   // The published file: the Lambda's checks, the size budget, the deployable page, a stable content hash.
   const patterns = scrubPatterns();
   const v = validateWorkspace(text, patterns);

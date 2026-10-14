@@ -451,5 +451,83 @@ class ReportingNotYetSynced(unittest.TestCase):
         self.assertEqual(sc.dropped_deals, {'d2'})
 
 
+class Fresh(unittest.TestCase):
+    """workspace.json 'fresh' (docs/workspace-fresh.md): the rule helpers it shares with the counts, and its privacy rules."""
+
+    def test_submission_out_waterfall_order(self):
+        ls = wd.LeadSources(ReportingRules.LS)
+        cs = wd.REPORTING['customers']['ownerIds'][0]
+        c = lambda cid, email, **kw: {'id': cid, 'email': email, 'lifecycle': kw.get('lifecycle', 'lead'),
+                                      'ownerId': kw.get('owner', '1'), 'companies': []}
+        contacts = {'1': c('1', 'a@buyer.example'), '2': c('2', 'b@buyer.example', owner=cs), '3': c('3', 'x@gmail.com')}
+        ctx = {'ls': ls, 'scope': wd.ReportingScope(contacts, {}, [])}
+        out = lambda fid, cid, email: wd.submission_out(ls.forms[fid], contacts.get(cid), email, ctx)
+        self.assertIsNone(out('f4', '1', 'a@buyer.example'))
+        self.assertEqual(out('f4', '2', 'b@buyer.example'), 'customer')
+        self.assertEqual(out('f3', '2', 'b@buyer.example'), 'customer')  # customer first, then careers
+        self.assertEqual(out('f3', '1', 'a@buyer.example'), 'careers')
+        self.assertEqual(out('f3', '3', 'x@gmail.com'), 'careers')        # careers before free mail
+        self.assertEqual(out('f4', '3', 'x@gmail.com'), 'freeMail')
+        self.assertEqual(out('f4', None, 'y@gmail.com'), 'freeMail')      # no contact: the address decides
+        self.assertIsNone(out('f4', None, ''))
+
+    def brain(self, meetings=(), assoc=()):
+        import sqlite3
+        import tempfile
+        path = os.path.join(tempfile.mkdtemp(), 'b.db')
+        con = sqlite3.connect(path)
+        con.execute('CREATE TABLE hubspot_objects (object_type TEXT, hs_id TEXT, properties_json TEXT, fetched_at TEXT)')
+        con.execute('CREATE TABLE hubspot_associations (from_type TEXT, from_id TEXT, to_type TEXT, to_id TEXT)')
+        for i, props in meetings:
+            con.execute('INSERT INTO hubspot_objects VALUES (?,?,?,?)', ('meetings', i, json.dumps(props), ''))
+        for row in assoc:
+            con.execute('INSERT INTO hubspot_associations VALUES (?,?,?,?)', row)
+        con.commit()
+        con.close()
+        brain = wd.Brain(path)
+        self.addCleanup(brain.con.close)
+        return brain
+
+    def deal(self, did, created, companies=('co1',), pipeline='default', history=None):
+        return {'id': did, 'pipeline': pipeline, 'stageId': 'closedwon', 'created': created, 'companyIds': list(companies),
+                'ownerId': '7', 'stageHistory': history}
+
+    def test_booking_deal_meeting_then_company_newest(self):
+        deals = [self.deal('d1', '2026-01-01T00:00:00Z'), self.deal('d2', '2026-03-01T00:00:00Z'),
+                 self.deal('d3', '2026-05-01T00:00:00Z', pipeline=wd.REPORTING['customers']['dealPipelines'][0])]
+        brain = self.brain(assoc=[('meetings', 'm1', 'deals', 'd1'), ('meetings', 'm1', 'companies', 'co1'),
+                                  ('meetings', 'm2', 'companies', 'co1'), ('meetings', 'm3', 'deals', 'd3')])
+        ctx = {'assoc': wd.Assoc(brain), 'deal_by_id': {d['id']: d for d in deals}}
+        by_co = {'co1': deals[:2]}
+        t = wd.parse_time('2026-04-01T00:00:00Z')
+        self.assertEqual(wd.booking_deal('m1', t, ctx, by_co)['id'], 'd1')  # on the meeting wins over the company's newer deal
+        self.assertEqual(wd.booking_deal('m1', t, ctx, by_co)['matchedBy'], 'meeting')
+        self.assertEqual((wd.booking_deal('m2', t, ctx, by_co)['id'], wd.booking_deal('m2', t, ctx, by_co)['matchedBy']), ('d2', 'company'))
+        self.assertIsNone(wd.booking_deal('m3', t, ctx, by_co))  # a deal in another pipeline is no Sales deal
+        self.assertIsNone(wd.booking_deal('m2', t, ctx, by_co)['stageAtBooking'])  # no stage history synced
+        deals[1]['stageHistory'] = [{'value': '943743501', 'timestamp': '2026-03-01T00:00:00Z'}]
+        self.assertEqual(wd.booking_deal('m2', t, ctx, by_co)['stageAtBooking'], '943743501')
+
+    def test_deal_activity_days_steps_and_carried_text(self):
+        deals = [self.deal('d1', '2026-01-01T00:00:00Z'), self.deal('d9', '2026-01-01T00:00:00Z', companies=(), pipeline='x')]
+        brain = self.brain(meetings=[('m1', {'hs_meeting_start_time': '2026-06-01T17:00:00Z'}),
+                                     ('m2', {'hs_meeting_start_time': '2026-07-01T17:00:00Z'}), ('m3', {})],
+                           assoc=[('meetings', 'm1', 'deals', 'd1'), ('meetings', 'm2', 'companies', 'co1'),
+                                  ('meetings', 'm3', 'deals', 'd1')])
+        recs = {'1': {'audience': 'prospect', 'datetime_pt': '2026-06-01 09:00 PT', 'deal': {'id': 'd1'}, 'next_steps': ['Old step']},
+                '2': {'audience': 'prospect', 'datetime_pt': '2026-06-02 09:00 PT', 'deal': {'id': 'd1'}, 'next_steps': ['New step']},
+                '3': {'audience': 'prospect', 'datetime_pt': '2026-06-02 15:00 PT', 'deal': {'id': 'd1'}, 'next_steps': ['//x', ' ']},
+                '4': {'audience': 'customer', 'datetime_pt': '2026-06-09 09:00 PT', 'deal': {'id': 'd1'}},
+                '5': {'audience': 'prospect', 'datetime_pt': '2026-06-09 09:00 PT', 'deal': {'id': 'd9'}}}
+        ctx = {'assoc': wd.Assoc(brain), 'deal_by_id': {d['id']: d for d in deals}, 'call_class': recs}
+        act = wd.fresh_deal_activity(brain, ctx, {'items': [{'id': 'R2', 'strategy': {'nextSteps': ['New step']}}]})
+        self.assertEqual(sorted(act), ['d1'])  # d9 is not a Sales deal
+        self.assertEqual(act['d1'], {'calls': 2, 'lastCall': '2026-06-02', 'nextStep': 'New step', 'nextStepCallId': 'R2',
+                                     'meetings': ['2026-06-01T17:00:00Z', '2026-07-01T17:00:00Z']})
+        # The same step on a call the calls list does not show is not carried.
+        act = wd.fresh_deal_activity(brain, ctx, {'items': [{'id': 'R2', 'strategy': {'nextSteps': []}}]})
+        self.assertEqual((act['d1']['nextStep'], 'nextStepCallId' in act['d1']), (None, False))
+
+
 if __name__ == '__main__':
     unittest.main()

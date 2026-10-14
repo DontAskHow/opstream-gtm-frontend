@@ -139,6 +139,13 @@ every run. A deal change it reports also changes `live_deals.json` and the
 rest of `workspace.json`. The published note therefore stays on the last real
 change instead of turning into "no change" one run later.
 
+`fresh` (added last, read only by the fresh frontend) carries the form fills,
+meeting-link bookings, closed-won deals and per-deal call activity that app
+used to take from its one-time extract, in the same shapes and under the same
+reporting rules. Its contract is in `docs/workspace-fresh.md`. It adds a few
+hundred KB, and it is left out (with a warning) if the file would pass the
+3 MiB budget.
+
 ## HubSpot attribution, forms, lists, and imports
 
 Contacts carry source attribution (`hs_analytics_source*`,
@@ -334,6 +341,12 @@ checks that a no-change HubSpot sync publishes nothing and that a deal change
 publishes. It also checks that a refused step (no scrub patterns, with a
 partial file left behind), a timeout, and a failing inputs listing all still
 publish, without `workspace.json`.
+
+`refresh/tests/test_fresh_e2e.py` runs the same portal as the reporting-rules
+end to end, plus wins, Fathom recordings and `records.jsonl`. It checks
+`workspace.json` `fresh` against the sections it comes from, that it carries no
+person names or emails, that the page is the same with or without it, and the
+over-budget fallback.
 
 ## GA4
 

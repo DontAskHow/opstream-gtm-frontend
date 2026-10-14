@@ -11,7 +11,9 @@ the hidden owner rendered as "Unassigned" (shared/workspace-scope.json), and the
 Oct 13 2026 reporting rules (config/lead-rules.json "reporting", ReportingScope):
 customers, free-mail and internal addresses and careers forms out of the form
 counts, meeting bookings, ad-platform leads and a separate lead -> MQL figure,
-all in added fields (existing fields keep their meaning). Lead
+all in added fields (existing fields keep their meaning). 'fresh' (added last) carries
+the record sets the fresh frontend read from its one-time extract, under the same rules
+(docs/workspace-fresh.md). Lead
 sources are mapped from lead-sources.json only, so a mapping change edits that
 file. Tables the sync has not written yet (forms, lists, imports, Lemlist leads,
 contact source fields) are used when present and listed as "not yet synced"
@@ -1562,6 +1564,19 @@ class ReportingScope:
         return any(e.startswith(p) or (': ' + p) in e for p in self.form_prefixes)
 
 
+def submission_out(f, c, email, ctx):
+    """Why one form submission is out of the form counts, in waterfall order: 'customer', then 'careers' (careers and
+    non-lead forms), then 'internal' / 'freeMail'; None when it counts. c is its contact (None when no contact has the
+    address)."""
+    ls, scope = ctx['ls'], ctx['scope']
+    why = scope.contact(c['id']) if c else scope.address(email)
+    if why and why[0] == 'customer':
+        return 'customer'
+    if scope.form_excluded(f) or not ls.form_is_lead(f):
+        return 'careers'
+    return why[0] if why else None
+
+
 def form_counts(brain, ctx):
     """Forms: every submission of every lead-sources.json form (the count of record), joined to contacts by email,
     as a waterfall (all -> customers out -> careers forms, free-mail and internal addresses out); per contact, the
@@ -1585,16 +1600,13 @@ def form_counts(brain, ctx):
         stages['all'][b] += 1
         email = (email or '').strip().lower()
         c = ctx['contact_by_email'].get(email) if email else None
-        why = scope.contact(c['id']) if c else scope.address(email)
-        if why and why[0] == 'customer':
+        out = submission_out(f, c, email, ctx)
+        if out == 'customer':
             excluded['customer'] += 1
             continue
         stages['afterCustomers'][b] += 1
-        if scope.form_excluded(f) or not ls.form_is_lead(f):
-            excluded['careers'] += 1
-            continue
-        if why:
-            excluded[why[0]] += 1
+        if out:
+            excluded[out] += 1
             continue
         stages['counted'][b] += 1
         no_contact += 0 if c else 1
@@ -2084,6 +2096,211 @@ def link_recordings(meetings, calls):
         x.pop('emails', None)
 
 
+# ---------- fresh: the record sets the fresh frontend read from its one-time extract (docs/workspace-fresh.md) ----------
+FRESH_VERSION = 1
+FRESH_RULES = 'Oct 13 2026 reporting rules (config/lead-rules.json "reporting", ReportingScope)'
+
+
+def compact(d):
+    """d without its empty values (the extract's items carry only the properties that are set)."""
+    return {k: v for k, v in d.items() if v not in (None, '')}
+
+
+def fresh_submissions(brain, ctx):
+    """Every form fill that counts (form_counts' 'counted' stage), one row each in gtm-static.json's submissions shape,
+    oldest first. oct13: per lead bucket, the fills left once customers and careers / non-lead forms are out (the
+    gtm-static.json oct13.forms basis)."""
+    ls = ctx['ls']
+    items, oct13 = [], Counter()
+    for fid, at, email in brain.q('SELECT form_id, submitted_at, contact_email FROM hubspot_form_submissions'):
+        f = ls.forms.get(str(fid))
+        if not f:
+            continue
+        email = (email or '').strip().lower()
+        c = ctx['contact_by_email'].get(email) if email else None
+        out = submission_out(f, c, email, ctx)
+        if out in ('customer', 'careers'):
+            continue
+        oct13[f.get('bucket')] += 1
+        if not out:
+            items.append({'formId': str(fid), 'submittedAt': iso(parse_time(at)), 'contactId': c['id'] if c else None})
+    items.sort(key=lambda s: (s['submittedAt'] or '', s['formId'], s['contactId'] or ''))
+    used = {s['formId'] for s in items}
+    return {'items': items,
+            'forms': {i: compact({k: f.get(k) for k in ('name', 'bucket', 'counts_as_lead_source')})
+                      for i, f in sorted(ls.forms.items()) if i in used},
+            'oct13': dict(sorted(oct13.items()))}
+
+
+def booking_deal(mid, t, ctx, sales_by_company):
+    """The Sales deal a booking belongs to (the fresh app's rule): a Sales deal on the meeting, else one at a linked
+    company; the newest by create date. Its stage when booked comes from the stage history."""
+    a, sales = ctx['assoc'], SCOPE['salesPipelineId']
+    direct = [d for d in (ctx['deal_by_id'].get(i) for i in a.get('meetings', mid, 'deals')) if d and d['pipeline'] == sales]
+    pool = direct or [d for c in a.get('meetings', mid, 'companies') for d in sales_by_company.get(c, ())]
+    if not pool:
+        return None
+    d = max(pool, key=lambda d: (d['created'] or '', d['id']))
+    at = stage_at(d['stageHistory'], t) if t and d.get('stageHistory') is not None else None
+    return {'id': d['id'], 'stageId': d['stageId'], 'stageAtBooking': at, 'matchedBy': 'meeting' if direct else 'company'}
+
+
+def fresh_meetings(brain, ctx, listed):
+    """Every meeting-link booking that counts (booking_counts' 'counted' stage) in gtm-static.json's meetings shape.
+    Titles name people, so a title is carried only for a meeting the meetings list already shows (listed: {id: title})."""
+    cfg, a = REPORTING['meetings'], ctx['assoc']
+    sales_by_company = {}
+    for d in ctx['deal_by_id'].values():
+        if d['pipeline'] == SCOPE['salesPipelineId']:
+            for c in d['companyIds']:
+                sales_by_company.setdefault(c, []).append(d)
+    fields = [cfg['sourceProperty'], cfg['timeProperty'], 'hs_meeting_start_time', 'hubspot_owner_id', 'hs_meeting_outcome']
+    items = []
+    for row in brain.objects('meetings', fields):
+        mid, v = str(row[0]), dict(zip(fields, row[1:]))
+        if str(v[cfg['sourceProperty']] or '').upper() != cfg['sourceValue']:
+            continue
+        t = parse_time(v[cfg['timeProperty']]) or parse_time(v['hs_meeting_start_time'])
+        if booking_kind(mid, t, ctx)[0]:
+            continue
+        item = {'id': mid, **compact({'hs_meeting_title': listed.get(mid), 'hs_createdate': v[cfg['timeProperty']],
+                                      'hs_meeting_start_time': v['hs_meeting_start_time'], 'hubspot_owner_id': v['hubspot_owner_id'],
+                                      'hs_meeting_outcome': v['hs_meeting_outcome']}),
+                'contacts': a.get('meetings', mid, 'contacts'), 'companies': a.get('meetings', mid, 'companies'),
+                'deals': a.get('meetings', mid, 'deals'), 'salesDeal': booking_deal(mid, t, ctx, sales_by_company)}
+        items.append((t, item))
+    items.sort(key=lambda x: (iso(x[0]) or '', x[1]['id']))
+    return [x for _, x in items]
+
+
+def fresh_deal_activity(brain, ctx, calls):
+    """Per Sales deal, gtm-static.json's dealActivity: prospect calls to date (distinct PT days of Strategy's records.jsonl
+    prospect calls on the deal), the last call day, the latest next step, and the start times of every HubSpot meeting on
+    the deal or at its companies. A next step is carried only when the calls list already shows it."""
+    sales = {d['id']: d for d in ctx['deal_by_id'].values() if d['pipeline'] == SCOPE['salesPipelineId']}
+    shown = {c['id']: set((c.get('strategy') or {}).get('nextSteps') or []) for c in calls['items']}
+    acts = {}
+    for cid, r in ctx['call_class'].items():
+        dl = r.get('deal') if isinstance(r.get('deal'), dict) else None
+        did = str(dl.get('id') or '') if dl else ''
+        if r.get('audience') != 'prospect' or did not in sales:
+            continue
+        day = str(r.get('datetime_pt') or '')[:10]
+        a = acts.setdefault(did, {'days': set(), 'lastCall': None, 'step': None, 'stepAt': None})
+        if not day:
+            continue
+        a['days'].add(day)
+        a['lastCall'] = max(a['lastCall'] or day, day)
+        steps = [x for x in (r.get('next_steps') or []) if not _is_fragment(x)]
+        if steps and (not a['stepAt'] or day >= a['stepAt']):
+            a['step'], a['stepAt'] = (steps[0], 'R%s' % cid), day
+    by_company = {}
+    for d in sales.values():
+        for c in d['companyIds']:
+            by_company.setdefault(c, []).append(d['id'])
+    starts = {}
+    for mid, start in brain.objects('meetings', ['hs_meeting_start_time']):
+        if not start:
+            continue
+        mid = str(mid)
+        for did in set(ctx['assoc'].get('meetings', mid, 'deals')) | {i for c in ctx['assoc'].get('meetings', mid, 'companies')
+                                                                       for i in by_company.get(c, ())}:
+            if did in sales:
+                starts.setdefault(did, set()).add(start)
+    out = {}
+    for did in sorted(set(acts) | set(starts)):
+        a = acts.get(did) or {'days': (), 'lastCall': None, 'step': None}
+        step, call = a['step'] or (None, None)
+        carried = step is not None and step in shown.get(call, ())
+        out[did] = {'calls': len(a['days']), 'lastCall': a['lastCall'], 'nextStep': step if carried else None,
+                    **({'nextStepCallId': call} if carried else {}), 'meetings': sorted(starts.get(did, ()))}
+    return out
+
+
+def build_fresh(brain, ctx, stages, freshness_rows, sections, as_of):
+    """workspace.json 'fresh': form fills, meeting-link bookings, closed-won deals and per-deal call activity, the record
+    sets the fresh frontend read from its one-time gtm-static.json extract, in the same shapes, synced each run and scoped
+    by the same reporting rules. Person names and emails are left out: contact ids only; an owner's name only when the
+    rest of workspace.json already shows it (sections: the built sections so far), and a company named like a contact
+    (first and last name) likewise."""
+    last_ok = {f['source']: f['lastOkAt'] for f in freshness_rows}
+    scope, sales_id = ctx['scope'], SCOPE['salesPipelineId']
+    named = {d['owner'] for d in sections['deals'] + sections['closed']['lost']}
+    named |= {m['owner'] for m in sections['meetings']['items']} | {c['recorder'] for c in sections['calls']['items']}
+    people = {norm(c['name']) for c in ctx['contacts'].values() if len(norm(c['name']).split()) >= 2}
+    shown = json.dumps(sections, ensure_ascii=False)
+
+    def owner_name(oid):
+        name = ctx['owners'].get(str(oid or ''), {}).get('name')
+        return name if name in named else None
+
+    def comp_name(cid):
+        name = (ctx['comps'].get(cid) or {}).get('name')
+        if name and norm(name) in people and json.dumps(name, ensure_ascii=False)[1:-1] not in shown:
+            return None
+        return name
+
+    if ctx['submissions'] is None:
+        subs = {'available': False, 'reason': 'form submissions not yet synced'}
+    else:
+        s = fresh_submissions(brain, ctx)
+        subs = {'available': True, 'fetchedAt': last_ok.get('hubspot_forms'),
+                'provenance': {'source': 'HubSpot form submissions (brain.db hubspot_form_submissions, sync hubspot_forms)',
+                               'rules': FRESH_RULES, 'stage': 'forms.waterfall.counted'},
+                'count': len(s['items']), 'byYear': dict(sorted(Counter(ymd(parse_time(x['submittedAt']))[:4]
+                                                                         for x in s['items'] if x['submittedAt']).items())),
+                **s}
+
+    bookings = sections['meetings']['bookings']
+    if not bookings.get('available'):
+        mtg = {'available': False, 'reason': bookings.get('reason')}
+    else:
+        items = fresh_meetings(brain, ctx, {m['id']: m['title'] for m in sections['meetings']['items']})
+        year = str(as_of.astimezone(TZ).year)
+        by = bookings['byYear']
+        mtg = {'available': True, 'fetchedAt': last_ok.get('hubspot'),
+               'provenance': {'source': 'HubSpot meetings with hs_meeting_source MEETINGS_PUBLIC (brain.db hubspot_objects, '
+                                        'sync hubspot)', 'rules': FRESH_RULES, 'stage': 'meetings.bookings.counted'},
+               'count': len(items), 'byYear': {y: c['counted'] for y, c in by.items()}, 'items': items,
+               'oct13': {'overall': bookings['afterRules'], 'y' + year: (by.get(year) or {}).get('afterRules', 0),
+                         'customerExcluded': bookings['customer'], 'pastDiscovery': bookings['opportunity'],
+                         'publicBookings': bookings['total']}}
+
+    won = sorted((d for d in ctx['deal_by_id'].values() if d['pipeline'] == sales_id and d['won'] and d['id'] not in scope.cs_deals),
+                 key=lambda d: (d['close'] or '', d['id']))
+    won_items = [{'id': d['id'], 'name': d['name'], 'amount': d['amount'], 'close': d['close'], 'owner': owner_name(d['ownerId']),
+                  'company': next((comp_name(c) for c in d['companyIds'] if comp_name(c)), None)} for d in won]
+    won_sec = {'available': True, 'fetchedAt': last_ok.get('hubspot'),
+               'provenance': {'source': 'HubSpot deals (brain.db hubspot_objects, sync hubspot)', 'rules': FRESH_RULES,
+                              'stage': 'Sales Pipeline, closed won, not owned by customer success'},
+               'count': len(won_items), 'byYear': dict(sorted(Counter(ymd(parse_time(w['close']))[:4] for w in won_items
+                                                                       if parse_time(w['close'])).items())),
+               'items': won_items}
+
+    if ctx['call_class'] is None:
+        calls = {'available': False, 'reason': 'call records unavailable (%s)' % ctx['call_class_reason']}
+    else:
+        act = fresh_deal_activity(brain, ctx, sections['calls'])
+        days = [str(r.get('datetime_pt') or '')[:10] for r in ctx['call_class'].values() if r.get('audience') == 'prospect']
+        calls = {'available': True, 'fetchedAt': last_ok.get('hubspot'), 'callsThrough': max((d for d in days if d), default=None),
+                 'provenance': {'source': "Strategy's per-call records.jsonl (prospect calls, by deal) and HubSpot meetings "
+                                          '(brain.db hubspot_objects, sync hubspot)', 'rules': FRESH_RULES,
+                                'stage': 'Sales Pipeline deals; calls = distinct PT days with a prospect call'},
+                 'count': len(act), 'dealActivity': act}
+
+    ref_owners = {m.get('hubspot_owner_id') for m in (mtg.get('items') or [])} - {None}
+    ref_comps = {c for m in (mtg.get('items') or []) for c in m['companies']}
+    return {
+        'version': FRESH_VERSION, 'contract': 'docs/workspace-fresh.md',
+        'about': 'The record sets the fresh frontend read from its one-time HubSpot extract (gtm-static.json), synced every '
+                 'run in the same shapes and scoped by the reporting rules. Contact ids only, no person names or emails.',
+        'stages': {sid: m['label'] for (pid, sid), m in sorted(stages.items()) if pid == sales_id},
+        'owners': {o: owner_name(o) for o in sorted(ref_owners) if owner_name(o)},
+        'companies': {c: comp_name(c) for c in sorted(ref_comps) if comp_name(c)},
+        'submissions': subs, 'meetings': mtg, 'won': won_sec, 'calls': calls,
+    }
+
+
 # ---------- outbound ----------
 def outbound(brain, ls, leads_by_email):
     """Every Lemlist campaign with its tags (filters). outbound_reply_rate = replies / sends over all of them (r12)."""
@@ -2292,9 +2509,16 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
                                 'contactsOut': dict(sorted(Counter(w[0] for w in scope.contacts.values() if w).items()))},
                   'currentPage': current_page_scope(args.current_page) if args.current_page else None},
     }
+    # Added last, from the sections above; nothing else reads it (docs/workspace-fresh.md).
+    out['fresh'] = build_fresh(brain, ctx, stages, fresh, out, as_of)
     out = scrub.deep(out)
     if scrub.hit(json.dumps(out, ensure_ascii=False)):
         raise SystemExit('scrub failed: a scrub pattern still appears in the output')
+    if len(json.dumps(out, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) > MAX_BYTES:
+        # The refresh rejects a file over the budget and keeps the last good one; the page's own sections come first.
+        warn('warn: workspace.json over %d bytes; fresh left out' % MAX_BYTES)
+        out['fresh'] = {'version': FRESH_VERSION, 'contract': 'docs/workspace-fresh.md', 'available': False,
+                        'reason': 'left out: workspace.json would be over its %d MB budget' % (MAX_BYTES // 1048576)}
     return out
 
 
