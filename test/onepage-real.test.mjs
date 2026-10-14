@@ -254,7 +254,7 @@ print(json.dumps({'open': [o[0], round(o[1]), round(o[2])], 'onHold': [h[0], rou
   const patterns = scrubPatterns();
   const v = validateWorkspace(text, patterns);
   assert.deepEqual(v.errors, [], 'the refresh Lambda accepts it');
-  check('workspace.json under the 3 MB budget', Buffer.byteLength(text) < 3 * 1048576, true);
+  check('workspace.json under the 3 MiB budget', Buffer.byteLength(text) < 3 * 1048576, true);
   console.log(`workspace.json: ${Math.round(Buffer.byteLength(text) / 1024)} KB`);
   build({ app: true, out: join(dir, 'app'), quiet: true });
   assert.equal(checkBuild(join(dir, 'app'), { app: true, patterns }).ok, true);

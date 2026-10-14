@@ -80,10 +80,10 @@ def portal(hub, now):
                           "hs_timestamp": "2026-09-08T17:00:00.000Z", "hs_meeting_source": "MEETINGS_PUBLIC",
                           "hubspot_owner_id": "3"}
     hub.link("meetings", 7114, "companies", 804)  # company only: its Sales deal (905) by company
-    # A company HubSpot named after its one contact: its name is a person's name, so fresh does not carry it.
-    hub.objects["companies"][805] = {"name": "Pat Sample", "domain": "patsample.example", "lifecyclestage": "lead",
+    # A booking whose title names its attendee, at a company the rest of workspace.json does not list.
+    hub.objects["companies"][805] = {"name": "Vandelay Industries", "domain": "vandelay.example", "lifecyclestage": "lead",
                                      "hubspot_owner_id": "1", "hs_object_id": "805", "hs_lastmodifieddate": mod}
-    hub.contacts[216] = {"hs_object_id": "216", "email": "pat@patsample.example", "firstname": "Pat", "lastname": "Sample",
+    hub.contacts[216] = {"hs_object_id": "216", "email": "pat@vandelay.example", "firstname": "Pat", "lastname": "Sample",
                          "lifecyclestage": "lead", "hubspot_owner_id": "1", "lastmodifieddate": mod,
                          "createdate": "2026-01-02T00:00:00.000Z"}
     hub.link("contacts", 216, "companies", 805)
@@ -243,7 +243,7 @@ class FreshE2E(unittest.TestCase):
         self.assertEqual(self.fresh["stages"]["943743501"], "SQL")
         self.assertEqual(self.fresh["companies"]["804"], "Hooli")
         self.assertEqual(by["7115"]["companies"], ["805"])
-        self.assertNotIn("805", self.fresh["companies"])  # named like its contact
+        self.assertEqual(self.fresh["companies"]["805"], "Vandelay Industries")  # company names as HubSpot has them
 
     def test_won(self):
         w = self.fresh["won"]
@@ -252,6 +252,7 @@ class FreshE2E(unittest.TestCase):
         self.assertEqual(sorted(by), ["905", "909"])
         self.assertEqual(by["905"], {"id": "905", "name": "Test deal 905", "amount": 40000, "close": "2026-12-31T00:00:00.000Z",
                                      "owner": "Test Owner", "company": "Hooli"})
+        self.assertIs(type(by["905"]["amount"]), int)  # a whole amount stays an int, as in the extract
         self.assertEqual(by["909"]["close"], "2025-12-15T18:00:00.000Z")
         self.assertIsNone(by["909"]["owner"])  # named nowhere else in workspace.json: left out
         self.assertEqual(w["byYear"], {"2025": 1, "2026": 1})
@@ -292,6 +293,22 @@ class FreshE2E(unittest.TestCase):
         other = json.loads(out.read_text())
         self.assertIsNone(other.pop("fresh"))
         self.assertEqual(strip(other), strip({k: v for k, v in self.data.items() if k != "fresh"}))
+
+    def test_a_fresh_failure_leaves_fresh_out(self):
+        # fresh is add-only: an error building it must not cost the page its workspace.json.
+        warnings = []
+        args = wd.argparse.Namespace(db=str(self.db), inputs_dir=str(self.inputs), lead_sources=None, lost_reasons=None,
+                                     insights=None, lead_insights=None, prior=None, current_page=None, portal_id=None,
+                                     as_of=AS_OF, call_classification=None, review_list=None, paid_export=None,
+                                     scrub_patterns_file=None)
+        no_env = {"CALL_CLASSIFICATION": "", "LEAD_SOURCE_REVIEW": "", "PAID_EXPORT": "", "WORKSPACE_SCRUB_PATTERNS": ""}
+        with mock.patch.object(wd, "fresh_meetings", mock.Mock(side_effect=KeyError("x"))), mock.patch.dict(os.environ, no_env):
+            doc = wd.build(args, warn=warnings.append)
+        self.assertEqual(doc["fresh"], {"version": 1, "contract": "docs/workspace-fresh.md", "available": False,
+                                        "reason": "left out: building it failed (KeyError)"})
+        self.assertTrue(any("fresh left out: KeyError" in w for w in warnings))
+        self.assertEqual(strip({k: v for k, v in doc.items() if k != "fresh"}),
+                         strip({k: v for k, v in self.data.items() if k != "fresh"}))
 
     def test_over_budget_leaves_fresh_out(self):
         without = len(json.dumps({k: v for k, v in self.data.items() if k != "fresh"}, ensure_ascii=False,

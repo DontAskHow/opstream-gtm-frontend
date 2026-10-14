@@ -98,6 +98,10 @@ has a prospect call or a HubSpot meeting:
 - `meetings`: sorted start times of every HubSpot meeting (any source) on the
   deal or at one of its companies.
 
+Without `records.jsonl` the whole section is unavailable, including
+`meetings`, which comes from HubSpot alone. A consumer keeps its previous
+source for all of it.
+
 `callsThrough` is the newest prospect-call day in `records.jsonl`, so it shows
 how current the call records are. `fetchedAt` is the HubSpot sync (the meeting
 times).
@@ -148,6 +152,11 @@ job titles.
 - **Owner names.** These appear in `fresh.owners` and `won[].owner` only when
   `workspace.json` already shows that name, as an open or lost deal's owner, a
   listed meeting's owner, or a listed call's recorder.
+- **Company and deal names.** `fresh.companies`, `won.items[].company` and
+  `won.items[].name` are HubSpot's names, unfiltered, as in `deals` and
+  `closed.lost`. Most of them appear nowhere else in `workspace.json`, because
+  the other sections list only open and lost deals. The file is served behind
+  Google sign-in, like the rest of `workspace.json`.
 
 The whole file goes through the hidden-owner scrub as before. The build fails
 if a scrub pattern remains.
@@ -159,3 +168,5 @@ if a scrub pattern remains.
 rejects a larger file and keeps the last good copy. If the whole file would
 be over that budget, `fresh` becomes `{version, contract, available: false,
 reason}`, the script logs a warning, and the rest of the file is unaffected.
+An error while building `fresh` has the same result, so `fresh` can never
+stop `workspace.json` from publishing.

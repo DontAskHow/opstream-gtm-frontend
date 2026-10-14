@@ -2220,25 +2220,20 @@ def fresh_deal_activity(brain, ctx, calls):
 def build_fresh(brain, ctx, stages, freshness_rows, sections, as_of):
     """workspace.json 'fresh': form fills, meeting-link bookings, closed-won deals and per-deal call activity, the record
     sets the fresh frontend read from its one-time gtm-static.json extract, in the same shapes, synced each run and scoped
-    by the same reporting rules. Person names and emails are left out: contact ids only; an owner's name only when the
-    rest of workspace.json already shows it (sections: the built sections so far), and a company named like a contact
-    (first and last name) likewise."""
+    by the same reporting rules. Person names and emails are left out: contact ids only, and an owner's name only when
+    the rest of workspace.json already shows it (sections: the built sections so far). Company and deal names are
+    HubSpot's, as elsewhere in the file."""
     last_ok = {f['source']: f['lastOkAt'] for f in freshness_rows}
     scope, sales_id = ctx['scope'], SCOPE['salesPipelineId']
     named = {d['owner'] for d in sections['deals'] + sections['closed']['lost']}
     named |= {m['owner'] for m in sections['meetings']['items']} | {c['recorder'] for c in sections['calls']['items']}
-    people = {norm(c['name']) for c in ctx['contacts'].values() if len(norm(c['name']).split()) >= 2}
-    shown = json.dumps(sections, ensure_ascii=False)
 
     def owner_name(oid):
         name = ctx['owners'].get(str(oid or ''), {}).get('name')
         return name if name in named else None
 
     def comp_name(cid):
-        name = (ctx['comps'].get(cid) or {}).get('name')
-        if name and norm(name) in people and json.dumps(name, ensure_ascii=False)[1:-1] not in shown:
-            return None
-        return name
+        return (ctx['comps'].get(cid) or {}).get('name')
 
     if ctx['submissions'] is None:
         subs = {'available': False, 'reason': 'form submissions not yet synced'}
@@ -2268,7 +2263,8 @@ def build_fresh(brain, ctx, stages, freshness_rows, sections, as_of):
 
     won = sorted((d for d in ctx['deal_by_id'].values() if d['pipeline'] == sales_id and d['won'] and d['id'] not in scope.cs_deals),
                  key=lambda d: (d['close'] or '', d['id']))
-    won_items = [{'id': d['id'], 'name': d['name'], 'amount': d['amount'], 'close': d['close'], 'owner': owner_name(d['ownerId']),
+    whole = lambda v: int(v) if isinstance(v, float) and v.is_integer() else v  # 40000, as the extract had, not 40000.0
+    won_items = [{'id': d['id'], 'name': d['name'], 'amount': whole(d['amount']), 'close': d['close'], 'owner': owner_name(d['ownerId']),
                   'company': next((comp_name(c) for c in d['companyIds'] if comp_name(c)), None)} for d in won]
     won_sec = {'available': True, 'fetchedAt': last_ok.get('hubspot'),
                'provenance': {'source': 'HubSpot deals (brain.db hubspot_objects, sync hubspot)', 'rules': FRESH_RULES,
@@ -2509,8 +2505,14 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
                                 'contactsOut': dict(sorted(Counter(w[0] for w in scope.contacts.values() if w).items()))},
                   'currentPage': current_page_scope(args.current_page) if args.current_page else None},
     }
-    # Added last, from the sections above; nothing else reads it (docs/workspace-fresh.md).
-    out['fresh'] = build_fresh(brain, ctx, stages, fresh, out, as_of)
+    # Added last, from the sections above; nothing else reads it (docs/workspace-fresh.md). A failure here leaves fresh
+    # out instead of failing the whole file.
+    try:
+        out['fresh'] = build_fresh(brain, ctx, stages, fresh, out, as_of)
+    except Exception as e:
+        warn('warn: fresh left out: %s: %s' % (type(e).__name__, e))
+        out['fresh'] = {'version': FRESH_VERSION, 'contract': 'docs/workspace-fresh.md', 'available': False,
+                        'reason': 'left out: building it failed (%s)' % type(e).__name__}
     out = scrub.deep(out)
     if scrub.hit(json.dumps(out, ensure_ascii=False)):
         raise SystemExit('scrub failed: a scrub pattern still appears in the output')
@@ -2518,7 +2520,7 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
         # The refresh rejects a file over the budget and keeps the last good one; the page's own sections come first.
         warn('warn: workspace.json over %d bytes; fresh left out' % MAX_BYTES)
         out['fresh'] = {'version': FRESH_VERSION, 'contract': 'docs/workspace-fresh.md', 'available': False,
-                        'reason': 'left out: workspace.json would be over its %d MB budget' % (MAX_BYTES // 1048576)}
+                        'reason': 'left out: workspace.json would be over its %d MiB budget' % (MAX_BYTES // 1048576)}
     return out
 
 
