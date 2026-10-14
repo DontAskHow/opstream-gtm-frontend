@@ -105,7 +105,9 @@ for r in rows[hi + 1:]:
     if name: companies[name] = companies.get(name, False) or dated(get(r, mi)) or dated(get(r, si))
 # Input files.
 with open(os.path.join(INPUTS, 'lead-source-review.csv'), encoding='utf-8') as f: review = sum(1 for _ in csv.DictReader(f))
-paid = [x for x in json.load(open(os.path.join(INPUTS, 'paid-deals.json'), encoding='utf-8')).get('deals') or [] if (x.get('derived') or {}).get('paid_platform')]
+so = os.path.join(INPUTS, 'source-overrides.json')
+not_paid = {str(k) for k, v in ((json.load(open(so, encoding='utf-8')).get('deals') or {}) if os.path.exists(so) else {}).items() if isinstance(v, dict) and v.get('paid') is False}
+paid = [x for x in json.load(open(os.path.join(INPUTS, 'paid-deals.json'), encoding='utf-8')).get('deals') or [] if (x.get('derived') or {}).get('paid_platform') and str(x.get('id')) not in not_paid]
 li = json.load(open(os.path.join(INPUTS, 'lead-insights.json'), encoding='utf-8')) if os.path.exists(os.path.join(INPUTS, 'lead-insights.json')) else None
 lrows = (li or {}).get('leads') or {}
 insights = sum(1 for k, v in (lrows.items() if isinstance(lrows, dict) else enumerate(lrows)) if isinstance(v, dict) and (isinstance(k, str) or v.get('contact_id') or v.get('hubspot_contact_id') or v.get('contactId')))
@@ -178,13 +180,14 @@ print(json.dumps({'open': [o[0], round(o[1]), round(o[2])], 'onHold': [h[0], rou
     const l = byRow[r.row];
     assert.ok(l, `review row ${r.row} is a lead`);
     statuses[r.status] = (statuses[r.status] || 0) + 1;
-    if (r.status === 'resolved' && r.mql_channel && r.mql_channel !== 'undetermined') assert.equal(l.source, r.mql_channel, `row ${r.row}: MQL touch`);
+    if (l.sourceBasis === 'override') assert.equal(l.rule, 'Source override (human ruling)', `row ${r.row}: a human ruling decides`);
+    else if (r.status === 'resolved' && r.mql_channel && r.mql_channel !== 'undetermined') assert.equal(l.source, r.mql_channel, `row ${r.row}: MQL touch`);
     else if (String(r.status).startsWith('on_hold')) assert.equal(l.source, l.sheetSource, `row ${r.row}: held`);
     else {
       // Undetermined: the HubSpot-primary source stands. The CSV's hubspot_sources is Pipeline's snapshot of HubSpot
       // and may be older than brain.db (e.g. Lemlist lead emails synced since), so the rule is checked, not the value.
       assert.notEqual(l.rule, 'MQL touch (review list)', `row ${r.row}: not credited to an MQL touch`);
-      if (l.sourceBasis !== 'hubspot') assert.equal(l.source, l.sheetSource, `row ${r.row}: no HubSpot evidence, Lead Tracker source`);
+      if (l.sourceBasis === 'sheet') assert.equal(l.source, l.sheetSource, `row ${r.row}: no HubSpot evidence, Lead Tracker source`);
       if (l.source !== r.hubspot_sources.split(/[|/,;]/)[0].trim()) statuses.movedSinceCsv = (statuses.movedSinceCsv || 0) + 1;
     }
     if (r.different_first_touch) assert.equal(l.firstTouch, r.different_first_touch);

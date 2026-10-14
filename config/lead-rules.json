@@ -5,6 +5,9 @@
     "primary": "hubspot",
     "about": "HubSpot evidence decides a lead's Source (its channel = where its conversion happened). The Lead Tracker Source is used only when HubSpot has no evidence, and is shown as evidence. A disagreement goes to the review list; neither side is overwritten, and nothing is written to the Sheet.",
     "sheetLabel": "Lead Tracker (fallback: no HubSpot evidence)",
+    "overrides": {
+      "about": "Human source rulings, kept across refreshes: source-overrides.json in state/gtm-inputs/ (data-side, optional), shaped {\"deals\": {\"<dealId>\": {\"source\": \"...\", \"paid\": false, \"provenance\": \"...\"}}, \"leads\": {\"<leadId, L + Lead Tracker row>\": {\"source\": \"...\", \"provenance\": \"...\"}}}. A ruling wins over every other rule. A deal with paid false leaves the paid deals (paidDeals counts, its paid field) and carries sourceOverride. A lead takes the ruled source with sourceBasis override and the rule 'Source override (human ruling)'; paid evidence is kept but superseded, so no paid platform, sub-source or tag and no paid-lead count. The Lead Tracker value stays as sheetSource; the Sheet is not changed. provenance is never written to workspace.json. A missing or invalid file is logged and nothing is overridden."
+    },
     "attribution": {
       "about": "Review-list rows (lead-source-review.csv) carry a status. resolved: the lead is credited to mql_channel, the channel of the touch at its MQL booking (outbound-booked meetings stay Outbound); different_first_touch is shown when the first touch was another channel. undetermined: no MQL yet, the HubSpot-primary source is kept. on_hold*: neither side changes; the current source stays and the lead is flagged.",
       "statusResolved": "resolved",

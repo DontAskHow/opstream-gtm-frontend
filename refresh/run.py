@@ -751,7 +751,8 @@ VOLATILE_KEYS = frozenset(("generatedAt", "runId", "collectedAt", "publishedAt",
 # the scrub patterns (scrub-patterns.txt, or WORKSPACE_SCRUB_PATTERNS on the task).
 WORKSPACE_JSON = "workspace.json"
 GTM_INPUTS = ("lead-sources.json", "lead-source-review.csv", "paid-deals.json", "records.jsonl",
-              "lead-insights.json", "lost-reasons.json", "insights.json", "scrub-patterns.txt")
+              "lead-insights.json", "lost-reasons.json", "insights.json", "source-overrides.json",
+              "scrub-patterns.txt")
 WORKSPACE_TIMEOUT_S = int(os.environ.get("WORKSPACE_TIMEOUT_S") or 120)
 # Parts of a file left out of the content hash. workspace.json's "what changed"
 # note compares with the published run's live_deals.json and names that

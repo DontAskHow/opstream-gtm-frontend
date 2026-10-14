@@ -365,7 +365,7 @@ ${NAV}
     const lst = list('leads-' + src + '-' + (s.sub || ''), [
       { key: 'company', label: 'Company', cell: (l) => esc(l.company) + (l.tag ? ` <span class="tag">${esc(l.tag)}</span>` : '') + (l.predatesSpendWindow ? ' <span class="tag tag-warn">predates spend window</span>' : '') + (l.hold ? ` <span class="tag tag-warn">${esc(l.hold)}</span>` : '') },
       { key: 'leadDate', label: 'Lead date', cell: (l) => esc(date(l.leadDate)) },
-      { key: 'basis', label: 'Source from', opt: true, sortVal: (l) => l.sourceBasis, cell: (l) => (l.sourceBasis === 'hubspot' ? 'HubSpot' : '<span class="muted">Lead Tracker</span>') },
+      { key: 'basis', label: 'Source from', opt: true, sortVal: (l) => l.sourceBasis, cell: (l) => (l.sourceBasis === 'hubspot' ? 'HubSpot' : l.sourceBasis === 'override' ? 'Source override' : '<span class="muted">Lead Tracker</span>') },
       { key: 'subSource', label: 'Sub-source', opt: true, cell: (l) => esc(l.subSource || DASH) },
       { key: 'owner', label: 'Owner', opt: true, cell: (l) => esc(l.owner) },
       { key: 'openAmount', label: 'Open pipeline', num: true, opt: true, cell: (l) => (l.deals.length ? usd(l.openAmount) : '') },
@@ -583,8 +583,8 @@ ${NAV}
     const contacts = l.contacts.length ? `<ul class="plain">${l.contacts.map((c) => `<li>${esc(c.name || 'Unnamed contact')}${c.title ? ` <span class="muted">${esc(c.title)}</span>` : ''} <span class="muted small">${esc(c.lifecycle || '')}</span></li>`).join('')}</ul>${l.contactCount > l.contacts.length ? `<p class="muted small">${int(l.contactCount)} contacts in HubSpot</p>` : ''}` : '';
     const co = l.hubspot.companyIds[0];
     return drawer(esc(l.company), chip(l.source, 'info') + (l.subSource ? chip(l.subSource, 'neutral') : '') + (l.tag ? chip(l.tag, 'neutral') : '') + (l.review ? chip('review', 'warn') : ''), [
-      ['Source', kv([['Source', esc(l.source) + ` <span class="muted small">${l.sourceBasis === 'hubspot' ? 'from HubSpot (primary)' : 'Lead Tracker fallback: no HubSpot evidence'}</span>`],
-        ['Rule that fired', esc(l.rule)], ['Lead Tracker Source', esc(l.sheetSource) + (l.sheetSource !== l.source ? ' <span class="tag tag-warn">differs: on the review list</span>' : '')],
+      ['Source', kv([['Source', esc(l.source) + ` <span class="muted small">${l.sourceBasis === 'hubspot' ? 'from HubSpot (primary)' : l.sourceBasis === 'override' ? 'source override (human ruling)' : 'Lead Tracker fallback: no HubSpot evidence'}</span>`],
+        ['Rule that fired', esc(l.rule)], ['Lead Tracker Source', esc(l.sheetSource) + (l.sheetSource !== l.source ? (l.sourceBasis === 'override' ? ' <span class="tag">differs: source override</span>' : ' <span class="tag tag-warn">differs: on the review list</span>') : '')],
         ['Sub-source', l.subSource ? esc(l.subSource) + (l.tag ? ` <span class="tag">${esc(l.tag)}</span>` : '') + ` <span class="muted small">${esc(v.meta.provisional)}</span>` : null],
         ['Paid conversion', l.conversionDate ? esc(date(l.conversionDate)) + (l.predatesSpendWindow ? ' <span class="tag tag-warn">predates spend window</span>' : '') : null],
         ['First touch', l.firstTouch ? esc(l.firstTouch) + ' <span class="muted small">(differs from the MQL touch)</span>' : null],

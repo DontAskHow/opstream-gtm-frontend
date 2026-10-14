@@ -125,9 +125,11 @@ deal on it is owned by a customer-success owner; a deal in an excluded
 pipeline is only dropped, so a booking on it still counts. It reads brain.db and the data files under
 `state/gtm-inputs/`, all downloaded each run: `lead-sources.json`,
 `lead-source-review.csv`, `paid-deals.json`, `records.jsonl`,
-`lead-insights.json`, `lost-reasons.json`, `insights.json`, and
-`scrub-patterns.txt`. Each is optional, and a missing one is logged and that
-part of the page degrades. The scrub patterns are the exception. Without
+`lead-insights.json`, `lost-reasons.json`, `insights.json`,
+`source-overrides.json`, and `scrub-patterns.txt`. Each is optional, and a missing one is logged and that
+part of the page degrades. `source-overrides.json` holds human source rulings per deal and lead, so they
+survive every refresh (`config/lead-rules.json` `source.overrides`); its `provenance` text is never written
+out. The scrub patterns are the exception. Without
 them (or `WORKSPACE_SCRUB_PATTERNS` on the task) the script refuses to run.
 `--prior` is the LATEST run's `live_deals.json`, for the "what changed" note.
 

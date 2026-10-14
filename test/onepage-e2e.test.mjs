@@ -459,7 +459,7 @@ test('scrub patterns: from the env or --inputs-dir/scrub-patterns.txt; without a
 
 test('inputs degrade one by one and are listed in meta.inputs', () => {
   assert.deepEqual(base.data.meta.inputs, { 'lead-sources.json': true, 'lost-reasons.json': true, 'insights.json': true, 'lead-insights.json': true,
-    'records.jsonl': true, 'lead-source-review.csv': true, 'paid-deals.json': true });
+    'records.jsonl': true, 'lead-source-review.csv': true, 'paid-deals.json': true, 'source-overrides.json': false });
   const s = synced.data.meta.inputs;
   assert.deepEqual([s['records.jsonl'], s['lead-source-review.csv'], s['paid-deals.json']], [false, false, false]);
   assert.equal(synced.data.calls.classification, 'fallback');

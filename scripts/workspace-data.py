@@ -507,7 +507,7 @@ def sales_deal_of(c):
 
 def deal_ref(d):
     return {'id': d['id'], 'name': d['name'], 'stage': d['stage'], 'amount': d['amount'], 'open': d['open'],
-            'won': d['won'], 'owner': d['owner']} if d else None
+            'won': d['won'], 'owner': d['owner'], 'sourceOverride': d.get('sourceOverride')} if d else None
 
 
 # ---------- contacts ----------
@@ -1103,7 +1103,7 @@ def contact_paid(c, platforms):
 
 # Rule order; "decides" rules are system evidence (HubSpot primary). The paid-deal export is deal-level
 # (company fallback included), so it names the platform but does not move a lead's source.
-RULE_ORDER = ['MQL touch (review list)', 'Lemlist lead email', 'HubSpot form / UTM', 'HubSpot form submission', 'Event list upload',
+RULE_ORDER = ['Source override', 'MQL touch (review list)', 'Lemlist lead email', 'HubSpot form / UTM', 'HubSpot form submission', 'Event list upload',
               'HubSpot UTM / click id', 'paid_touch_campaign', 'HubSpot original source', 'HubSpot import',
               'HubSpot source (review list)', 'HubSpot check (Pipeline)', 'Paid lead (Pipeline)', 'Paid deal (Pipeline export)',
               'Lead Tracker note']
@@ -1228,11 +1228,24 @@ def build_leads(brain, ctx):
         if named and re.search(r'\b(ad|ads|paid|ppc|cpc)\b', note, re.I):
             ev.append({'rule': 'Lead Tracker note', 'source': 'Paid', 'platform': named[0]['name'] if len(named) == 1 else None,
                        'detail': 'note names %s' % ' / '.join(p['name'] for p in named)})
+        ov = ctx.get('overrides', {}).get('leads', {}).get(lead['id'])
+        if ov:
+            # A human ruling (source-overrides.json) decides over every other rule, a hold included. Paid evidence
+            # that disagrees is kept, marked superseded, and counts nowhere.
+            ev.append({'rule': 'Source override', 'source': ov['source'], 'detail': OVERRIDE_LABEL, 'platform': None, 'subSource': None})
+            if ov['source'] != 'Paid':
+                for e in ev:
+                    if e['rule'] != 'Source override' and (e.get('source') == 'Paid' or e.get('platform')):
+                        e['superseded'] = OVERRIDE_LABEL
         ev.sort(key=lambda e: RULE_ORDER.index(e['rule']))
         pipeline_platform = next((e['platform'] for e in ev if e['rule'] in ('HubSpot check (Pipeline)', 'Paid lead (Pipeline)') and e.get('platform')), None)
-        hold = bool(rv and str(rv.get('status') or '').startswith('on_hold'))
+        hold = bool(rv and str(rv.get('status') or '').startswith('on_hold')) and not ov
         for e in ev:
             e['decides'] = e['rule'] not in NOT_DECIDING and bool(e.get('source')) and not hold
+            if ov:
+                e['decides'] = e['rule'] == 'Source override'
+            if e.get('superseded'):
+                continue
             if e['rule'] == 'Lead Tracker note' and pipeline_platform and e.get('platform') and e['platform'] != pipeline_platform:
                 e['superseded'] = 'Pipeline\'s HubSpot check says %s' % pipeline_platform
         if hold:
@@ -1241,7 +1254,9 @@ def build_leads(brain, ctx):
         # HubSpot is primary: the first deciding rule sets the source; the Sheet is the fallback.
         hub = next((e for e in ev if e['decides']), None)
         lead['sheetSource'] = lead['source']
-        if hub:
+        if ov:
+            lead['source'], lead['sourceBasis'], lead['rule'] = ov['source'], 'override', OVERRIDE_LABEL
+        elif hub:
             lead['source'], lead['sourceBasis'], lead['rule'] = hub['source'], 'hubspot', hub['rule']
         else:
             lead['sourceBasis'], lead['rule'] = 'sheet', RULES['source']['sheetLabel']
@@ -1249,7 +1264,12 @@ def build_leads(brain, ctx):
             lead['flags'].append({'kind': 'note', 'text': 'Different first touch: %s' % lead['firstTouch']})
         if lead.get('mqlChannel') == 'undetermined':
             lead['flags'].append({'kind': 'note', 'text': 'MQL channel undetermined (no MQL booking yet): the HubSpot-primary source is kept'})
-        if lead.get('hold'):
+        if ov:
+            lead['review'] = False
+            if ov['source'] != lead['sheetSource']:
+                lead['flags'].append({'kind': 'note', 'text': '%s: %s; the Lead Tracker says %s (the Sheet is not changed)'
+                                      % (OVERRIDE_LABEL, ov['source'], lead['sheetSource'])})
+        elif lead.get('hold'):
             lead['review'] = True
             lead['flags'].append({'kind': 'hold', 'text': '%s: %s' % (lead['hold'], rv.get('action') or 'held for review')})
         elif hub and hub['source'] != lead['sheetSource']:
@@ -1269,7 +1289,7 @@ def build_leads(brain, ctx):
                 lead['predatesSpendWindow'] = True
             platform = pe['platform'] if pe else None
             sub = platform or 'Platform not named'
-            if pe and pe['rule'] != lead['rule'] and lead['sourceBasis'] == 'sheet':
+            if pe and pe['rule'] != lead['rule'] and lead['sourceBasis'] in ('sheet', 'override'):
                 lead['rule'] = '%s (platform: %s)' % (lead['rule'], pe['rule'])
             elif pe and lead['sourceBasis'] == 'hubspot' and pe['rule'] != lead['rule']:
                 lead['rule'] = '%s (platform: %s)' % (lead['rule'], pe['rule'])
@@ -1280,6 +1300,8 @@ def build_leads(brain, ctx):
                     lead['possiblePlatforms'] = possible
             if any(e.get('branded') for e in ev if e.get('source') == 'Paid'):
                 tag = RULES['ads']['brandedFlag']
+        elif ov:
+            pass  # a ruled source carries no sub-source, platform or tag
         else:
             same = next((e for e in ev if e.get('source') == lead['source'] and e.get('subSource')), None)
             if same:
@@ -1295,6 +1317,8 @@ def build_leads(brain, ctx):
         lead['tag'] = tag
         # Other evidence naming a different source than the one used: shown, not resolved.
         for e in ev:
+            if e.get('superseded') == OVERRIDE_LABEL:
+                continue
             if e.get('source') and e['source'] != lead['source'] and e is not hub and not (e['rule'] == 'Lead Tracker note' and lead['sheetSource'] == lead['source']):
                 what = e.get('platform') or e['source']
                 lead['flags'].append({'kind': 'conflict', 'text': '%s says %s (%s); source used: %s' % (e['rule'], e['source'], what, lead['source'])})
@@ -1329,9 +1353,11 @@ def build_leads(brain, ctx):
             'sources': sources, 'platforms': plat, 'openai': next((x for x in plat if openai and x['key'] == 'openai'), None),
             'conflicts': sum(1 for l in items if l['conflict']), 'reviewLeads': sum(1 for l in items if l['review']),
             'hubspotSourced': sum(1 for l in items if l['sourceBasis'] == 'hubspot'), 'items': items,
+            'overridden': sum(1 for l in items if l['sourceBasis'] == 'override'),
             'definition': 'A lead is a company on the Lead Tracker with its first lead date (Lead Date, else First Touch). '
                           'Source: HubSpot evidence first (where the conversion happened); the Lead Tracker Source only when '
-                          'HubSpot has none. Disagreements go to the review list; nothing is overwritten. Sheet MQL/SQL are the '
+                          'HubSpot has none; a human ruling (source override) wins over both. Disagreements go to the review list; '
+                          'nothing is overwritten. Sheet MQL/SQL are the '
                           'Lead Tracker\'s dates.'}
 
 
@@ -1415,6 +1441,52 @@ def compute_paid_deals(deals, ctx):
                             'name': d['name'], 'stage': d['stage'], 'amount': d['amount'], 'conversionDate': conv,
                             'predatesSpendWindow': bool(start and conv and conv < start) if start else None}
     return {'basis': 'computed from synced HubSpot contact fields (no Pipeline export given)', 'path': None, 'generatedAt': None, 'deals': out}
+
+
+OVERRIDE_LABEL = 'Source override (human ruling)'
+
+
+def load_source_overrides(path, warn):
+    """source-overrides.json (data-side): human source rulings, kept across refreshes. Returns ({'deals': {id: entry},
+    'leads': {id: entry}}, ok). An entry keeps only 'source' and, on deals, 'paid'; 'provenance' (who ruled, why) is
+    never read into the output. A missing or invalid file warns and applies nothing."""
+    empty = {'deals': {}, 'leads': {}}
+    if not path or not os.path.exists(path):
+        return empty, False
+    try:
+        with open(path, encoding='utf-8') as f:
+            doc = json.load(f)
+        if not isinstance(doc, dict):
+            raise ValueError('top level is not an object')
+        out = {}
+        for kind in ('deals', 'leads'):
+            xs = {} if doc.get(kind) is None else doc[kind]
+            if not isinstance(xs, dict):
+                raise ValueError('%s is not an object' % kind)
+            out[kind] = {}
+            for k, v in xs.items():
+                src = v.get('source') if isinstance(v, dict) else None
+                if not isinstance(src, str) or not src.strip() or (kind == 'deals' and not isinstance(v.get('paid', False), bool)):
+                    warn('warn: source-overrides.json: %s entry %s skipped (needs a source%s)' % (
+                        kind[:-1], k, ' and a true/false paid' if kind == 'deals' else ''))
+                    continue
+                out[kind][str(k).strip()] = {'source': src.strip(), **({'paid': v.get('paid')} if kind == 'deals' else {})}
+        return out, True
+    except (OSError, ValueError) as e:
+        warn('warn: source-overrides.json %s not used: %s' % (path, e))
+        return empty, False
+
+
+def apply_deal_overrides(paid, deals, overrides):
+    """A deal ruled not paid (paid: false) leaves the paid deals; every overridden deal carries the ruling's source."""
+    for d in deals:
+        o = overrides.get(d['id'])
+        if o:
+            d['sourceOverride'] = o['source']
+    for i, o in overrides.items():
+        if o.get('paid') is False:
+            paid['deals'].pop(i, None)
+    return paid
 
 
 def paid_deals_view(paid, deal_by_id, comp_name):
@@ -2410,6 +2482,8 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
             warn('warn: paid export %s not used: %s' % (args.paid_export, e))
     if paid is None:
         paid = compute_paid_deals(deals, ctx)
+    ctx['overrides'], inputs_used['source-overrides.json'] = load_source_overrides(getattr(args, 'source_overrides', None), warn)
+    paid = apply_deal_overrides(paid, deals, ctx['overrides']['deals'])
     ctx['paid_deals'] = paid['deals']
     ctx['customer_title'] = customer_title_matcher(comps)
     meetings = build_meetings(brain, ctx, as_of)
@@ -2447,6 +2521,7 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
                 'probability': d['probability'], 'weighted': money0(d['amount'] * d['probability']) if d['amount'] is not None and d['probability'] is not None else None,
                 'close': d['close'], 'created': d['created'], 'owner': d['owner'], 'onHold': d['onHold'], 'open': d['open'],
                 'won': d['won'], 'lost': d['lost'], 'lostReason': d['lostReason'], 'postWin': d.get('postWin', False),
+                'sourceOverride': d.get('sourceOverride'),
                 'paid': ({k: ctx['paid_deals'][d['id']].get(k) for k in ('platform', 'via', 'level', 'branded', 'conversionDate', 'predatesSpendWindow')} if d['id'] in ctx['paid_deals'] else None),
                 'company': next((comp_name[c] for c in d['companyIds'] if c in comp_name), None)}
     lost_doc = read_json(args.lost_reasons, 'lost-reasons', warn) if args.lost_reasons else None
@@ -2578,7 +2653,7 @@ def audit_lines(d):
 INPUT_FILES = {
     'lead_sources': 'lead-sources.json', 'lost_reasons': 'lost-reasons.json', 'insights': 'insights.json',
     'lead_insights': 'lead-insights.json', 'call_classification': 'records.jsonl', 'review_list': 'lead-source-review.csv',
-    'paid_export': 'paid-deals.json', 'scrub_patterns_file': 'scrub-patterns.txt',
+    'paid_export': 'paid-deals.json', 'scrub_patterns_file': 'scrub-patterns.txt', 'source_overrides': 'source-overrides.json',
 }
 
 
@@ -2615,6 +2690,7 @@ def main(argv=None):
     ap.add_argument('--review-list', default=os.environ.get('LEAD_SOURCE_REVIEW'), help='lead-source-review.csv (default $LEAD_SOURCE_REVIEW)')
     ap.add_argument('--paid-export', default=os.environ.get('PAID_EXPORT'),
                     help="Pipeline's deals export with derived.paid_platform (default $PAID_EXPORT); without it the rules run on synced fields")
+    ap.add_argument('--source-overrides', help='source-overrides.json: human source rulings per deal / lead (provenance never written out)')
     ap.add_argument('--scrub-patterns-file', help='scrub patterns file (else $WORKSPACE_SCRUB_PATTERNS / $WORKSPACE_SCRUB_PATTERNS_FILE)')
     ap.add_argument('--out', required=True)
     ap.add_argument('--quiet', action='store_true')

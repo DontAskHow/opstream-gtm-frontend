@@ -529,5 +529,154 @@ class Fresh(unittest.TestCase):
         self.assertEqual((act['d1']['nextStep'], 'nextStepCallId' in act['d1']), (None, False))
 
 
+class SourceOverrides(unittest.TestCase):
+    """source-overrides.json: human source rulings per deal and lead. The provenance text never reaches the output."""
+    PROVENANCE = 'Ruled by Quinn Example on a synthetic call'  # synthetic; stands in for a staff name
+    DOC = {'deals': {'d1': {'source': 'Customer referral', 'paid': False, 'provenance': PROVENANCE}},
+           'leads': {'L2': {'source': 'Customer referral', 'provenance': PROVENANCE}}}
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        self.warnings = []
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def write(self, name, doc):
+        path = os.path.join(self.dir, name)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(doc if isinstance(doc, str) else json.dumps(doc))
+        return path
+
+    def load(self, doc):
+        return wd.load_source_overrides(self.write('source-overrides.json', doc), self.warnings.append)
+
+    def test_loader_keeps_source_and_paid_only(self):
+        out, ok = self.load(self.DOC)
+        self.assertTrue(ok)
+        self.assertEqual(out, {'deals': {'d1': {'source': 'Customer referral', 'paid': False}},
+                               'leads': {'L2': {'source': 'Customer referral'}}})
+        self.assertEqual(self.warnings, [])
+
+    def test_loader_missing_or_invalid_warns_and_applies_nothing(self):
+        empty = {'deals': {}, 'leads': {}}
+        self.assertEqual(wd.load_source_overrides(None, self.warnings.append), (empty, False))
+        self.assertEqual(wd.load_source_overrides(os.path.join(self.dir, 'nope.json'), self.warnings.append), (empty, False))
+        self.assertEqual(self.load('{not json'), (empty, False))
+        self.assertEqual(self.load([1]), (empty, False))
+        self.assertEqual(self.load({'deals': []}), (empty, False))
+        self.assertEqual(len(self.warnings), 3)
+        out, ok = self.load({'deals': {'d1': {'paid': False}, 'd2': {'source': 'X', 'paid': 'no'}, 'd3': {'source': 'Y'}},
+                             'leads': {'L1': 'Customer referral', 'L2': {'source': ' '}}})
+        self.assertTrue(ok)
+        self.assertEqual(out, {'deals': {'d3': {'source': 'Y', 'paid': None}}, 'leads': {}})
+        self.assertEqual(len(self.warnings), 7)
+        self.assertNotIn(self.PROVENANCE, ' '.join(self.warnings))
+
+    def test_deal_ruled_not_paid_leaves_paid_counts(self):
+        mk = lambda: {'platform': 'Google Ads', 'via': 'x', 'level': 'company', 'branded': True, 'pipeline': 'default',
+                      'name': 'n', 'stage': 's', 'amount': 1}
+        paid = {'basis': 'b', 'generatedAt': None, 'deals': {'d1': mk(), 'd2': mk()}}
+        deals = [{'id': 'd1', 'pipeline': 'default'}, {'id': 'd2', 'pipeline': 'default'}]
+        wd.apply_deal_overrides(paid, deals, {'d1': {'source': 'Customer referral', 'paid': False}})
+        view = wd.paid_deals_view(paid, {}, {})
+        self.assertEqual([r['id'] for r in view['sales']], ['d2'])
+        self.assertEqual((view['total'], view['byPlatform'], view['branded'], view['companyLevel']), (1, {'Google Ads': 1}, 1, 1))
+        self.assertEqual((deals[0]['sourceOverride'], 'sourceOverride' in deals[1]), ('Customer referral', False))
+
+    def brain(self):
+        import sqlite3
+        db = os.path.join(self.dir, 'brain.db')
+        con = sqlite3.connect(db)
+        con.executescript("""
+            CREATE TABLE hubspot_objects (object_type TEXT, hs_id TEXT, properties_json TEXT, fetched_at TEXT);
+            CREATE TABLE hubspot_associations (from_type TEXT, from_id TEXT, to_type TEXT, to_id TEXT);
+            CREATE TABLE hubspot_pipelines (pipeline_id TEXT, stage_id TEXT, stage_label TEXT, pipeline_label TEXT,
+                                            display_order INTEGER, is_closed INTEGER, probability TEXT);
+            CREATE TABLE sheets_data (spreadsheet_title TEXT, tab TEXT, row_num INTEGER, row_json TEXT);
+            CREATE TABLE lemlist_campaigns (campaign_id TEXT, name TEXT, status TEXT, raw_json TEXT);""")
+        sales = wd.SCOPE['salesPipelineId']
+        con.execute('INSERT INTO hubspot_pipelines VALUES (?,?,?,?,?,?,?)', (sales, 's1', 'SQL', 'Sales Pipeline', 0, 0, '0.1'))
+        obj = lambda kind, i, props: con.execute('INSERT INTO hubspot_objects VALUES (?,?,?,?)', (kind, i, json.dumps(props), ''))
+        link = lambda a, i, b, j: con.execute('INSERT INTO hubspot_associations VALUES (?,?,?,?)', (a, i, b, j))
+        for n, (co, name) in enumerate([('c1', 'Alpha Synthetic'), ('c2', 'Beta Synthetic')], start=1):
+            obj('companies', co, {'name': name, 'domain': 'co%d.example' % n, 'lifecyclestage': 'opportunity'})
+            obj('deals', 'd%d' % n, {'dealname': name + ' - New', 'pipeline': sales, 'dealstage': 's1', 'amount': '1000',
+                                     'createdate': '2026-09-01T00:00:00Z'})
+            link('deals', 'd%d' % n, 'companies', co)
+            # A Google click id: both deals (and both leads) are paid Google until a ruling says otherwise.
+            obj('contacts', 'k%d' % n, {'email': 'k%d@co%d.example' % (n, n), 'createdate': '2026-08-01T00:00:00Z',
+                                        'hs_google_click_id': 'synthetic-click'})
+            link('contacts', 'k%d' % n, 'companies', co)
+            link('deals', 'd%d' % n, 'contacts', 'k%d' % n)
+        for n, row in enumerate([['Company', 'Source', 'Owner', 'Lead Date', 'HubSpot Company ID', 'Company Domain'],
+                                 ['Alpha Synthetic', 'Paid', 'Alex', '09/01/2026', 'c1', 'co1.example'],
+                                 ['Beta Synthetic', 'Paid', 'Alex', '09/02/2026', 'c2', 'co2.example']], start=1):
+            con.execute('INSERT INTO sheets_data VALUES (?,?,?,?)', ('Synthetic Sheet', 'Lead Tracker', n, json.dumps(row)))
+        con.commit()
+        con.close()
+        return db
+
+    def build(self, overrides=None):
+        self.write('lead-sources.json', {'sheet': {'tab': 'Lead Tracker (Synthetic Sheet)'}, 'ads': {
+            'platforms': ['Google Ads', 'LinkedIn Ads'],
+            'paid_leads': [{'company': 'Alpha Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-01'},
+                           {'company': 'Beta Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-02'}]}})
+        if overrides is not None:
+            self.write('source-overrides.json', overrides)
+        args = wd.argparse.Namespace(db=self.brain(), inputs_dir=self.dir, lead_sources=None, lost_reasons=None, insights=None,
+                                     lead_insights=None, prior=None, current_page=None, portal_id=None, as_of='2026-10-13T16:00:00Z',
+                                     call_classification=None, review_list=None, paid_export=None, scrub_patterns_file=None,
+                                     source_overrides=None, out=None, quiet=True)
+        from unittest import mock
+        with mock.patch.dict(os.environ, {'WORKSPACE_SCRUB_PATTERNS': PAT}):
+            return wd.build(args, warn=self.warnings.append)
+
+    def test_build_without_overrides_is_paid(self):
+        out = self.build()
+        self.assertFalse(out['meta']['inputs']['source-overrides.json'])
+        self.assertEqual(sorted(r['id'] for r in out['paidDeals']['sales']), ['d1', 'd2'])
+        self.assertEqual({l['id']: (l['source'], l['platform']) for l in out['leads']['items']},
+                         {'L2': ('Paid', 'Google Ads'), 'L3': ('Paid', 'Google Ads')})
+
+    def test_build_applies_rulings_and_never_writes_provenance(self):
+        out = self.build(self.DOC)
+        self.assertTrue(out['meta']['inputs']['source-overrides.json'])
+        self.assertNotIn(self.PROVENANCE, json.dumps(out, ensure_ascii=False))
+        self.assertNotIn('provenance', json.dumps(out['leads']) + json.dumps(out['deals']) + json.dumps(out['paidDeals']))
+        # The deal ruled not paid: out of paid deals, its paid field null, the ruling's source on it.
+        p = out['paidDeals']
+        self.assertEqual(([r['id'] for r in p['sales']], p['total'], p['byPlatform']), (['d2'], 1, {'Google Ads': 1}))
+        rows = {d['id']: d for d in out['deals']}
+        self.assertEqual((rows['d1']['paid'], rows['d1']['sourceOverride']), (None, 'Customer referral'))
+        self.assertEqual((rows['d2']['paid']['platform'], rows['d2']['sourceOverride']), ('Google Ads', None))
+        # The lead: the ruled source, no paid platform, the Lead Tracker value kept.
+        leads = {l['id']: l for l in out['leads']['items']}
+        a = leads['L2']
+        self.assertEqual((a['source'], a['sourceBasis'], a['rule'], a['sheetSource']),
+                         ('Customer referral', 'override', 'Source override (human ruling)', 'Paid'))
+        self.assertEqual((a['subSource'], a['platform'], a['tag'], a['review'], a['conflict']), (None, None, None, False, False))
+        self.assertEqual(a['evidence'][0], {'rule': 'Source override', 'source': 'Customer referral', 'decides': True,
+                                            'detail': 'Source override (human ruling)', 'platform': None, 'subSource': None})
+        others = a['evidence'][1:]
+        self.assertTrue(others and all(not e['decides'] and e['superseded'] for e in others if e.get('source') == 'Paid'))
+        self.assertIn('Paid lead (Pipeline)', [e['rule'] for e in others])
+        self.assertNotIn('Paid deal (Pipeline export)', [e['rule'] for e in others])  # d1 is no paid deal now
+        self.assertEqual((leads['L3']['source'], leads['L3']['platform']), ('Paid', 'Google Ads'))
+        # Counts by source and paid-lead counts follow the ruling.
+        self.assertEqual(sorted(out['leads']['sources']), ['Customer referral', 'Paid'])
+        self.assertEqual(out['leads']['overridden'], 1)
+        g = next(x for x in out['leads']['platforms'] if x['name'] == 'Google Ads')
+        self.assertEqual((g['confirmed'], g['confirmedIds'], g['inPaid'], g['atMost']), (1, ['L3'], 1, 1))
+
+    def test_build_with_an_invalid_file_continues(self):
+        out = self.build('{oops')
+        self.assertFalse(out['meta']['inputs']['source-overrides.json'])
+        self.assertEqual(len(out['paidDeals']['sales']), 2)
+        self.assertTrue(any('source-overrides.json' in w and 'not used' in w for w in self.warnings))
+
+
 if __name__ == '__main__':
     unittest.main()

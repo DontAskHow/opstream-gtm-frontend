@@ -132,6 +132,8 @@ class WorkspaceStepE2E(unittest.TestCase):
         self.assertTrue(ws["meta"]["inputs"]["lost-reasons.json"])
         self.assertFalse(ws["meta"]["inputs"]["lead-sources.json"])
         self.assertIn("missing (that part of the page degrades): lead-sources.json", log)
+        self.assertIs(ws["meta"]["inputs"]["source-overrides.json"], False)
+        self.assertIn("source-overrides.json", log.split("missing (that part of the page degrades): ")[1].splitlines()[0])
         # --prior is the previous run's live_deals.json: the deal is new since then.
         change = ws["headline"]["change"]
         self.assertEqual((change["from"]["count"], change["to"]["count"]), (0, 1), change)
@@ -155,6 +157,20 @@ class WorkspaceStepE2E(unittest.TestCase):
         change = json.loads(self.store.get_bytes(third + run.WORKSPACE_JSON))["headline"]["change"]
         self.assertEqual([(d["kind"], d["fromAmount"], d["amount"]) for d in change["deals"]],
                          [("amount", 1000, 1500)])
+
+    def test_source_overrides_from_gtm_inputs(self):
+        # A human ruling uploaded to state/gtm-inputs/ is read; its provenance text is never published.
+        provenance = "Ruled by Quinn Example (synthetic)"
+        self.put_input("source-overrides.json", json.dumps(
+            {"deals": {"9001": {"source": "Customer referral", "paid": False, "provenance": provenance}}}))
+        code, log, prefix = self.publish()
+        self.assertEqual(code, 0, log)
+        text = self.store.get_bytes(prefix + run.WORKSPACE_JSON).decode("utf-8")
+        ws = json.loads(text)
+        self.assertTrue(ws["meta"]["inputs"]["source-overrides.json"])
+        self.assertEqual([(d["id"], d["sourceOverride"], d["paid"]) for d in ws["deals"]], [("9001", "Customer referral", None)])
+        self.assertNotIn(provenance, text)
+        self.assertNotIn(provenance, log)
 
     def backdate_latest(self, minutes):
         """LATEST.json as if it were published `minutes` ago (pointer otherwise unchanged)."""
