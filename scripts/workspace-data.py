@@ -2553,7 +2553,7 @@ def build_strategy(brain, ctx, stages, deals):
         'leadFirstFillsByMonth': dict(sorted(lead_fills.by_month.items())),
         'leadFirstFillsOut': dict(sorted(lead_fills.out.items())),
         'bookingPages': booking_pages(pages, book_ids, contacts),
-        'synced': {'lifecycleDates': [k for k, props in LIFECYCLE_DATES if any(synced('contacts', p) for p in props)],
+        'synced': {'lifecycleDates': [k for n, (k, _p) in enumerate(LIFECYCLE_DATES) if any(v[n] for v in dates.values())],
                    'conversionEvents': synced('contacts', 'first_conversion_event_name'),
                    'conversionCount': synced('contacts', 'num_conversion_events'),
                    'meetingSource': synced('meetings', mcfg['sourceProperty']),

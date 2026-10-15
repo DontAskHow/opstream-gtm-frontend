@@ -90,7 +90,8 @@ class Strategy(unittest.TestCase):
         contact('105', 'e105@alpha.example', 'marketingqualifiedlead',         # stage past lead only; HubSpot's v2
                 hs_v2_date_entered_lead='2026-01-02T00:00:00.000Z',            # dates win over the older ones
                 hs_v2_date_entered_marketingqualifiedlead='2026-01-07T00:00:00.000Z',
-                hs_v2_date_entered_opportunity='2026-02-01T00:00:00.000Z')
+                hs_v2_date_entered_opportunity='2026-02-01T00:00:00.000Z',
+                hs_v2_date_entered_customer=None)                              # requested, unset: no customerAt
         contact('106', 'f106@alpha.example')                                   # booked twice on another page
         # Form fills only (left out of the core rows), counted by the month (UTC-7) of the first fill, or out.
         fill = lambda i, email, event, at, life='lead': contact(i, email, life, first_conversion_event_name=event,
@@ -204,6 +205,30 @@ class Strategy(unittest.TestCase):
         for r in dropped['contacts']['rows']:
             r[f.index('dealIds')] = [d for d in r[f.index('dealIds')] if d != '902']
         self.assertIn('1 contact->deal pairs on contact rows', chk.check(con, dropped)[1])
+        self.assertEqual([x.split() for x in lines if '5 contact rows with mqlAt' in x],
+                         [['ok', '5', 'contact', 'rows', 'with', 'mqlAt', '2', '(tables:', '2)']])
+        # Empty lifecycle columns (the sync never read the dates) fail; so does a date that is not the stored one.
+        empty = json.loads(json.dumps(s))
+        f = empty['contacts']['fields']
+        for r in empty['contacts']['rows']:
+            for k, _p in wd.LIFECYCLE_DATES:
+                r[f.index(k)] = None
+        empty['synced']['lifecycleDates'] = []
+        self.assertEqual(chk.check(con, empty)[1], ['5 contact rows with leadAt', '5 contact rows with mqlAt',
+                                                    '5 contact rows with sqlAt', '5 contact rows with opportunityAt',
+                                                    '5 contact rows with any lifecycle date', '5 synced.lifecycleDates'])
+        moved = json.loads(json.dumps(s))
+        for r in moved['contacts']['rows']:
+            if r[0] == '105':
+                r[f.index('mqlAt')] = '2026-01-08T00:00:00Z'
+        self.assertEqual(chk.check(con, moved)[1], ['5 contact rows with mqlAt'])
+        con.close()
+        # A brain whose contacts hold no lifecycle dates at all: the columns are empty and the check says so.
+        con = sqlite3.connect(os.path.join(self.dir, 'brain.db'))
+        con.execute("UPDATE hubspot_objects SET properties_json=json_remove(properties_json, %s) WHERE object_type='contacts'"
+                    % ', '.join("'$.%s'" % p for _k, props in wd.LIFECYCLE_DATES for p in props))
+        con.commit()
+        self.assertEqual(chk.check(con, empty)[1], ['5 contact rows with any lifecycle date'])
         con.close()
 
     def test_lead_first_fills_by_month(self):
@@ -344,6 +369,71 @@ class SyncLifecycleDates(unittest.TestCase):
             got = self.hs.discover_contact_props(client, logging.getLogger('test'))
         self.assertEqual(got, ['hs_v2_date_entered_1234567', 'hs_v2_date_entered_lead', 'utm_source'])
         self.assertEqual(client.request.call_args.args, ('GET', 'https://api.example/crm/v3/properties/contacts'))
+
+    def test_backfill_runs_without_its_variable_and_resumes(self):
+        """Contacts stored before the lifecycle dates were synced, and a backfill finished before then: the sync
+        re-reads them on its own, two pages a run, and resumes where the last run stopped."""
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        db = os.path.join(tmp, 'brain.db')
+        con = sqlite3.connect(db)
+        con.executescript("""
+            CREATE TABLE sync_state(source TEXT PRIMARY KEY, watermark TEXT, last_run TEXT, note TEXT);
+            CREATE TABLE hubspot_objects(object_type TEXT, hs_id TEXT, properties_json TEXT, fetched_at TEXT,
+                                         PRIMARY KEY(object_type, hs_id));""")
+        for i in range(1, 6):
+            con.execute("INSERT INTO hubspot_objects VALUES('contacts', ?, ?, '')",
+                        (str(i), json.dumps({'email': 'c%d@synthetic.example' % i, 'lifecyclestage': 'lead'})))
+        con.execute("INSERT INTO sync_state VALUES('hubspot_contact_backfill', ?, '', 'done')",
+                    (json.dumps({'restartKey': 'restart', 'done': True, 'afterId': '5', 'count': 5}),))
+        con.commit()
+        con.close()
+        hubspot = {i: {'hs_v2_date_entered_lead': '2026-0%d-01T00:00:00.000Z' % i,
+                       'hs_v2_date_entered_marketingqualifiedlead': '2026-0%d-15T00:00:00.000Z' % i} for i in range(1, 6)}
+        bodies = []
+
+        def request(method, url, body=None):
+            self.assertEqual((method, url), ('POST', 'https://api.example/crm/v3/objects/contacts/search'))
+            bodies.append(body)
+            after = int(body['filterGroups'][0]['filters'][0]['value'])
+            ids = [i for i in sorted(hubspot) if i > after]
+            page = [{'id': str(i), 'properties': dict(hubspot[i], hs_object_id=str(i))} for i in ids[:body['limit']]]
+            more = len(ids) > body['limit']
+            return 200, {'results': page, 'paging': {'next': {'after': page[-1]['id']}} if more else {}}
+
+        client = mock.Mock(api_base='https://api.example', request=request)
+        hs, log = self.hs, logging.getLogger('test')
+        props = hs.OBJECT_TYPES['contacts'][1]
+        env = {k: v for k, v in os.environ.items() if not k.startswith('HUBSPOT_')}
+        with mock.patch.dict(hs.db_connect.__globals__, {'BRAIN_DB': db}), mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(hs.search_pace, 'min_interval', 0), mock.patch.object(hs, 'BACKFILL_PAGE', 2), \
+                mock.patch.object(hs, 'BACKFILL_MAX_PAGES', 2):
+            self.assertEqual((hs.backfill_due('contacts'), hs.backfill_due('meetings')), (True, False))
+            with mock.patch.dict(os.environ, {'HUBSPOT_CONTACT_BACKFILL': '0'}):
+                self.assertEqual(hs.backfill_due('contacts'), False)
+            first = hs.backfill_objects(client, 'contacts', props, log)
+            state = json.loads(hs.get_sync_state('hubspot_contact_backfill')[0])
+            self.assertEqual((state['afterId'], state['count'], state.get('done')), ('4', 4, None))
+            self.assertEqual(hs.backfill_due('contacts'), True)
+            second = hs.backfill_objects(client, 'contacts', props, log)
+            state = json.loads(hs.get_sync_state('hubspot_contact_backfill')[0])
+            self.assertEqual((state['afterId'], state['count'], state['done']), ('5', 5, True))
+            self.assertEqual(hs.backfill_due('contacts'), False)
+            # An operator's restart value left set starts over once, not every run.
+            with mock.patch.dict(os.environ, {'HUBSPOT_CONTACT_BACKFILL': 'restart:synthetic'}):
+                runs = [hs.backfill_objects(client, 'contacts', props, log)[:20] for _run in range(3)]
+                self.assertEqual(runs, ['4 contacts re-read s', '5 contacts re-read w', 'already complete (5 '])
+        self.assertIn('HUBSPOT_BACKFILL_MAX_PAGES reached, resuming next run', first)
+        self.assertEqual(second, '5 contacts re-read with %d properties' % len(props))
+        self.assertEqual([b['filterGroups'][0]['filters'][0]['value'] for b in bodies], ['0', '2', '4', '0', '2', '4'])
+        for _key, (v2, old) in wd.LIFECYCLE_DATES:
+            self.assertEqual((v2 in bodies[0]['properties'], old in bodies[0]['properties']), (True, True))
+        con = sqlite3.connect(db)
+        stored = {i: json.loads(p) for i, p in con.execute("SELECT hs_id, properties_json FROM hubspot_objects")}
+        con.close()
+        self.assertEqual(stored['3'], {'email': 'c3@synthetic.example', 'lifecyclestage': 'lead', 'hs_object_id': '3',
+                                       'hs_v2_date_entered_lead': '2026-03-01T00:00:00.000Z',
+                                       'hs_v2_date_entered_marketingqualifiedlead': '2026-03-15T00:00:00.000Z'})
 
 
 if __name__ == '__main__':

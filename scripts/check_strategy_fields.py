@@ -12,6 +12,8 @@ Fields, in Strategy's priority order (docs/workspace-strategy.md):
   3. dealstage history with entered-at: dealStageHistory.<deal>.entered, against hubspot_deal_extras.stage_history
   4. form / booking source: firstConversion, firstMeetingSource, bookings, against the contacts' conversion property
      and their meetings' hs_meeting_source
+  5. lifecycle dates: leadAt .. customerAt on the rows, against the contacts' hs_v2_date_entered_<stage> (else
+     hs_lifecyclestage_<stage>_date), and synced.lifecycleDates against the columns any stored contact has
 """
 import argparse
 import importlib.util
@@ -127,6 +129,25 @@ def check(con, s):
                 booked.add(str(cid))
     line('4 contact rows with a first meeting source', sum(1 for r in rows if r.get('firstMeetingSource')), len(met))
     line('4 contact rows with a meeting-link booking', sum(1 for r in rows if r.get('bookings')), len(booked))
+
+    # 5. lifecycle dates: each row's value equals its stored property, and some row has one
+    fields = [p for _k, props in wd.LIFECYCLE_DATES for p in props]
+    stored, held = {}, set()
+    for row in con.execute("SELECT hs_id, %s FROM hubspot_objects WHERE object_type='contacts'"
+                           % ', '.join("json_extract(properties_json, '$.%s')" % p for p in fields)):
+        vals = [wd.utc_s(row[1 + 2 * n] or row[2 + 2 * n]) for n in range(len(wd.LIFECYCLE_DATES))]
+        held |= {k for (k, _p), v in zip(wd.LIFECYCLE_DATES, vals) if v}
+        if str(row[0]) in ids:
+            stored[str(row[0])] = vals
+    none = [None] * len(wd.LIFECYCLE_DATES)
+    for n, (key, _props) in enumerate(wd.LIFECYCLE_DATES):
+        line('5 contact rows with %s' % key, sum(1 for r in rows if r.get(key) and r[key] == stored.get(r['id'], none)[n]),
+             sum(1 for vals in stored.values() if vals[n]), need_nonzero=False)
+    line('5 contact rows with any lifecycle date', sum(1 for r in rows if any(r.get(k) for k, _p in wd.LIFECYCLE_DATES)),
+         sum(1 for vals in stored.values() if any(vals)))
+    synced = (s.get('synced') or {}).get('lifecycleDates')
+    line('5 synced.lifecycleDates', ','.join(synced or []) or '(none)',
+         ','.join(k for k, _p in wd.LIFECYCLE_DATES if k in held) or '(none)', need_nonzero=False)
     return lines, bad
 
 
