@@ -2468,6 +2468,10 @@ def build_strategy(brain, ctx, stages, deals):
                     deal_contacts.setdefault(str(cid), set()).add(str(did))
             except (TypeError, ValueError):
                 pass
+    contacts_of_deal = {}
+    for cid, dids in deal_contacts.items():
+        for did in dids:
+            contacts_of_deal.setdefault(did, set()).add(cid)
     dates = {}
     fields = [p for _k, props in LIFECYCLE_DATES for p in props]
     for row in brain.objects('contacts', fields):
@@ -2531,13 +2535,14 @@ def build_strategy(brain, ctx, stages, deals):
                 if sid and t and (not entered or entered[-1][0] != sid):  # a re-save of the same stage is no entry
                     entered.append([sid, t])
         history[d['id']] = {'pipeline': d['pipeline'], 'stageId': d['stageId'], 'created': utc_s(d['created']),
-                            'entered': entered}
+                            'entered': entered, 'contactIds': sorted(set(assoc.get('deals', d['id'], 'contacts')) |
+                                                                     contacts_of_deal.get(d['id'], set()), key=id_order)}
     synced = lambda kind, prop: bool(brain.q("SELECT 1 FROM hubspot_objects WHERE object_type=? AND json_type(properties_json, '$.%s') IS NOT NULL LIMIT 1" % prop, (kind,)))
     section = {
         'version': STRATEGY_VERSION, 'contract': 'docs/workspace-strategy.md', 'available': True,
         'about': 'For Strategy: contacts with a deal, a conversion event, a meeting-link booking or a lifecycle stage past '
                  'lead, with their HubSpot lifecycle dates, conversion events, bookings and deal ids; and every deal\'s '
-                 'dealstage history (propertiesWithHistory) as the time it entered each stage; leads by the month of '
+                 'dealstage history (propertiesWithHistory) as the time it entered each stage, with its contact ids; leads by the month of '
                  'their first form fill, over every contact; and each meeting-link scheduling page with the link slug '
                  'its bookers\' conversion events name. HubSpot ids only.',
         'contactsScope': 'all',
@@ -2585,7 +2590,8 @@ def strategy_finish(section, core=None, scope=None):
                    'bookers': sum(1 for x in col('bookings') if x), 'bookADemo': sum(1 for x in col('bookADemo') if x),
                    'byLifecycle': dict(sorted(Counter(x or 'none' for x in col('lifecyclestage')).items())),
                    'byScope': dict(sorted(Counter(x or 'in' for x in col('scope')).items())),
-                   'deals': len(s['dealStageHistory']), 'dealsWithHistory': sum(1 for h in hist if h['entered'] is not None)}
+                   'deals': len(s['dealStageHistory']), 'dealsWithHistory': sum(1 for h in hist if h['entered'] is not None),
+                   'dealsWithContacts': sum(1 for h in hist if h['contactIds'])}
     return s
 
 
