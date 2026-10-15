@@ -90,6 +90,12 @@ def check(con, s):
         side = {(d, c) for d, h in hist.items() for c in h['contactIds']}
         line('1 deal->contact pairs on deals (deal side)', len(side), len(pairs))
         line('1 deals with contactIds (deal side)', sum(1 for h in hist.values() if h['contactIds']), len({d for d, _c in pairs}))
+        # Contacts on a deal with stage history whose deal names them back (both sides agree).
+        staged = {r['id'] for r in rows if with_hist & set(r.get('dealIds') or [])}
+        back = {r['id'] for r in rows if r['id'] in staged
+                and all(r['id'] in hist[d]['contactIds'] for d in r['dealIds'] if d in with_hist)}
+        line('1 contacts on a staged deal whose deal links back', len(back), len(staged))
+        lines.append('     share: %d of %d contacts with dealstage history' % (len(back), len(staged)))
         lines.append('     deals with no contact in the tables: %d' % (len(hist) - len({d for d, _c in pairs})))
 
     # 2. lifecycle stage

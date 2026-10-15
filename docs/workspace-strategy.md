@@ -220,7 +220,9 @@ published payload built from it. None of the suspected causes held:
   `hubspot_associations` is in `dealIds`.
 - **Ids dropped by a trim:** no. The file was well under its 25 MiB budget,
   with `contactsScope: all`. A contact with a deal is never trimmed.
-- **Wrong file:** no, not any more. Strategy's loader follows
+- **Wrong file:** no, not any more, though it is the likely cause of the
+  report. This is inferred from the reader's history, not observed in a run.
+  Strategy's loader follows
   `published/LATEST.json` to `<prefix>strategy.json`. Its earlier reader took
   `strategy.contacts` from `workspace.json`. When the section moved to its
   own file (`strategy.json`, sync image `sync-only-a61606f`), that reader got
@@ -236,11 +238,9 @@ What was actually missing:
    be inverted. A deal with no contact was indistinguishable from one whose
    contact had been dropped.
 2. **Unlinked deals are real.** About one deal in five has no contact in the
-   tables. HubSpot's own count of deals with contacts
-   (`num_associated_contacts` > 0) matches the number of linked deals
-   exactly. The unlinked deals have no contact in HubSpot, or are no longer
-   in HubSpot's search. The analysis must treat them as having no contact,
-   not as missing data.
+   tables. Each of those deals was looked up in HubSpot on Oct 15, and every
+   one has `num_associated_contacts` = 0. The analysis must treat them as
+   having no contact, not as missing data.
 
 `dealStageHistory.<deal>.contactIds` and `counts.dealsWithContacts` now give
 the deal side, and `scripts/check_strategy_fields.py` reconciles all four of
