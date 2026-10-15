@@ -2009,8 +2009,11 @@ def customer_title_matcher(comps):
 def build_meetings(brain, ctx, as_of):
     owners, scrub = ctx['owners'], ctx['scrub']
     meetings = []
-    for mid, title, start, ts, outcome, owner in brain.objects('meetings', ['hs_meeting_title', 'hs_meeting_start_time',
-                                                                         'hs_timestamp', 'hs_meeting_outcome', 'hubspot_owner_id']):
+    for mid, title, start, ts, outcome, owner, archived, archived_at in brain.objects('meetings', [
+            'hs_meeting_title', 'hs_meeting_start_time', 'hs_timestamp', 'hs_meeting_outcome', 'hubspot_owner_id',
+            'archived', 'archivedAt']):
+        if archived_at or str(archived).lower() in ('1', 'true'):  # archived in HubSpot: left out
+            continue
         meetings.append({'id': str(mid), 'title': title or '(no title)', 'start': iso(parse_time(start or ts)),
                          'outcome': outcome, 'ownerId': str(owner or '')})
     this_month = as_of.astimezone(TZ).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
