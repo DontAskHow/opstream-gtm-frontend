@@ -44,13 +44,13 @@ stop the others:
                             360), LIST_MEMBERSHIP_MAX_CALLS pages a run
                             (default 400), resumed next run
   hubspot_imports           the import log
-  hubspot_contact_backfill  only with HUBSPOT_CONTACT_BACKFILL=1 (or restart,
-                            which starts over once per value): re-reads
-                            every contact's properties once. Contact
-                            properties added to OBJECT_TYPES (the
+  hubspot_contact_backfill  with HUBSPOT_CONTACT_BACKFILL=1 (or restart,
+                            which starts over once per value), and without
+                            it once per props key in BACKFILLS: re-reads
+                            every contact's properties once. That is how
+                            contact properties added to OBJECT_TYPES (the
                             hs_v2_date_entered_* lifecycle dates, say) reach
-                            contacts stored earlier only through a new
-                            restart value
+                            contacts stored earlier
   hubspot_meeting_backfill  the same for meetings, with HUBSPOT_MEETING_BACKFILL;
                             each backfill reads at most HUBSPOT_BACKFILL_MAX_PAGES
                             (default 150) pages a run and resumes next run
@@ -108,7 +108,7 @@ OBJECT_TYPES = {
         "firstname", "hs_lead_status", "hs_object_id", "hubspot_owner_id", "jobtitle",
         "lastmodifieddate", "lastname", "lifecyclestage", "phone", "state",
         # Source attribution, conversions, and lifecycle dates. Contacts stored
-        # before these were added get them from HUBSPOT_CONTACT_BACKFILL=1.
+        # before these were added get them from the contact backfill (BACKFILLS).
         "hs_analytics_source", "hs_analytics_source_data_1", "hs_analytics_source_data_2",
         "hs_latest_source", "hs_latest_source_data_1", "hs_latest_source_data_2",
         "first_conversion_event_name", "first_conversion_date",
@@ -552,8 +552,11 @@ SUBMISSIONS_ROUTE = "GET /form-integrations/v1/submissions/forms/{formGuid}"
 LISTS_ROUTE = "POST /crm/v3/lists/search"
 MEMBERSHIPS_ROUTE = "GET /crm/v3/lists/{listId}/memberships"
 IMPORTS_ROUTE = "GET /crm/v3/imports"
-# object type -> backfill name: HUBSPOT_<NAME>_BACKFILL, sync_state and outcome hubspot_<name>_backfill.
-BACKFILLS = {"contacts": "contact", "meetings": "meeting"}
+# object type -> (backfill name: HUBSPOT_<NAME>_BACKFILL, sync_state and outcome hubspot_<name>_backfill;
+# props key). Stored objects are re-read once per props key without the variable: a new key here backfills
+# properties added to OBJECT_TYPES. "restart:lifecycle-v2" is the value docs/workspace-strategy.md told operators
+# to set by hand, so a backfill already run with it counts.
+BACKFILLS = {"contacts": ("contact", "restart:lifecycle-v2"), "meetings": ("meeting", None)}
 CONTACT_LIST_TYPE = "0-1"
 LIST_MIN_INTERVAL_MIN = float(os.environ.get("LIST_MIN_INTERVAL_MIN") or 360)
 # Per-run page caps, so a first pull fits the 15-minute cadence; both resume next run.
@@ -1079,8 +1082,38 @@ def sync_imports(client, log):
     return "%d imports" % len(rows)
 
 
+def backfill_restart(otype):
+    """The state a backfill of otype starts over with this run, or None to resume (or skip) it.
+
+    HUBSPOT_<NAME>_BACKFILL=restart<...> starts over once per value. The backfill also starts over when it has not
+    run since its props key: neither started with it (restartKey) nor while it was current (propsKey). A restart
+    value stays the restartKey either way, so leaving it set does not start over again next run.
+    """
+    kind, props_key = BACKFILLS[otype]
+    state = _json_state("hubspot_%s_backfill" % kind)
+    mode = os.environ.get("HUBSPOT_%s_BACKFILL" % kind.upper(), "").strip().lower()
+    restart = mode if mode.startswith("restart") else None
+    stale = props_key and props_key not in (state.get("restartKey"), state.get("propsKey"))
+    if (restart and state.get("restartKey") != restart) or stale:
+        return {"restartKey": restart or props_key, "propsKey": props_key}
+    return None
+
+
+def backfill_due(otype):
+    """True when the sync runs otype's backfill: its variable is set, or it is not done since its props key.
+    HUBSPOT_<NAME>_BACKFILL=0 turns it off."""
+    kind, props_key = BACKFILLS[otype]
+    mode = os.environ.get("HUBSPOT_%s_BACKFILL" % kind.upper(), "").strip().lower()
+    if mode in ("0", "false", "no"):
+        return False
+    if mode in ("1", "true", "yes") or mode.startswith("restart"):
+        return True
+    return bool(props_key) and (bool(backfill_restart(otype)) or not _json_state("hubspot_%s_backfill" % kind).get("done"))
+
+
 def backfill_objects(client, otype, props, log):
-    """Re-read every object's properties once (HUBSPOT_CONTACT_BACKFILL=1, HUBSPOT_MEETING_BACKFILL=1).
+    """Re-read every object's properties once (HUBSPOT_CONTACT_BACKFILL=1, HUBSPOT_MEETING_BACKFILL=1, or a new
+    props key in BACKFILLS).
 
     Keyset paging: each search asks for hs_object_id > the last id stored, so
     the 10,000-result cap of one search does not apply. sync_state
@@ -1090,20 +1123,20 @@ def backfill_objects(client, otype, props, log):
     runs skip it.
     =restart starts over once: the value is recorded as restartKey, so
     leaving it set resumes instead of restarting every run. Another value
-    starting with "restart" (restart:2, say) starts over again. Properties
-    are merged into the stored ones; associations and the watermark are
-    untouched.
+    starting with "restart" (restart:2, say) starts over again, and so does
+    a new props key. Properties are merged into the stored ones;
+    associations and the watermark are untouched.
     """
-    kind = BACKFILLS[otype]
+    kind, props_key = BACKFILLS[otype]
     source, env = "hubspot_%s_backfill" % kind, "HUBSPOT_%s_BACKFILL" % kind.upper()
     route = "POST /crm/v3/objects/%s/search" % otype
     state = _json_state(source)
-    mode = os.environ.get(env, "").strip().lower()
-    if mode.startswith("restart") and state.get("restartKey") != mode:
-        log.info("%s backfill: starting over (%s=%s)", kind, env, mode)
-        state = {"restartKey": mode}
+    restart = backfill_restart(otype)
+    if restart:
+        log.info("%s backfill: starting over (%s, props key %s)", kind, restart["restartKey"], props_key)
+        state = restart
     if state.get("done"):
-        return "already complete (%s %s, %s); a new %s=restart value runs it again" % (
+        return "already complete (%s %s, %s); a new %s=restart value or props key runs it again" % (
             state.get("count"), otype, state.get("finishedAt"), env)
     after_id = int(state.get("afterId") or 0)
     count = int(state.get("count") or 0)
@@ -1252,9 +1285,8 @@ def main_sync(log):
         ("hubspot_lists", lambda: sync_lists(client, log)),
         ("hubspot_imports", lambda: sync_imports(client, log)),
     ]
-    for otype, kind in BACKFILLS.items():
-        backfill = os.environ.get("HUBSPOT_%s_BACKFILL" % kind.upper(), "").strip().lower()
-        if backfill in ("1", "true", "yes") or backfill.startswith("restart"):
+    for otype, (kind, _key) in BACKFILLS.items():
+        if backfill_due(otype):
             parts.append(("hubspot_%s_backfill" % kind,
                           lambda otype=otype: backfill_objects(client, otype, props_by_type[otype], log)))
     failed = [name for name, fn in parts if not run_part(name, fn, log)]

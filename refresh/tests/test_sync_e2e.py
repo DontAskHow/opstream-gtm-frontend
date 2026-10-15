@@ -147,10 +147,11 @@ class SyncE2E(unittest.TestCase):
         forms = [f["id"] for f in hub.forms]          # 120, 3, 0 submissions; the last is archived (5)
         f1, f2, archived = forms[0], forms[1], forms[3]
 
-        # Run 1: imports scope missing (403); a 429 on the forms list and on one form's submissions.
+        # Run 1: imports scope missing (403); a 429 on the forms list and on one form's submissions;
+        # the contact backfill, due on its own (props key), turned off.
         hub.imports_status = 403
         hub.once_429 = {"forms", "submissions:" + f2}
-        reqs, _out = self.run_sync("hubspot_sync.py")
+        reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0)
         self.assert_hubspot_read_only(reqs)
         self.assertEqual(self.outcome("hubspot")[0], 1)
 
@@ -549,8 +550,13 @@ class SyncE2E(unittest.TestCase):
             self.assertTrue([r for r in reqs if r.path.startswith("/form-integrations/v1/submissions/forms/")])
             self.assertEqual(self.outcome("hubspot_forms")[0], 1)
             self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_forms")[0][0], len(hub.forms))
+            # The contact backfill runs on its own until it is done for its props key; the meeting one does not.
             sources = {r[0] for r in self.q("SELECT source FROM sync_outcomes")}
-            self.assertFalse({"hubspot_contact_backfill", "hubspot_meeting_backfill"} & sources)
+            self.assertEqual({"hubspot_contact_backfill", "hubspot_meeting_backfill"} & sources,
+                             {"hubspot_contact_backfill"})
+            self.assertEqual(self.outcome("hubspot_contact_backfill")[0], 1)
+            bf = json.loads(self.state("hubspot_contact_backfill"))
+            self.assertEqual((bf["propsKey"], bf["done"]), ("restart:lifecycle-v2", True))
 
     def test_hubspot_meeting_backfill(self):
         """HUBSPOT_MEETING_BACKFILL=1 re-reads every meeting once: merged, page-capped, resumable."""
@@ -576,7 +582,7 @@ class SyncE2E(unittest.TestCase):
 
             # Run 1: one page per run (HUBSPOT_BACKFILL_MAX_PAGES=1). The first 200 are merged, the
             # stored location is removed, and the outcome is ok with "resuming next run".
-            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1, HUBSPOT_BACKFILL_MAX_PAGES=1)
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_MEETING_BACKFILL=1, HUBSPOT_BACKFILL_MAX_PAGES=1)
             self.assert_hubspot_read_only(reqs)
             self.assertEqual([b["filterGroups"][0]["filters"][0]["value"] for b in keyset(reqs)], ["0"])
             self.assertIn("test_booking_page_url", keyset(reqs)[0]["properties"])
@@ -594,7 +600,7 @@ class SyncE2E(unittest.TestCase):
 
             # Run 2: the next page fails; the failure is recorded alone and the position kept.
             hub.fail_meeting_backfill_after = 7200
-            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1)
+            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_MEETING_BACKFILL=1)
             self.assertEqual(self.outcome("hubspot")[0], 1)
             self.assertEqual(self.outcome("hubspot_meeting_backfill")[:3],
                              (0, "POST /crm/v3/objects/meetings/search", 500))
@@ -607,7 +613,7 @@ class SyncE2E(unittest.TestCase):
             # properties, and the backfill resumes after 7200 and finishes.
             hub.fail_meeting_backfill_after = None
             hub.meeting_properties_status = 403
-            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1)
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_MEETING_BACKFILL=1)
             self.assertEqual(self.outcome("hubspot")[0], 1)
             bodies = keyset(reqs)
             self.assertEqual([b["filterGroups"][0]["filters"][0]["value"] for b in bodies], ["7200"])
@@ -625,7 +631,7 @@ class SyncE2E(unittest.TestCase):
 
             # Run 4: a finished backfill is not repeated.
             hub.meeting_properties_status = 200
-            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_MEETING_BACKFILL=1)
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_MEETING_BACKFILL=1)
             self.assertFalse(keyset(reqs))
             self.assertIn("already complete", self.outcome("hubspot_meeting_backfill")[3])
 
