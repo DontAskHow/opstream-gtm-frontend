@@ -67,14 +67,15 @@ strategy.json: {
   stages: [{pipeline, pipelineLabel, id, label, order, closed}],     // every pipeline's stages
   contacts: {fields: [...], rows: [[...], ...]},                     // one row per contact, columns in `fields` order
   conversionEvents: [name, ...],                                     // contacts.rows firstConversion / recentConversion index this
-  dealStageHistory: {<dealId>: {pipeline, stageId, created, entered: [[stageId, enteredAt], ...] | null}},
+  dealStageHistory: {<dealId>: {pipeline, stageId, created, entered: [[stageId, enteredAt], ...] | null,
+                                contactIds: [contactId, ...]}},                        // the deal's side of dealIds
   leadFirstFillsByMonth: {"YYYY-MM": n},                             // over every contact, never trimmed
   leadFirstFillsOut: {customer, careers, internal, freeMail, meetingLink, noEventName, noDate},  // only the non-zero ones
   bookingPages: {<schedulingPageId>: {bookings, contacts, slug, slugContacts, bookADemo}},
   synced: {lifecycleDates: [...], conversionEvents, conversionCount, meetingSource, schedulingPage,
            stageHistory, dealContactsReread},
   counts: {contacts, withDeals, contactDealPairs, withConversions, bookers, bookADemo,
-           byLifecycle: {...}, byScope: {...}, deals, dealsWithHistory}
+           byLifecycle: {...}, byScope: {...}, deals, dealsWithHistory, dealsWithContacts}
 }
 ```
 
@@ -202,6 +203,57 @@ each with the time the deal entered it. A re-save in the same stage is not a
 new entry. A deal that re-enters a stage shows that stage again. `entered` is
 null until the sync has read the deal's history. Stage labels are in
 `strategy.stages`.
+
+`contactIds` lists the deal's contacts. It uses the same sources as
+`contacts.rows` `dealIds`: `hubspot_associations` in both directions, plus
+`hubspot_deal_extras.contact_ids`. It is on every deal, including when the
+rows are trimmed to core contacts. A contact with a deal is always a core
+contact. An empty list means the synced tables have no contact for the deal.
+
+### Contact ↔ deal associations: what was missing (Oct 15 2026)
+
+Strategy still reported that it was blocked on contact → deal associations
+after `dealIds` shipped. The Oct 14 brain.db snapshot was checked against the
+published payload built from it. None of the suspected causes held:
+
+- **Associations not read:** no. Every deals ↔ contacts pair in
+  `hubspot_associations` is in `dealIds`.
+- **Ids dropped by a trim:** no. The file was well under its 25 MiB budget,
+  with `contactsScope: all`. A contact with a deal is never trimmed.
+- **Wrong file:** no, not any more. Strategy's loader follows
+  `published/LATEST.json` to `<prefix>strategy.json`. Its earlier reader took
+  `strategy.contacts` from `workspace.json`. When the section moved to its
+  own file (`strategy.json`, sync image `sync-only-a61606f`), that reader got
+  only the pointer until it was switched over.
+- **`hubspot_deal_extras` sparse:** `stage_history` is filled for every deal.
+  `contact_ids` exists only on the live sync, where it adds to the pairs
+  above.
+
+What was actually missing:
+
+1. **No deal side.** Associations existed only as `dealIds` on contact rows.
+   To link a deal's dealstage history back to its contacts, the rows had to
+   be inverted. A deal with no contact was indistinguishable from one whose
+   contact had been dropped.
+2. **Unlinked deals are real.** About one deal in five has no contact in the
+   tables. HubSpot's own count of deals with contacts
+   (`num_associated_contacts` > 0) matches the number of linked deals
+   exactly. The unlinked deals have no contact in HubSpot, or are no longer
+   in HubSpot's search. The analysis must treat them as having no contact,
+   not as missing data.
+
+`dealStageHistory.<deal>.contactIds` and `counts.dealsWithContacts` now give
+the deal side, and `scripts/check_strategy_fields.py` reconciles all four of
+Strategy's fields to the tables:
+
+```
+python3 scripts/check_strategy_fields.py --db brain.db --strategy strategy.json
+```
+
+It prints counts only, never ids, and exits 1 when a field has no coverage
+or a count differs from its table. The fields it checks are associations
+(both sides), lifecycle stage, dealstage entered-at, and the first
+conversion / meeting source / booking.
 
 ## Version
 

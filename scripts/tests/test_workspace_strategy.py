@@ -172,16 +172,39 @@ class Strategy(unittest.TestCase):
         # Deals: oldest first, a re-save in the same stage is no new entry; no history synced -> null.
         h = s['dealStageHistory']
         self.assertEqual(h['901'], {'pipeline': SALES, 'stageId': 's2', 'created': '2026-01-01T00:00:00Z',
-                                    'entered': [['s1', '2026-01-01T00:00:00Z'], ['s2', '2026-02-01T10:00:00Z']]})
-        self.assertIsNone(h['902']['entered'])
+                                    'entered': [['s1', '2026-01-01T00:00:00Z'], ['s2', '2026-02-01T10:00:00Z']],
+                                    'contactIds': ['101']})
+        # 902's contact comes from the extras' re-read only: still on the deal's side.
+        self.assertEqual((h['902']['entered'], h['902']['contactIds']), (None, ['102']))
         self.assertEqual([(x['id'], x['label']) for x in s['stages']], [('s1', 'SQL'), ('s2', 'Demo meeting')])
         self.assertEqual(s['counts'], {'contacts': 11, 'withDeals': 2, 'contactDealPairs': 2, 'withConversions': 8, 'bookers': 3,
                                        'bookADemo': 2, 'byLifecycle': {'customer': 1, 'lead': 8, 'marketingqualifiedlead': 1,
                                                                        'opportunity': 1},
                                        'byScope': {'customer': 1, 'freeMail': 1, 'in': 8, 'internal': 1}, 'deals': 2,
-                                       'dealsWithHistory': 1})
+                                       'dealsWithHistory': 1, 'dealsWithContacts': 2})
         self.assertEqual(s['synced']['lifecycleDates'], ['leadAt', 'mqlAt', 'sqlAt', 'opportunityAt'])
         self.assertTrue(s['synced']['dealContactsReread'] and s['synced']['stageHistory'] and s['synced']['schedulingPage'])
+
+    def test_check_strategy_fields(self):
+        s = self.strategy()
+        spec = importlib.util.spec_from_file_location('check_strategy_fields', os.path.join(HERE, '..', 'check_strategy_fields.py'))
+        chk = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(chk)
+        con = sqlite3.connect(os.path.join(self.dir, 'brain.db'))
+        lines, bad = chk.check(con, s)
+        self.assertEqual(bad, [])
+        self.assertFalse([x for x in lines if any(i in x for i in ('101', '102', '901', '902'))])  # counts only
+        # A file without the deal side (the previous contract) fails the check; so does a dropped association.
+        old = json.loads(json.dumps(s))
+        for h in old['dealStageHistory'].values():
+            del h['contactIds']
+        self.assertEqual(chk.check(con, old)[1], ['1 deals with contactIds (deal side)'])
+        dropped = json.loads(json.dumps(s))
+        f = dropped['contacts']['fields']
+        for r in dropped['contacts']['rows']:
+            r[f.index('dealIds')] = [d for d in r[f.index('dealIds')] if d != '902']
+        self.assertIn('1 contact->deal pairs on contact rows', chk.check(con, dropped)[1])
+        con.close()
 
     def test_lead_first_fills_by_month(self):
         s = self.strategy()
