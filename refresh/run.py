@@ -750,6 +750,9 @@ VOLATILE_KEYS = frozenset(("generatedAt", "runId", "collectedAt", "publishedAt",
 # files kept out of the repo, under state/gtm-inputs/. Each is optional except
 # the scrub patterns (scrub-patterns.txt, or WORKSPACE_SCRUB_PATTERNS on the task).
 WORKSPACE_JSON = "workspace.json"
+# Its strategy section (docs/workspace-strategy.md), written next to it; workspace.json keeps a pointer.
+# publish_tree uploads it with the rest of out/. Optional: its absence never blocks workspace.json.
+STRATEGY_JSON = "strategy.json"
 GTM_INPUTS = ("lead-sources.json", "lead-source-review.csv", "paid-deals.json", "records.jsonl",
               "lead-insights.json", "lost-reasons.json", "insights.json", "source-overrides.json",
               "scrub-patterns.txt")
@@ -939,14 +942,16 @@ def main_sync_only(cfg, store):
 
 
 def build_workspace(store, state_prefix, work, out, db_path, previous, env):
-    """Write out/workspace.json. Never raises and never blocks the publish.
+    """Write out/workspace.json and out/strategy.json. Never raises and never blocks the publish.
 
-    On a failure (or a timeout) it logs a WARNING and removes any partial file;
+    On a failure (or a timeout) it logs a WARNING and removes any partial files;
     the snapshot publishes without workspace.json and the preview Lambda keeps
-    the last good one. previous is the published run's live_deals.json, for the
+    the last good one. strategy.json is optional: without it workspace.json
+    still publishes. previous is the published run's live_deals.json, for the
     "what changed" note.
     """
     target = Path(out) / WORKSPACE_JSON
+    strategy = Path(out) / STRATEGY_JSON
     t0 = datetime.now(timezone.utc)
     try:
         inputs = Path(work) / "gtm-inputs"
@@ -963,7 +968,7 @@ def build_workspace(store, state_prefix, work, out, db_path, previous, env):
         log("workspace: gtm-inputs " + (", ".join(sorted(got)) or "none")
             + ("; missing (that part of the page degrades): " + ", ".join(missing) if missing else ""))
         cmd = [sys.executable, str(ROOT / "scripts" / "workspace-data.py"), "--db", str(db_path),
-               "--inputs-dir", str(inputs), "--portal-id", HUBSPOT_PORTAL_ID, "--out", str(target), "--quiet"]
+               "--inputs-dir", str(inputs), "--portal-id", HUBSPOT_PORTAL_ID, "--out", str(target), "--strategy-out", str(strategy), "--quiet"]
         if previous is not None:
             prior = Path(work) / "prior-live_deals.json"
             prior.write_text(json.dumps(previous), encoding="utf-8")
@@ -978,9 +983,14 @@ def build_workspace(store, state_prefix, work, out, db_path, previous, env):
             log("workspace: " + line)
         log("workspace: wrote %s (%d KB) in %.1fs" % (WORKSPACE_JSON, target.stat().st_size // 1024,
                                                        (datetime.now(timezone.utc) - t0).total_seconds()))
+        if strategy.is_file():
+            log("workspace: wrote %s (%d KB)" % (STRATEGY_JSON, strategy.stat().st_size // 1024))
+        else:
+            log("WARNING: %s not written. %s publishes without it." % (STRATEGY_JSON, WORKSPACE_JSON))
         return True
     except Exception as exc:
         target.unlink(missing_ok=True)
+        strategy.unlink(missing_ok=True)
         why = ("timed out after %ss" % WORKSPACE_TIMEOUT_S if isinstance(exc, subprocess.TimeoutExpired)
                else str(exc)[-400:])
         log("WARNING: %s not built (%s: %s). The snapshot publishes without it." % (

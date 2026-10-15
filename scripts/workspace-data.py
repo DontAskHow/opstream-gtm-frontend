@@ -3,7 +3,7 @@
 
     python3 scripts/workspace-data.py --db brain.db --lead-sources lead-sources.json \
         [--lost-reasons f] [--insights f] [--lead-insights f] [--prior live_deals.json ...] \
-        [--current-page data.json] [--portal-id N] [--as-of ISO] --out workspace.json
+        [--current-page data.json] [--portal-id N] [--as-of ISO] --out workspace.json [--strategy-out strategy.json]
 
 onepage/build.mjs renders the JSON. All scope rules are applied here, once:
 Sales Pipeline only, CS owners and customer companies out of meetings and calls,
@@ -14,7 +14,8 @@ counts, meeting bookings, ad-platform leads and a separate lead -> MQL figure,
 all in added fields (existing fields keep their meaning). 'fresh' carries
 the record sets the fresh frontend read from its one-time extract, under the same rules
 (docs/workspace-fresh.md). 'strategy' (added last) carries contact lifecycle and conversion
-fields, contact -> deal ids and dealstage entry times, by HubSpot id (docs/workspace-strategy.md). Lead
+fields, contact -> deal ids and dealstage entry times, by HubSpot id, in its own file (strategy.json, next to
+--out; workspace.json keeps a small pointer to it) (docs/workspace-strategy.md). Lead
 sources are mapped from lead-sources.json only, so a mapping change edits that
 file. Tables the sync has not written yet (forms, lists, imports, Lemlist leads,
 contact source fields) are used when present and listed as "not yet synced"
@@ -33,6 +34,9 @@ from zoneinfo import ZoneInfo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAX_BYTES = 3 * 1048576
+# 'strategy' is written to its own file next to workspace.json, with its own budget; workspace.json keeps a pointer.
+STRATEGY_FILE = 'strategy.json'
+STRATEGY_MAX_BYTES = int(os.environ.get('STRATEGY_MAX_BYTES') or 25 * 1048576)
 try:
     TZ = ZoneInfo('America/Phoenix')
 except Exception:  # slim images may lack the tz database; Phoenix has no DST, so UTC-7 is exact
@@ -2555,7 +2559,7 @@ def build_strategy(brain, ctx, stages, deals):
     return section, [(STRATEGY_CORE, core), (STRATEGY_CORE + '; customers without a deal left out', lean)]
 
 
-STRATEGY_CORE = 'core: contacts with a deal, a booking or a lifecycle stage past lead (workspace.json over budget)'
+STRATEGY_CORE = 'core: contacts with a deal, a booking or a lifecycle stage past lead (strategy.json over budget)'
 
 
 def strategy_finish(section, core=None, scope=None):
@@ -2589,28 +2593,40 @@ def strategy_unavailable(reason):
     return {'version': STRATEGY_VERSION, 'contract': 'docs/workspace-strategy.md', 'available': False, 'reason': reason}
 
 
+def strategy_pointer(doc, written=True):
+    """What workspace.json keeps of the strategy section: where it is, its size and its counts (docs/workspace-strategy.md)."""
+    p = {'version': doc['version'], 'contract': doc['contract'], 'available': doc['available'],
+         'file': STRATEGY_FILE if written else None,
+         'bytes': len(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) if written else None}
+    if doc['available']:
+        p['counts'] = doc['counts']
+    else:
+        p['reason'] = doc['reason']
+    return p
+
+
 def add_strategy(out, build_section, scrub, warn):
-    """out['strategy'], added after every other section is final (and within budget), so they are the same with or
-    without it. Over budget it keeps the core contacts only, then the core contacts less customers without a deal, then
-    leaves the section out; never fails the file."""
+    """The strategy section (strategy.json), returned, with out['strategy'] its pointer. Added after every other section
+    is final (and within budget), so they are the same with or without it. Over STRATEGY_MAX_BYTES it keeps the core
+    contacts only, then the core contacts less customers without a deal, then leaves the section out; never fails the
+    file."""
+    def done(doc):
+        out['strategy'] = strategy_pointer(doc)
+        return doc
     try:
         section, smaller = build_section()
     except Exception as e:
         warn('warn: strategy left out: %s: %s' % (type(e).__name__, e))
-        out['strategy'] = strategy_unavailable('left out: building it failed (%s)' % type(e).__name__)
-        return
+        return done(strategy_unavailable('left out: building it failed (%s)' % type(e).__name__))
     size = lambda doc: len(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
-    base = size(out) + len(',"strategy":')
     for scope, keep in [(None, None)] + smaller:
         s = scrub.deep(strategy_finish(section, keep, scope))
         if scrub.hit(json.dumps(s, ensure_ascii=False)):
-            out['strategy'] = strategy_unavailable('left out: a scrub pattern was still in it')
-            return
-        if base + size(s) <= MAX_BYTES:
-            out['strategy'] = s
-            return
-    warn('warn: workspace.json over %d bytes with strategy; strategy left out' % MAX_BYTES)
-    out['strategy'] = strategy_unavailable('left out: workspace.json would be over its %d MiB budget' % (MAX_BYTES // 1048576))
+            return done(strategy_unavailable('left out: a scrub pattern was still in it'))
+        if size(s) <= STRATEGY_MAX_BYTES:
+            return done(s)
+    warn('warn: strategy.json over %d bytes; strategy left out' % STRATEGY_MAX_BYTES)
+    return done(strategy_unavailable('left out: strategy.json would be over its %d MiB budget' % (STRATEGY_MAX_BYTES // 1048576)))
 
 
 # ---------- outbound ----------
@@ -2666,6 +2682,12 @@ def current_page_scope(path):
 
 # ---------- main ----------
 def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
+    """workspace.json, with 'strategy' as its pointer (build_files also returns the strategy.json doc)."""
+    return build_files(args, warn)[0]
+
+
+def build_files(args, warn=lambda *a: print(*a, file=sys.stderr)):
+    """(workspace.json, strategy.json) docs."""
     as_of = parse_time(args.as_of) if args.as_of else datetime.now(timezone.utc)
     inputs_used = resolve_inputs(args, warn)
     brain = Brain(args.db)
@@ -2840,9 +2862,15 @@ def build(args, warn=lambda *a: print(*a, file=sys.stderr)):
         warn('warn: workspace.json over %d bytes; fresh left out' % MAX_BYTES)
         out['fresh'] = {'version': FRESH_VERSION, 'contract': 'docs/workspace-fresh.md', 'available': False,
                         'reason': 'left out: workspace.json would be over its %d MiB budget' % (MAX_BYTES // 1048576)}
-    # Added last, after the budget check above, so it never pushes fresh (or anything else) out.
-    add_strategy(out, lambda: build_strategy(brain, ctx, stages, deals), scrub, warn)
-    return out
+    # Added last, after the budget check above, so it never pushes fresh (or anything else) out; workspace.json keeps
+    # only its pointer, strategy.json the section.
+    strategy = add_strategy(out, lambda: build_strategy(brain, ctx, stages, deals), scrub, warn)
+    if len(json.dumps(out, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) > MAX_BYTES and out['fresh'].get('available', True):
+        # Only within a pointer's few hundred bytes of the budget.
+        warn('warn: workspace.json over %d bytes with the strategy pointer; fresh left out' % MAX_BYTES)
+        out['fresh'] = {'version': FRESH_VERSION, 'contract': 'docs/workspace-fresh.md', 'available': False,
+                        'reason': 'left out: workspace.json would be over its %d MiB budget' % (MAX_BYTES // 1048576)}
+    return out, strategy
 
 
 def audit_lines(d):
@@ -2895,10 +2923,9 @@ def audit_lines(d):
     st = d.get('strategy') or {}
     if st.get('available'):
         k = st['counts']
-        lines.append('strategy: %d contacts (%s; %d with deals, %d bookers), %d deals (%d with stage history), '
-                     '%d leads by first form fill, lifecycle dates synced: %s' % (
-            k['contacts'], st['contactsScope'].split(':')[0], k['withDeals'], k['bookers'], k['deals'], k['dealsWithHistory'],
-            sum(st['leadFirstFillsByMonth'].values()), ', '.join(st['synced']['lifecycleDates']) or 'none'))
+        lines.append('strategy (%s, %d KB): %d contacts (%d with deals, %d bookers), %d deals (%d with stage history)' % (
+            st.get('file'), (st.get('bytes') or 0) // 1024, k['contacts'], k['withDeals'], k['bookers'], k['deals'],
+            k['dealsWithHistory']))
     else:
         lines.append('strategy: %s' % st.get('reason', 'missing'))
     return lines
@@ -2928,6 +2955,27 @@ def resolve_inputs(args, warn):
     return used
 
 
+def write_strategy(doc, path, data):
+    """strategy.json, written whole (temp file, then renamed) before workspace.json. A failure here never fails
+    workspace.json: its pointer then says the file is not there."""
+    tmp = path + '.tmp'
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(doc, ensure_ascii=False, separators=(',', ':')))
+        os.replace(tmp, path)
+        data['strategy']['file'] = os.path.basename(path)
+    except Exception as e:
+        print('warn: %s not written: %s: %s' % (STRATEGY_FILE, type(e).__name__, e), file=sys.stderr)
+        for p in (tmp, path):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        data['strategy'] = strategy_pointer(strategy_unavailable('left out: writing %s failed (%s)' % (STRATEGY_FILE, type(e).__name__)),
+                                            written=False)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--db', required=True)
@@ -2948,10 +2996,12 @@ def main(argv=None):
     ap.add_argument('--source-overrides', help='source-overrides.json: human source rulings per deal / lead (provenance never written out)')
     ap.add_argument('--scrub-patterns-file', help='scrub patterns file (else $WORKSPACE_SCRUB_PATTERNS / $WORKSPACE_SCRUB_PATTERNS_FILE)')
     ap.add_argument('--out', required=True)
+    ap.add_argument('--strategy-out', help='where the strategy section goes (default: %s next to --out)' % STRATEGY_FILE)
     ap.add_argument('--quiet', action='store_true')
     args = ap.parse_args(argv)
-    data = build(args)
+    data, strategy = build_files(args)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    write_strategy(strategy, args.strategy_out or os.path.join(os.path.dirname(os.path.abspath(args.out)), STRATEGY_FILE), data)
     text = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
     with open(args.out, 'w', encoding='utf-8') as f:
         f.write(text)

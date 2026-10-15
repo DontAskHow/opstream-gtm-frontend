@@ -1,12 +1,15 @@
-"""workspace.json 'strategy' (docs/workspace-strategy.md), built by scripts/workspace-data.py from a synthetic brain.db:
+"""strategy.json (docs/workspace-strategy.md), built by scripts/workspace-data.py from a synthetic brain.db:
 contact lifecycle and conversion fields, meeting-link bookings, contact -> deal ids and dealstage entry times, leads
-by first form fill month, scheduling pages. Also: the rest of workspace.json is the same with or without it, the
-over-budget fallbacks, the privacy rules, and the lifecycle date properties hubspot_sync.py asks for.
+by first form fill month, scheduling pages. Also: workspace.json keeps only a pointer to it and is otherwise the same
+with or without it, the file is written next to --out, the over-budget fallbacks, the privacy rules, and the
+lifecycle date properties hubspot_sync.py asks for.
 Every company, person, id and figure is invented.
 
     timeout 300 python3 -m unittest scripts/tests/test_workspace_strategy.py
 """
+import contextlib
 import importlib.util
+import io
 import json
 import logging
 import os
@@ -114,7 +117,8 @@ class Strategy(unittest.TestCase):
         con.close()
         return db
 
-    def build(self):
+    def build(self, files=False):
+        """workspace.json; with files=True (workspace.json, strategy.json)."""
         path = os.path.join(self.dir, 'lead-sources.json')
         with open(path, 'w', encoding='utf-8') as f:
             json.dump({'sheet': {'tab': 'Lead Tracker (Synthetic Sheet)'}, 'ads': {'platforms': ['Google Ads']}}, f)
@@ -123,7 +127,10 @@ class Strategy(unittest.TestCase):
                                      call_classification=None, review_list=None, paid_export=None, scrub_patterns_file=None,
                                      source_overrides=None, out=None, quiet=True)
         with mock.patch.dict(os.environ, {'WORKSPACE_SCRUB_PATTERNS': PAT}):
-            return wd.build(args, warn=self.warnings.append)
+            return (wd.build_files if files else wd.build)(args, warn=self.warnings.append)
+
+    def strategy(self):
+        return self.build(files=True)[1]
 
     def rows(self, s):
         fields = s['contacts']['fields']
@@ -134,9 +141,8 @@ class Strategy(unittest.TestCase):
         return len(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
 
     def test_contacts_deals_and_stage_history(self):
-        out = self.build()
+        out, s = self.build(files=True)
         self.assertEqual(list(out)[-1], 'strategy')
-        s = out['strategy']
         self.assertEqual((s['available'], s['version'], s['contactsScope']), (True, 1, 'all'))
         rows = self.rows(s)
         # 104: nothing past a lead date; 113: no conversion
@@ -178,28 +184,76 @@ class Strategy(unittest.TestCase):
         self.assertTrue(s['synced']['dealContactsReread'] and s['synced']['stageHistory'] and s['synced']['schedulingPage'])
 
     def test_lead_first_fills_by_month(self):
-        s = self.build()['strategy']
+        s = self.strategy()
         # 101 (Jan 3), 107 (Feb 10) and 108 (Mar 1 03:00 UTC = Feb 28 in UTC-7) count; the rest are out by reason.
         self.assertEqual(s['leadFirstFillsByMonth'], {'2026-01': 1, '2026-02': 2})
         self.assertEqual(s['leadFirstFillsOut'], {'careers': 1, 'customer': 1, 'freeMail': 1, 'internal': 1, 'meetingLink': 1})
 
     def test_booking_pages(self):
-        s = self.build()['strategy']
+        s = self.strategy()
         self.assertEqual(s['bookingPages'], {
             '777': {'bookings': 2, 'contacts': 1, 'slug': None, 'slugContacts': 0, 'bookADemo': False},
             DEMO_PAGE: {'bookings': 2, 'contacts': 2, 'slug': DEMO_SLUG, 'slugContacts': 2, 'bookADemo': True}})
 
     def test_ids_only_and_scrubbed(self):
-        s = json.dumps(self.build()['strategy'], ensure_ascii=False)
+        s = json.dumps(self.strategy(), ensure_ascii=False)
         for leak in ('@', 'Synthia', 'Example', '555-0100', 'Synthetic title', 'Alpha Synthetic', 'Synthetic meeting', PAT):
             self.assertNotIn(leak, s)
         self.assertIn('Contact form: %s page' % wd.UNASSIGNED, s)
 
+    def test_workspace_json_keeps_a_pointer(self):
+        out, s = self.build(files=True)
+        self.assertEqual(out['strategy'], {'version': 1, 'contract': 'docs/workspace-strategy.md', 'available': True,
+                                           'file': 'strategy.json', 'bytes': self.size(s), 'counts': s['counts']})
+        self.assertEqual(wd.audit_lines(out)[-1], 'strategy (strategy.json, %d KB): 11 contacts (2 with deals, 3 bookers), '
+                                                  '2 deals (1 with stage history)' % (self.size(s) // 1024))
+
+    def test_large_strategy_goes_to_its_own_file(self):
+        # workspace.json's budget is smaller than the rest of it plus the section: the section stays whole in
+        # strategy.json, workspace.json keeps the pointer and is within its budget, nothing else is left out.
+        out, s = self.build(files=True)
+        self.assertGreater(self.size(dict(out, strategy=s)), self.size(out) + 1000)  # inline, it would be over
+        with mock.patch.object(wd, 'MAX_BYTES', self.size(out)):
+            small, big = self.build(files=True)
+        self.assertLessEqual(self.size(small), self.size(out))
+        self.assertEqual((big['available'], big['contactsScope'], big['counts']['contacts']), (True, 'all', 11))
+        self.assertEqual(small['strategy'], out['strategy'])
+        self.assertEqual(small['fresh'], out['fresh'])
+        self.assertFalse({'contacts', 'dealStageHistory', 'leadFirstFillsByMonth', 'bookingPages'} & set(small['strategy']))
+
+    def test_main_writes_strategy_json_next_to_out(self):
+        db, ws = self.brain(), os.path.join(self.dir, 'run', 'workspace.json')
+        with open(os.path.join(self.dir, 'lead-sources.json'), 'w', encoding='utf-8') as f:
+            json.dump({'sheet': {'tab': 'Lead Tracker (Synthetic Sheet)'}}, f)
+        argv = ['--db', db, '--inputs-dir', self.dir, '--as-of', '2026-10-13T16:00:00Z', '--out', ws, '--quiet']
+        with mock.patch.dict(os.environ, {'WORKSPACE_SCRUB_PATTERNS': PAT}):
+            wd.main(argv)
+        path = os.path.join(self.dir, 'run', 'strategy.json')
+        with open(ws, encoding='utf-8') as f:
+            pointer = json.load(f)['strategy']
+        with open(path, encoding='utf-8') as f:
+            s = json.load(f)
+        self.assertEqual((pointer['available'], pointer['file'], pointer['bytes']), (True, 'strategy.json', os.path.getsize(path)))
+        self.assertEqual(s['counts'], pointer['counts'])
+        self.assertEqual(len(s['contacts']['rows']), 11)
+        # strategy.json cannot be written (a directory is in the way): workspace.json is still written, and says so.
+        os.remove(path)
+        os.makedirs(path)
+        with mock.patch.dict(os.environ, {'WORKSPACE_SCRUB_PATTERNS': PAT}), contextlib.redirect_stderr(io.StringIO()):
+            wd.main(argv)
+        with open(ws, encoding='utf-8') as f:
+            pointer = json.load(f)['strategy']
+        self.assertEqual((pointer['available'], pointer['file'], pointer['bytes']), (False, None, None))
+        self.assertIn('writing strategy.json failed', pointer['reason'])
+
     def test_rest_of_the_file_is_the_same_without_it(self):
         out = self.build()
         with mock.patch.object(wd, 'build_strategy', side_effect=RuntimeError('boom')):
-            without = self.build()
+            without, doc = self.build(files=True)
+        self.assertEqual(doc, {'version': 1, 'contract': 'docs/workspace-strategy.md', 'available': False,
+                               'reason': 'left out: building it failed (RuntimeError)'})
         self.assertEqual(without['strategy'], {'version': 1, 'contract': 'docs/workspace-strategy.md', 'available': False,
+                                               'file': 'strategy.json', 'bytes': self.size(doc),
                                                'reason': 'left out: building it failed (RuntimeError)'})
         strip = lambda d: {k: v for k, v in d.items() if k != 'strategy'}
         for d in (out, without):
@@ -208,31 +262,32 @@ class Strategy(unittest.TestCase):
         self.assertTrue(any('strategy left out' in w for w in self.warnings))
 
     def test_over_budget_core_contacts_then_left_out(self):
-        full = self.build()
-        rest = self.size({k: v for k, v in full.items() if k != 'strategy'})
-        with mock.patch.object(wd, 'MAX_BYTES', self.size(full) - 1):
-            out = self.build()
-        s = out['strategy']
+        # Over strategy.json's own budget (STRATEGY_MAX_BYTES); workspace.json's budget plays no part.
+        full, fs = self.build(files=True)
+        with mock.patch.object(wd, 'STRATEGY_MAX_BYTES', self.size(fs) - 1):
+            out, s = self.build(files=True)
         self.assertTrue(s['available'])
         self.assertEqual(s['contactsScope'], wd.STRATEGY_CORE)
         self.assertEqual(sorted(self.rows(s)), ['101', '102', '105', '106', '109', '112'])  # 103, 107, 108, 110, 111 only converted
         self.assertEqual(s['conversionEvents'], ['Demo form: Pricing page', 'Meetings Link: ' + DEMO_SLUG,
                                                  'Pricing | Beta: Contact form'])
-        self.assertEqual(s['dealStageHistory'], full['strategy']['dealStageHistory'])
-        self.assertLess(self.size(out), self.size(full))
+        self.assertEqual(s['dealStageHistory'], fs['dealStageHistory'])
+        self.assertLess(self.size(s), self.size(fs))
+        self.assertEqual((out['strategy']['bytes'], out['strategy']['counts']), (self.size(s), s['counts']))
         # The lead totals are over every contact, whatever the rows keep.
         for k in ('leadFirstFillsByMonth', 'leadFirstFillsOut', 'bookingPages'):
-            self.assertEqual(s[k], full['strategy'][k])
+            self.assertEqual(s[k], fs[k])
         # Core still over: customers without a deal (109) go too.
-        with mock.patch.object(wd, 'MAX_BYTES', self.size(out) - 1):
-            lean = self.build()['strategy']
+        with mock.patch.object(wd, 'STRATEGY_MAX_BYTES', self.size(s) - 1):
+            lean = self.strategy()
         self.assertEqual(lean['contactsScope'], wd.STRATEGY_CORE + '; customers without a deal left out')
         self.assertEqual(sorted(self.rows(lean)), ['101', '102', '105', '106', '112'])
-        self.assertEqual(lean['leadFirstFillsByMonth'], full['strategy']['leadFirstFillsByMonth'])
-        with mock.patch.object(wd, 'MAX_BYTES', rest + 100):
-            out = self.build()
-        self.assertEqual((out['strategy']['available'], out['fresh'] == full['fresh']), (False, True))
-        self.assertIn('budget', out['strategy']['reason'])
+        self.assertEqual(lean['leadFirstFillsByMonth'], fs['leadFirstFillsByMonth'])
+        with mock.patch.object(wd, 'STRATEGY_MAX_BYTES', 100):
+            out, s = self.build(files=True)
+        self.assertEqual((s['available'], out['strategy']['available'], out['fresh'] == full['fresh']), (False, False, True))
+        self.assertIn('strategy.json would be over its', s['reason'])
+        self.assertEqual(out['strategy']['reason'], s['reason'])
 
 
 class SyncLifecycleDates(unittest.TestCase):
