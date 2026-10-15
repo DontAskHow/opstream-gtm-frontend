@@ -198,7 +198,17 @@ page, so an interrupted backfill resumes there. When it finishes it is marked
 done and later runs skip it. `HUBSPOT_CONTACT_BACKFILL=restart` starts over
 once: the value is recorded in that `sync_state` row, so leaving it set does
 not restart every run. Set a new value (`restart:2`, say) to start over again.
-It leaves associations and the contacts watermark alone. 10,000 contacts take
+It leaves associations and the contacts watermark alone.
+
+The contact backfill also runs with no variable set, once per props key
+(`BACKFILLS` in `hubspot_sync.py`, now `restart:lifecycle-v2`). This is how
+contacts stored before the `hs_v2_date_entered_*` lifecycle dates were read
+get them. The sync starts it when the `sync_state` row names neither that key
+as its `restartKey` nor as its `propsKey`. It then runs every sync, within the
+same page cap, until it is done. A backfill that was already run with
+`HUBSPOT_CONTACT_BACKFILL=restart:lifecycle-v2` counts. A new key in
+`BACKFILLS` runs it again for properties added later.
+`HUBSPOT_CONTACT_BACKFILL=0` turns it off. 10,000 contacts take
 about 50 searches. Each backfill reads at most `HUBSPOT_BACKFILL_MAX_PAGES`
 pages a run (default 150, so 30,000 objects) and resumes next run. `HUBSPOT_MEETING_BACKFILL=1` (or `restart`) does the same
 for meetings, so meetings stored before the source and booking link
@@ -208,7 +218,7 @@ same name.
 
 After the objects, three extra pulls run every time. Each writes its own
 `sync_outcomes` row (`hubspot_forms`, `hubspot_lists`, `hubspot_imports`,
-plus `hubspot_contact_backfill` and `hubspot_meeting_backfill` when set).
+plus `hubspot_contact_backfill` and `hubspot_meeting_backfill` when they run).
 A failure in one, such as a 403
 for a scope the app lacks, is recorded there with its route and status, and
 logged to stdout (CloudWatch) as one line:
@@ -313,9 +323,10 @@ export per campaign, at most 8 a run (each can take up to its 120 s timeout,
 so 16 min at worst). The one-off pulls
 are capped per run and resume: the first submission pull at
 `FORM_SUBMISSION_MAX_CALLS` (200 pages of 50, about 30 s), the first activity
-pull at `LEMLIST_ACTIVITY_MAX_CALLS`. The contact and meeting backfills run
-only with their variables set, at most `HUBSPOT_BACKFILL_MAX_PAGES` pages each
-a run.
+pull at `LEMLIST_ACTIVITY_MAX_CALLS`. The meeting backfill runs only with
+its variable set. The contact backfill runs with its variable set or until it
+is done for its props key. Each reads at most `HUBSPOT_BACKFILL_MAX_PAGES`
+pages a run.
 
 ## Tests
 
@@ -331,7 +342,7 @@ scope (403 on imports and on forms), list answers without a `lists` array or
 with no lists, a list whose memberships fail, a non-numeric `submittedAt`,
 a form whose submissions can't be exported (marked, skipped with others of
 its type and of `HUBSPOT_FORMS_SKIP_TYPES`, re-checked a week later) next to
-a plain 400 that still fails, forms pulled on the sync-only path with no
+a plain 400 that still fails, forms pulled and the contact backfill run on the sync-only path with no
 backfill variable set,
 the per-run caps on submissions, memberships and activities (including one
 window larger than the budget) resuming, the leads interval, a one-time

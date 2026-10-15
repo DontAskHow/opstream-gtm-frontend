@@ -131,12 +131,15 @@ stage. It also asks for `hs_v2_date_entered_<id>` for any custom stage that
 `GET /crm/v3/properties/contacts` lists. A row reads the v2 date first and
 falls back to the older one.
 
-Contacts that were stored before this change only get the new properties when
-they change, or when the contact backfill runs again. To fill all of them, run
-the sync once with a new restart value, e.g.
-`HUBSPOT_CONTACT_BACKFILL=restart:lifecycle-v2`. It resumes over several runs
-and stops at `HUBSPOT_BACKFILL_MAX_PAGES` pages per run. Until it finishes,
-`synced.lifecycleDates` shows which columns have any data.
+Contacts that were stored before this change get the new properties from the
+contact backfill. The sync starts it on its own, once, with no variable set
+(the props key `restart:lifecycle-v2`, see
+[sync-only.md](sync-only.md#hubspot-attribution-forms-lists-and-imports)).
+It resumes over several runs and stops at `HUBSPOT_BACKFILL_MAX_PAGES` pages
+per run. Until it finishes, `synced.lifecycleDates` shows which columns have
+any data. `scripts/check_strategy_fields.py` (check 5) fails when no contact
+row has a lifecycle date. It also fails when a row's date is not the stored
+property, or when `synced.lifecycleDates` does not match the stored contacts.
 
 ### `leadFirstFillsByMonth`
 
