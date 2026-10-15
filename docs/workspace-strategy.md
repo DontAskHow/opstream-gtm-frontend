@@ -1,7 +1,7 @@
-# `workspace.json` → `strategy` (contract, version 1)
+# `strategy.json` (contract, version 1)
 
 Strategy's lifecycle and funnel analysis needs these things from HubSpot that
-the rest of `workspace.json` does not carry at the contact level:
+`workspace.json` does not carry at the contact level:
 
 - contact → deal associations
 - contact lifecycle stage and dates
@@ -10,14 +10,44 @@ the rest of `workspace.json` does not carry at the contact level:
 - complete lead totals: every first form fill, by month
 - which scheduling page is which meetings link
 
-`scripts/workspace-data.py` writes them under the top-level key `strategy` on
-every sync. It reads from brain.db, which `refresh/brain-sync/hubspot_sync.py`
-fills.
+`scripts/workspace-data.py` writes them on every sync to their own file,
+`strategy.json`, next to `workspace.json` (`--strategy-out`, default
+`strategy.json` in `--out`'s directory). It reads from brain.db, which
+`refresh/brain-sync/hubspot_sync.py` fills.
 
-The change is additive. `strategy` is the last key in the file, and it is
-added after the budget check that can leave `fresh` out. Every other key is
-the same with or without it. `scripts/tests/test_workspace_strategy.py`
-checks this. The one-page workspace does not read `strategy`.
+## Where it is
+
+The refresh (`refresh/run.py`) publishes it in the same run as
+`workspace.json`: `published/<runId>/strategy.json` beside
+`published/<runId>/workspace.json`, listed in that run's `MANIFEST.txt` and
+in its content hash. `published/LATEST.json` points at the run (`prefix`), so
+the file is `<LATEST.prefix>strategy.json`. A run without it (the build or
+the write failed) still publishes `workspace.json`. The preview Lambda copies
+only `workspace.json`; read `strategy.json` from the published run.
+
+`workspace.json` keeps a small pointer under its last key, `strategy`:
+
+```
+strategy: {
+  version: 1, contract: "docs/workspace-strategy.md",
+  available: true | false,        // the same as strategy.json's
+  file: "strategy.json" | null,   // null: the file could not be written this run
+  bytes: N | null,                // strategy.json's size
+  counts: {...},                  // strategy.json's counts (when available)
+  reason: "..."                   // when not available
+}
+```
+
+The pointer is added after the budget check that can leave `fresh` out.
+Every other key of `workspace.json` is the same with or without it.
+`scripts/tests/test_workspace_strategy.py` checks this. The one-page
+workspace does not read `strategy`.
+
+## Budget
+
+`strategy.json` has its own budget, `STRATEGY_MAX_BYTES`: 25 MiB, or the
+`STRATEGY_MAX_BYTES` environment variable (bytes). `workspace.json`'s 3 MiB
+budget does not include it. Over its budget the section is trimmed as below.
 
 ## Privacy
 
@@ -31,7 +61,7 @@ a scrub pattern is left out.
 ## Shape
 
 ```
-strategy: {
+strategy.json: {
   version: 1, contract: "docs/workspace-strategy.md", available: true, about,
   contactsScope: "all" | "core: ...",
   stages: [{pipeline, pipelineLabel, id, label, order, closed}],     // every pipeline's stages
@@ -48,12 +78,11 @@ strategy: {
 }
 ```
 
-When the section cannot be built, or would not fit, it is
+When the section cannot be built, or would not fit, `strategy.json` is
 `{version, contract, available: false, reason}`.
 
 Contacts are rows rather than objects to save space. Repeating the keys
-would cost about 90 bytes per contact, and `workspace.json` has a 3 MiB
-budget. To read a row: `Object.fromEntries(fields.map((f, i) => [f, row[i]]))`.
+would cost about 90 bytes per contact. To read a row: `Object.fromEntries(fields.map((f, i) => [f, row[i]]))`.
 
 ### `contacts.fields`
 
@@ -82,7 +111,7 @@ The rows include a contact that has any of:
 
 Contacts that are only leads are left out, which is most of the portal.
 
-Over budget, the rows keep only the core contacts: those with a deal, a
+Over `STRATEGY_MAX_BYTES`, the rows keep only the core contacts: those with a deal, a
 booking, an MQL/SQL/opportunity/customer date, or a stage past lead.
 `contactsScope` then says `core: ...`. If that is still over, customer-scope
 contacts without a deal go too, and `contactsScope` ends in
@@ -116,8 +145,8 @@ every contact before any trimming, so it is complete even when the rows are
 cut to core contacts.
 
 A contact is counted when `first_conversion_event_name` is a form fill. Its
-month is `first_conversion_date`, in the file's time zone (UTC-7, like the
-rest of `workspace.json`). `num_conversion_events` > 0 with no event name is
+month is `first_conversion_date`, in the file's time zone (UTC-7, like
+`workspace.json`). `num_conversion_events` > 0 with no event name is
 counted in `noEventName`. The rest follow the reporting rules' waterfall
 (`submission_out`), and `leadFirstFillsOut` counts them by reason:
 

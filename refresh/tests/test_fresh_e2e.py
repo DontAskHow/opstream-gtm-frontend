@@ -170,9 +170,12 @@ class FreshE2E(unittest.TestCase):
         self.assertEqual(list(self.data)[-2:], ["fresh", "strategy"])  # strategy (docs/workspace-strategy.md) after it
 
     def test_strategy_from_the_synced_db(self):
-        # The real sync's dealstage history and meetings, through to workspace.json strategy (ids only).
-        s = self.data["strategy"]
+        # The real sync's dealstage history and meetings, through to strategy.json next to workspace.json (ids only);
+        # workspace.json keeps a pointer to it.
+        path = self.tmp / self.data["strategy"]["file"]
+        s = json.loads(path.read_text())
         self.assertTrue(s["available"], s.get("reason"))
+        self.assertEqual((self.data["strategy"]["bytes"], self.data["strategy"]["counts"]), (path.stat().st_size, s["counts"]))
         self.assertEqual(s["dealStageHistory"]["901"]["entered"],
                          [["943743501", "2026-01-05T00:00:00Z"], ["15879262", "2026-02-01T00:00:00Z"]])
         row = next(dict(zip(s["contacts"]["fields"], r)) for r in s["contacts"]["rows"] if r[0] == "201")

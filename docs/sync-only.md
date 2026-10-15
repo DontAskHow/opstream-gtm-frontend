@@ -140,6 +140,12 @@ preview Lambda keeps the last good copy. On 0.25 vCPU it takes about 20 to
 25 s against a 650 MB brain.db. It needs `s3:ListBucket` on `state/` and
 `s3:GetObject` on `state/gtm-inputs/*`, which the task role already has.
 
+The same step writes `strategy.json` next to `workspace.json`
+(`docs/workspace-strategy.md`; its own 25 MiB budget, `STRATEGY_MAX_BYTES`),
+and both publish in the run. `workspace.json` keeps only a pointer to it. If
+`strategy.json` cannot be built or written, `workspace.json` still publishes
+and its pointer says so; the run logs `WARNING: strategy.json not written`.
+
 `headline.change` is left out of the content hash. It compares with the
 LATEST run's export and names that export's fetch time, so it differs on
 every run. A deal change it reports also changes `live_deals.json` and the

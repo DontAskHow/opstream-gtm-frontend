@@ -78,6 +78,9 @@ def fake_run_step(cmd, env, cwd):
         if env.get("TEST_PARTIAL_WORKSPACE"):
             # Left over in out/ before the step runs; a failed step must not publish it.
             (out / run.WORKSPACE_JSON).write_text('{"partial":')
+            (out / run.STRATEGY_JSON).write_text('{"partial":')
+        if env.get("TEST_STRATEGY_BLOCKED"):
+            (out / run.STRATEGY_JSON).mkdir()  # strategy.json cannot be written
 
 
 class WorkspaceStepE2E(unittest.TestCase):
@@ -140,6 +143,13 @@ class WorkspaceStepE2E(unittest.TestCase):
         self.assertEqual([d["kind"] for d in change["deals"]], ["new"])
         self.assertIn("workspace: wrote workspace.json", log)
         self.assertIn(run.WORKSPACE_JSON, self.store.get_bytes(prefix + "MANIFEST.txt").decode())
+        # strategy.json is published next to workspace.json; workspace.json keeps a pointer to it.
+        strategy = self.store.get_bytes(prefix + run.STRATEGY_JSON)
+        self.assertEqual({k: ws["strategy"].get(k) for k in ("available", "file", "bytes")},
+                         {"available": json.loads(strategy)["available"], "file": run.STRATEGY_JSON, "bytes": len(strategy)})
+        self.assertNotIn("contacts", ws["strategy"])
+        self.assertIn(run.STRATEGY_JSON, self.store.get_bytes(prefix + "MANIFEST.txt").decode().split())
+        self.assertIn("workspace: wrote strategy.json", log)
         # A HubSpot sync that changed nothing: the prior is now this run's export, so the
         # "what changed" note differs, but the content hash leaves it out. Nothing is published.
         self.edit_brain("UPDATE sync_outcomes SET at=?, last_ok_at=? WHERE source='hubspot'", LATER, LATER)
@@ -255,6 +265,17 @@ class WorkspaceStepE2E(unittest.TestCase):
         self.assertFalse(self.store.exists(prefix + run.WORKSPACE_JSON))
         self.assertTrue(self.store.exists(prefix + run.LIVE_DEALS))
         self.assertNotIn(run.WORKSPACE_JSON, self.store.get_bytes(prefix + "MANIFEST.txt").decode())
+        self.assertFalse(self.store.exists(prefix + run.STRATEGY_JSON))
+
+    def test_strategy_failure_still_publishes_workspace_json(self):
+        code, log, prefix = self.publish(TEST_STRATEGY_BLOCKED="1")
+        self.assertEqual(code, 0, log)
+        self.assertIsNotNone(prefix, log)
+        ws = json.loads(self.store.get_bytes(prefix + run.WORKSPACE_JSON))
+        self.assertEqual((ws["strategy"]["available"], ws["strategy"]["file"]), (False, None))
+        self.assertEqual(ws["headline"]["open"]["count"], 1)
+        self.assertFalse(self.store.exists(prefix + run.STRATEGY_JSON))
+        self.assertIn("WARNING: strategy.json not written. workspace.json publishes without it.", log)
 
     def test_timeout_still_publishes(self):
         with mock.patch.object(run, "WORKSPACE_TIMEOUT_S", 0.001):
