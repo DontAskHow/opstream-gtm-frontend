@@ -216,8 +216,8 @@ properties existed get them. Its state is in `sync_state`
 `hubspot_meeting_backfill`, and it records its own `sync_outcomes` row of the
 same name.
 
-After the objects, three extra pulls run every time. Each writes its own
-`sync_outcomes` row (`hubspot_forms`, `hubspot_lists`, `hubspot_imports`,
+After the objects, four extra pulls run every time. Each writes its own
+`sync_outcomes` row (`hubspot_meeting_archive`, `hubspot_forms`, `hubspot_lists`, `hubspot_imports`,
 plus `hubspot_contact_backfill` and `hubspot_meeting_backfill` when they run).
 A failure in one, such as a 403
 for a scope the app lacks, is recorded there with its route and status, and
@@ -237,6 +237,14 @@ tables are created up front, so they exist even when the pull fails.
 | `hubspot_lists` | `POST /crm/v3/lists/search`, 500 a page | every run, mirrored (deleted lists go) |
 | `hubspot_list_memberships` | `GET /crm/v3/lists/{id}/memberships`, 250 a page, contact lists (`0-1`) only | each list at most every `LIST_MIN_INTERVAL_MIN` (default 360); `LIST_MEMBERSHIP_MAX_CALLS` pages a run (default 400) |
 | `hubspot_imports` | `GET /crm/v3/imports` | every run |
+| `hubspot_objects` / `hubspot_associations` (meetings removed) | `GET /crm/v3/objects/meetings?archived=true`, ids only, 100 a page | every run; `HUBSPOT_ARCHIVED_MAX_PAGES` pages a run (default 20), cursor in `sync_state` `hubspot_meeting_archive` |
+
+The CRM search behind the incremental pull never returns archived objects, so
+a meeting archived after it was stored would keep its row (with no archived
+flag) and still show in the workspace's meetings. `hubspot_meeting_archive`
+lists archived meetings and deletes those rows and their associations, both
+directions. A run that stops at the page cap resumes from its cursor; after the
+last page the next run starts a new pass.
 
 The per-form watermark (`sync_state` `hubspot_forms`) is the newest
 `submittedAt` in ms. Forms without one are read in full, newest first; these

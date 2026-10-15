@@ -528,6 +528,17 @@ class Fresh(unittest.TestCase):
         act = wd.fresh_deal_activity(brain, ctx, {'items': [{'id': 'R2', 'strategy': {'nextSteps': []}}]})
         self.assertEqual((act['d1']['nextStep'], 'nextStepCallId' in act['d1']), (None, False))
 
+    def test_archived_meetings_left_out(self):
+        start = {'hs_meeting_start_time': '2026-10-01T17:00:00Z', 'hs_meeting_title': 'Synthetic meeting'}
+        brain = self.brain(meetings=[('m1', start), ('m2', dict(start, archived=True)), ('m3', dict(start, archived='true')),
+                                     ('m4', dict(start, archivedAt='2026-10-02T00:00:00Z')),
+                                     ('m5', dict(start, archived=False, archivedAt=''))])
+        ctx = {'assoc': wd.Assoc(brain), 'deal_by_id': {}, 'owners': {}, 'scrub': wd.Scrubber([PAT], []), 'cs_ids': set(),
+               'comps': {}, 'contacts': {}, 'internal_domains': set()}
+        out = wd.build_meetings(brain, ctx, wd.parse_time('2026-10-13T16:00:00Z'))
+        self.assertEqual([m['id'] for m in out['items']], ['m1', 'm5'])
+        self.assertEqual(out['scope']['total'], 2)
+
 
 class SourceOverrides(unittest.TestCase):
     """source-overrides.json: human source rulings per deal and lead. The provenance text never reaches the output."""

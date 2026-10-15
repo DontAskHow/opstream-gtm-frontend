@@ -108,6 +108,7 @@ class HubSpotFake:
 
     FORMS_PAGE = 2   # forms list pages are small to exercise paging
     LISTS_PAGE = 2
+    ARCHIVED_PAGE = 2  # archived meetings list pages, small to exercise paging
 
     def __init__(self, now):
         self.now = now
@@ -150,6 +151,8 @@ class HubSpotFake:
             ("hs_scheduled_tasks", "Scheduled tasks"), ("hs_meeting_location", "Location"),
             ("hs_meeting_external_url", "External URL")]
         self.meeting_properties_status = 200
+        # Archived meetings: the search leaves them out; only the list endpoint with archived=true returns them.
+        self.archived_meetings = []
         self.forms = []
         self.submissions = {}
         for n, (archived, count) in enumerate([(False, 120), (False, 3), (False, 0), (True, 5)], start=1):
@@ -239,6 +242,14 @@ class HubSpotFake:
                 return self.meeting_properties_status, {"status": "error", "category": "MISSING_SCOPES"}
             return 200, {"results": [{"name": n, "label": label, "type": "string"}
                                      for n, label in self.meeting_properties]}
+        if req.method == "GET" and p == "/crm/v3/objects/meetings":
+            if q.get("archived") != "true":
+                return 400, {"status": "error", "message": "fake serves only archived=true"}
+            if self.archived_meetings is None:
+                return 500, {"status": "error", "message": "internal error"}
+            rows = [{"id": str(i), "properties": {"hs_object_id": str(i)}, "archived": True,
+                     "archivedAt": iso(self.now - timedelta(hours=3))} for i in sorted(self.archived_meetings)]
+            return self._paged(rows, q.get("after"), min(int(q.get("limit") or 10), self.ARCHIVED_PAGE))
         if req.method == "POST" and p.startswith("/crm/v3/objects/") and p.endswith("/search"):
             return self._search(p.split("/")[4], req.json())
         if req.method == "GET" and p.startswith("/crm/v4/objects/"):

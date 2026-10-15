@@ -27,7 +27,12 @@ property naming the booking link that GET /crm/v3/properties/meetings lists;
 when that call fails they go without. Location and external URL are never
 stored (they can hold conference passcodes).
 
-After the objects, up to five extra pulls run. Each records its own sync_outcomes
+HubSpot's search leaves out archived (deleted) objects, so a meeting archived
+after it was stored would stay in hubspot_objects. The hubspot_meeting_archive
+pull lists archived meetings (GET /crm/v3/objects/meetings?archived=true, ids
+only) and removes them and their hubspot_associations rows.
+
+After the objects, up to six extra pulls run. Each records its own sync_outcomes
 row and a failure in one (a missing scope, say) does not fail the sync or
 stop the others:
   hubspot_forms             forms (archived too) and their submissions; first
@@ -54,6 +59,10 @@ stop the others:
   hubspot_meeting_backfill  the same for meetings, with HUBSPOT_MEETING_BACKFILL;
                             each backfill reads at most HUBSPOT_BACKFILL_MAX_PAGES
                             (default 150) pages a run and resumes next run
+  hubspot_meeting_archive   archived meetings removed from hubspot_objects
+                            and hubspot_associations; at most
+                            HUBSPOT_ARCHIVED_MAX_PAGES (default 20) pages of 100
+                            a run, resumed next run, then a new pass starts
 A failed extra pull also logs `EXTRA_PULL_FAILED <name> <route> <status>` to
 stdout; the exit code does not change.
 """
@@ -571,6 +580,8 @@ FORMS_SKIP_TYPES = {x.strip() for x in (os.environ.get("HUBSPOT_FORMS_SKIP_TYPES
 BACKFILL_PAGE = 200  # CRM search maximum
 # Searches per backfill per run; the backfill resumes next run.
 BACKFILL_MAX_PAGES = int(os.environ.get("HUBSPOT_BACKFILL_MAX_PAGES") or 150)
+# Pages of archived meetings read per run; the next run resumes from the cursor.
+ARCHIVED_MAX_PAGES = int(os.environ.get("HUBSPOT_ARCHIVED_MAX_PAGES") or 20)
 
 
 # Created before the first call, so readers find the tables even when a pull fails.
@@ -1196,6 +1207,48 @@ def backfill_objects(client, otype, props, log):
     return "%d %s re-read with %d properties" % (count, otype, len(props))
 
 
+def purge_archived_meetings(client, log):
+    """Remove archived meetings from hubspot_objects and hubspot_associations.
+
+    The CRM search the meetings pass uses never returns archived objects, so a
+    meeting archived after it was stored keeps its row. This lists archived
+    meetings with the CRM list endpoint (ids only, no other properties) and
+    deletes the ones stored. sync_state 'hubspot_meeting_archive' holds the
+    paging cursor when a run stops at HUBSPOT_ARCHIVED_MAX_PAGES; after the
+    last page the next run starts a new pass.
+    """
+    source, route = "hubspot_meeting_archive", "GET /crm/v3/objects/meetings"
+    after = _json_state(source).get("after")
+    seen, listed, removed = set(), 0, 0
+    con = db_connect()
+    try:
+        for _page in range(ARCHIVED_MAX_PAGES):
+            params = ["archived=true", "limit=100", "properties=hs_object_id"]
+            if after:
+                params.append("after=" + _query_value(after))
+            payload = hs_call(client, "GET", client.api_base + "/crm/v3/objects/meetings?" + "&".join(params), route)
+            ids = [str(obj.get("id") or "") for obj in payload.get("results") or []
+                   if obj.get("archived") is not False]
+            ids = [i for i in ids if i]
+            listed += len(ids)
+            for hs_id in ids:
+                removed += con.execute("DELETE FROM hubspot_objects WHERE object_type='meetings' AND hs_id=?",
+                                       (hs_id,)).rowcount
+                con.execute("DELETE FROM hubspot_associations WHERE (from_type='meetings' AND from_id=?) "
+                            "OR (to_type='meetings' AND to_id=?)", (hs_id, hs_id))
+            con.commit()
+            after = _next_after(payload)
+            if not after or after in seen:
+                after = None
+                break
+            seen.add(after)
+        set_sync_state(source, json.dumps({"after": after}), "resuming next run" if after else "pass complete")
+    finally:
+        con.close()
+    return "%d archived meetings listed, %d removed%s" % (
+        listed, removed, "; HUBSPOT_ARCHIVED_MAX_PAGES reached, resuming next run" if after else "")
+
+
 def main_sync(log):
     client = HubSpotClient(log=log)
     client.prepare()
@@ -1281,6 +1334,7 @@ def main_sync(log):
     set_sync_state(SOURCE, json.dumps(watermarks), note)
 
     parts = [
+        ("hubspot_meeting_archive", lambda: purge_archived_meetings(client, log)),
         ("hubspot_forms", lambda: sync_forms(client, log)),
         ("hubspot_lists", lambda: sync_lists(client, log)),
         ("hubspot_imports", lambda: sync_imports(client, log)),
