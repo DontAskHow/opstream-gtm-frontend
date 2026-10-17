@@ -1,0 +1,326 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Opstream GTM refresh. Fargate task every 6 hours, no NAT.
+
+Parameters:
+  ImageTag:
+    Type: String
+    Default: latest
+  SourceKey:
+    Type: String
+    Default: code/refresh-src/v14.zip
+    Description: Key in opstream-gtm-data-080403790510 of the refresh source zip
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Default VPC id
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Public subnets in the default VPC, one per AZ you want
+
+Resources:
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: opstream-gtm-refresh
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /opstream/gtm-refresh
+      RetentionInDays: 14
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: opstream-gtm-refresh
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: opstream-gtm-refresh-task
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: gtm-data
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - arn:aws:s3:::opstream-gtm-data-080403790510
+                  - arn:aws:s3:::opstream-gtm-data-080403790510/*
+              # GetSecretValue on opstream-gtm/* covers the Google refresh token,
+              # fathom-token, lemlist-token, otterly-token, and the Google
+              # OAuth client id and secret. PutSecretValue is not on this
+              # wildcard.
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*
+              - Effect: Allow
+                Action: secretsmanager:ListSecrets
+                Resource: "*"
+              # HubSpot OAuth rotation is written back to this one secret.
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:PutSecretValue
+                Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/hubspot-oauth-*
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: opstream-gtm-refresh-exec
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: opstream-gtm-refresh
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "512"
+      Memory: "2048"
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: refresh
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/opstream-gtm-refresh:${ImageTag}"
+          Essential: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: refresh
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Outbound-only refresh task
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  FailureTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: opstream-gtm-refresh-failures
+
+  FailureEvents:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: opstream-gtm-refresh-task-failed
+      EventPattern:
+        source: ["aws.ecs"]
+        detail-type: ["ECS Task State Change"]
+        detail:
+          clusterArn: [!GetAtt Cluster.Arn]
+          lastStatus: ["STOPPED"]
+          containers:
+            exitCode: [{"anything-but": 0}]
+      Targets:
+        - Id: notify
+          Arn: !Ref FailureTopic
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: opstream-gtm-refresh-scheduler
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: run-task
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Ref TaskDefinition
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt TaskRole.Arn
+                  - !GetAtt ExecutionRole.Arn
+
+  Schedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: opstream-gtm-refresh
+      Description: Every 6 hours at minute 17, America/Phoenix
+      ScheduleExpression: cron(17 0/6 * * ? *)
+      ScheduleExpressionTimezone: America/Phoenix
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Target:
+        Arn: !GetAtt Cluster.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        EcsParameters:
+          TaskDefinitionArn: !Ref TaskDefinition
+          LaunchType: FARGATE
+          TaskCount: 1
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              Subnets: !Ref PublicSubnetIds
+              AssignPublicIp: ENABLED
+              SecurityGroups:
+                - !Ref TaskSecurityGroup
+
+  BeanstalkReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: opstream-gtm-eb-published-read
+      Description: Attach this to aws-elasticbeanstalk-ec2-role
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: s3:GetObject
+            Resource: arn:aws:s3:::opstream-gtm-data-080403790510/published/*
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource: arn:aws:s3:::opstream-gtm-data-080403790510
+            Condition:
+              StringLike:
+                s3:prefix:
+                  - published/*
+                  - state/*
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: arn:aws:s3:::opstream-gtm-data-080403790510/state/*
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource:
+              - arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/google-oauth-client-id-*
+              - arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/google-oauth-client-secret-*
+          - Effect: Allow
+            Action:
+              - secretsmanager:CreateSecret
+              - secretsmanager:PutSecretValue
+            Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/google-sheets-refresh-token-*
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+              - secretsmanager:CreateSecret
+              - secretsmanager:PutSecretValue
+            Resource: arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/users/*
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: opstream-gtm-refresh-codebuild
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: build-refresh-image
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/opstream-gtm-refresh*
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: arn:aws:s3:::opstream-gtm-data-080403790510/code/refresh-src/*
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt Repository.Arn
+
+  RefreshBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: opstream-gtm-refresh
+      Description: Build the refresh image from the source zip and push it to ECR
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: IMAGE_REPO
+            Value: !GetAtt Repository.RepositoryUri
+          - Name: IMAGE_TAG
+            Value: !Ref ImageTag
+      Source:
+        Type: S3
+        Location: !Sub opstream-gtm-data-080403790510/${SourceKey}
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${IMAGE_REPO%%/*}
+            build:
+              commands:
+                - docker build -f refresh/Dockerfile -t $IMAGE_REPO:$IMAGE_TAG .
+            post_build:
+              commands:
+                - docker push $IMAGE_REPO:$IMAGE_TAG
+      TimeoutInMinutes: 30
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  FailureTopicArn:
+    Value: !Ref FailureTopic
+  EbPolicyArn:
+    Value: !Ref BeanstalkReadPolicy
+  CodeBuildProject:
+    Value: !Ref RefreshBuild
+  TaskSecurityGroupId:
+    Value: !Ref TaskSecurityGroup
+  ClusterName:
+    Value: !Ref Cluster
