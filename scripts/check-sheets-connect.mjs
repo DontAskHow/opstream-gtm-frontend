@@ -11,7 +11,7 @@ function check(name, ok, detail) {
 const REFRESH = 'refresh-token-unit-fixture';
 const ACCESS = 'access-token-unit-fixture';
 const SECRET = 'client-secret-unit-fixture';
-const REDIRECT = 'https://dash.example/api/gmail/oauth/callback';
+const REDIRECT = 'https://example.com/api/gmail/oauth/callback';
 
 let now = 1_700_000_000_000;
 const saved = [];
@@ -29,7 +29,7 @@ function fakeFetch(url, opts) {
     });
   }
   if (String(url).includes('userinfo')) {
-    return Promise.resolve({ ok: true, json: async () => ({ email: 'zackkaufman39@gmail.com' }) });
+    return Promise.resolve({ ok: true, json: async () => ({ email: 'fixture@example.com' }) });
   }
   throw new Error('unexpected url');
 }
@@ -46,12 +46,24 @@ const started = await connect.start(REDIRECT);
 const auth = new URL(started.url);
 check('offline', auth.searchParams.get('access_type') === 'offline');
 check('consent', auth.searchParams.get('prompt') === 'consent');
-check('granted scopes kept', auth.searchParams.get('include_granted_scopes') === 'true');
+check('incremental grants absent', !auth.searchParams.has('include_granted_scopes'));
 check('redirect uri', auth.searchParams.get('redirect_uri') === REDIRECT, auth.searchParams.get('redirect_uri'));
 check('client id', auth.searchParams.get('client_id') === 'client-id.apps.googleusercontent.com');
 check('no client secret in url', !started.url.includes(SECRET));
 check('sheets state', started.state.startsWith('sheets:') && auth.searchParams.get('state') === started.state);
 const scope = auth.searchParams.get('scope') || '';
+const requestedScopes = new Set(scope.split(/\s+/).filter(Boolean));
+check('exact sync scopes', requestedScopes.size === SHEETS_SCOPES.length
+  && SHEETS_SCOPES.every((item) => requestedScopes.has(item)));
+const readOnlyScopes = new Set([
+  'https://www.googleapis.com/auth/spreadsheets.readonly',
+  'https://www.googleapis.com/auth/drive.metadata.readonly',
+  'https://www.googleapis.com/auth/analytics.readonly',
+  'openid',
+  'https://www.googleapis.com/auth/userinfo.email',
+]);
+check('only read-only scopes', requestedScopes.size === readOnlyScopes.size
+  && [...requestedScopes].every((item) => readOnlyScopes.has(item)));
 for (const item of SHEETS_SCOPES) check('scope ' + item.split('/').pop(), scope.includes(item));
 
 const unknown = await connect.callback({ code: 'from-google', state: 'sheets:not-issued', error: '', redirectUri: REDIRECT });
@@ -59,7 +71,7 @@ check('unknown state', unknown.ok === false && unknown.status === 400 && fetches
 
 const ok = await connect.callback({ code: 'from-google', state: started.state, error: '', redirectUri: REDIRECT });
 check('saved once', saved.length === 1 && saved[0] === REFRESH);
-check('success email', ok.ok && ok.html.includes('zackkaufman39@gmail.com') && ok.html.includes(REFRESH_SECRET_ID));
+check('success email', ok.ok && ok.html.includes('fixture@example.com') && ok.html.includes(REFRESH_SECRET_ID));
 check('html hides tokens', !ok.html.includes(REFRESH) && !ok.html.includes(ACCESS) && !ok.html.includes(SECRET));
 
 const replay = await connect.callback({ code: 'from-google', state: started.state, error: '', redirectUri: REDIRECT });
@@ -81,7 +93,7 @@ check('error not echoed', denied.ok === false && !denied.html.includes('attacker
 
 let stored = [];
 const noRefreshFetch = async (url) => {
-  if (String(url).includes('userinfo')) return { ok: true, json: async () => ({ email: 'x@y.z' }) };
+  if (String(url).includes('userinfo')) return { ok: true, json: async () => ({ email: 'fixture@example.com' }) };
   return { ok: true, json: async () => ({ access_token: ACCESS }) };
 };
 const bare = createSheetsConnect({
