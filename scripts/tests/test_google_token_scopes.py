@@ -1,5 +1,4 @@
 import importlib.util
-import io
 import json
 import logging
 from pathlib import Path
@@ -293,13 +292,6 @@ class GoogleTokenScopes(unittest.TestCase):
 
     def test_readonly_run_main_uses_only_narrowed_token(self):
         log = logging.getLogger("synthetic-readonly-success")
-        output = io.StringIO()
-        handler = logging.StreamHandler(output)
-        log.addHandler(handler)
-        previous_level = log.level
-        log.setLevel(logging.INFO)
-        self.addCleanup(log.setLevel, previous_level)
-        self.addCleanup(log.removeHandler, handler)
         outcome = Mock()
         watermark = Mock()
         sent_headers = []
@@ -337,25 +329,22 @@ class GoogleTokenScopes(unittest.TestCase):
             common, "record_outcome", outcome
         ), patch.object(common, "access_token_for", side_effect=get_token), patch.object(
             common.urllib.request, "urlopen", side_effect=api_request
-        ), self.assertRaises(SystemExit) as caught:
+        ), self.assertLogs(level="INFO") as logs, self.assertRaises(SystemExit) as caught:
             common.run_main("synthetic-source", sync)
         self.assertEqual(caught.exception.code, common.EXIT_OK)
         watermark.assert_called_once_with("synthetic-success")
         outcome.assert_called_once_with("synthetic-source", True, None, None, "synthetic-success")
         self.assertEqual(returned_tokens, ["synthetic-access"])
+        self.assertEqual(len(sent_headers), 1)
         self.assertEqual(sent_headers[0]["Authorization"], "Bearer synthetic-access")
         self.assert_refresh_calls(None, READONLY_GRANTS)
         observed = repr((returned_tokens, common._TOKEN_CACHE, sent_headers,
-                         self.request.call_args_list, outcome.call_args_list, output.getvalue()))
+                         self.request.call_args_list, outcome.call_args_list, logs.output))
         for secret in (PROBE_ACCESS, PROBE_ID):
             self.assertNotIn(secret, observed)
 
     def test_scope_rejection_exits_three_without_success_or_watermark(self):
         log = logging.getLogger("synthetic-scope-test")
-        output = io.StringIO()
-        handler = logging.StreamHandler(output)
-        log.addHandler(handler)
-        self.addCleanup(log.removeHandler, handler)
         outcome = Mock()
         watermark = Mock()
 
@@ -366,7 +355,7 @@ class GoogleTokenScopes(unittest.TestCase):
 
         with patch.object(common, "setup_logger", return_value=log), patch.object(
             common, "record_outcome", outcome
-        ), self.assertRaises(SystemExit) as caught:
+        ), self.assertLogs(level="INFO") as logs, self.assertRaises(SystemExit) as caught:
             common.run_main("synthetic-source", sync)
         self.assertEqual(caught.exception.code, common.EXIT_NEEDS_CONNECTION)
         watermark.assert_not_called()
@@ -374,7 +363,7 @@ class GoogleTokenScopes(unittest.TestCase):
         args = outcome.call_args.args
         self.assertEqual(args[:2], ("synthetic-source", False))
         self.assertIn("reconnect", args[-1].lower())
-        observed = repr((args, str(caught.exception), output.getvalue(), common._TOKEN_CACHE,
+        observed = repr((args, str(caught.exception), logs.output, common._TOKEN_CACHE,
                          self.request.call_args_list))
         for secret in ("synthetic-private-access", PROBE_ACCESS, PROBE_ID):
             self.assertNotIn(secret, observed)
