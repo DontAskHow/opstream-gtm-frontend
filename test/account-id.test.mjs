@@ -16,17 +16,22 @@ const SYNTHETIC = '123456789012';
 const OLD_SHAPE = /^opstream-gtm-data-\d{12}$/;
 const config = JSON.parse(fs.readFileSync(path.join(root, 'refresh-config.json'), 'utf8'));
 
-test('no tracked file carries a 12-digit account id', () => {
-  const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
+// Tracked files in a git checkout that hold a 12-digit run other than the synthetic id.
+function accountIdHits(dir) {
+  const files = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' }).split('\0').filter(Boolean);
   const hits = [];
   for (const rel of files) {
     if (rel === 'package-lock.json') continue;
-    const file = path.join(root, rel);
+    const file = path.join(dir, rel);
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
     const text = fs.readFileSync(file, 'utf8');
-    for (const m of text.matchAll(/(?<![\d.-])\d{12}(?!\d)/g)) if (m[0] !== SYNTHETIC) hits.push(rel);
+    for (const m of text.matchAll(/(?<![\d.])\d{12}(?!\d)/g)) if (m[0] !== SYNTHETIC) hits.push(rel);
   }
-  assert.deepEqual([...new Set(hits)], []);
+  return [...new Set(hits)];
+}
+
+test('no tracked file carries a 12-digit account id', () => {
+  assert.deepEqual(accountIdHits(root), []);
 });
 
 test('refresh-config.json names the bucket with the {accountId} placeholder', () => {
@@ -299,4 +304,64 @@ test('template: no bucket or secret name outside !Sub, and no literal account or
   const literal = named.filter((s) => s.sub && (/\d{12}/.test(s.raw) || /:us-east-2:|:us-[a-z]+-\d:/.test(s.raw) || /^arn:aws:secretsmanager::/.test(s.raw)));
   assert.deepEqual(literal.map((s) => s.line + ': ' + s.raw), []);
   for (const s of named.filter((x) => x.raw.startsWith('arn:aws:secretsmanager'))) assert.ok(s.raw.startsWith('arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:'), s.line + ': ' + s.raw);
+});
+
+// ---- the guard itself: planted ids in a throwaway repo ----
+
+// Built at run time so this file never holds a 12-digit run of its own (AWS's documentation example id).
+const PLANTED = ['1111', '2222', '3333'].join('');
+
+test('the guard reports planted account ids in the forms the repo used, and passes the synthetic one', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-guard-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const files = {
+    'bucket.json': `{ "dataBucket": "opstream-gtm-data-${PLANTED}" }\n`,
+    'fallback.sh': `ACCOUNT=\${ACCOUNT_ID:-${PLANTED}}\n`,
+    'arn.yaml': `Resource: arn:aws:secretsmanager:us-east-2:${PLANTED}:secret:x\n`,
+    'synthetic.md': `opstream-gtm-data-${SYNTHETIC} and \${ACCOUNT_ID:-${SYNTHETIC}}\n`,
+    'untracked.txt': `opstream-gtm-data-${PLANTED}\n`,
+  };
+  for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+  execFileSync('git', ['add', 'bucket.json', 'fallback.sh', 'arn.yaml', 'synthetic.md'], { cwd: dir });
+  assert.deepEqual(accountIdHits(dir).sort(), ['arn.yaml', 'bucket.json', 'fallback.sh']);
+});
+
+// ---- IMDS and STS answers that are not usable ----
+
+test('an identity document that is not 200 is refused by status, not parsed', async (t) => {
+  mockImds(t, { document: () => new Response('Not Found', { status: 404 }) });
+  const { dataBucket: freshDataBucket } = await freshSwap();
+  await assert.rejects(freshDataBucket(config), /imds identity 404/);
+});
+
+test('the IMDS token request times out instead of hanging', { timeout: 5000 }, async (t) => {
+  const seen = [];
+  t.mock.method(globalThis, 'fetch', (url, init = {}) => {
+    seen.push({ url: String(url), signal: init.signal });
+    if (!String(url).endsWith('/latest/api/token')) throw new Error('unexpected fetch ' + url);
+    return new Promise((_, reject) => {
+      if (!init.signal) return; // no timeout: hangs, and the test's own 5 s timeout fails it
+      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+    });
+  });
+  // AbortSignal.timeout does not hold the event loop open; the server's listener does in production.
+  const alive = setTimeout(() => {}, 4500);
+  t.after(() => clearTimeout(alive));
+  const { dataBucket: freshDataBucket } = await freshSwap();
+  const started = Date.now();
+  await assert.rejects(freshDataBucket(config), (e) => e.name === 'TimeoutError');
+  assert.ok(Date.now() - started < 2000, 'gave up within 2 s');
+  assert.deepEqual(seen.map((s) => s.url), ['http://169.254.169.254/latest/api/token']);
+  assert.ok(seen[0].signal instanceof AbortSignal);
+});
+
+test('deploy script refuses an account id that is not 12 digits, from STS or AWS_ACCOUNT_ID', () => {
+  const refused = (err) => err.status === 1 && /AWS account id is not 12 digits/.test(err.stderr);
+  for (const out of ['', 'None', '12345678901', '1234567890123']) {
+    const bin = fakeAws(`echo '${out}'`);
+    assert.throws(() => deployBucket({ PATH: bin + ':' + process.env.PATH }), refused, JSON.stringify(out));
+  }
+  const bin = fakeAws('exit 1');
+  assert.throws(() => deployBucket({ PATH: bin + ':' + process.env.PATH, AWS_ACCOUNT_ID: '12345' }), refused);
 });

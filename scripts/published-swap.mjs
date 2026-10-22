@@ -70,6 +70,7 @@ function imdsAccountId() {
       headers: { 'X-aws-ec2-metadata-token': await imdsToken() },
       signal: AbortSignal.timeout(500),
     });
+    if (!res.ok) throw new Error('imds identity ' + res.status);
     const { accountId } = await res.json();
     if (!/^\d{12}$/.test(String(accountId))) throw new Error('imds account id');
     return accountId;
