@@ -108,7 +108,6 @@ class HubSpotFake:
 
     FORMS_PAGE = 2   # forms list pages are small to exercise paging
     LISTS_PAGE = 2
-    ARCHIVED_PAGE = 2  # archived meetings list pages, small to exercise paging
 
     def __init__(self, now):
         self.now = now
@@ -151,8 +150,10 @@ class HubSpotFake:
             ("hs_scheduled_tasks", "Scheduled tasks"), ("hs_meeting_location", "Location"),
             ("hs_meeting_external_url", "External URL")]
         self.meeting_properties_status = 200
-        # Archived meetings: the search leaves them out; only the list endpoint with archived=true returns them.
-        self.archived_meetings = []
+        # Meetings batch read faults, one per call in order: None answers normally, an int answers that
+        # status, "drop" closes the connection unanswered, "gap" leaves a missing id out of the errors too,
+        # "other" adds an error that is not OBJECT_NOT_FOUND, ("unsent", id) also names an id the call did not send.
+        self.meeting_read_faults = []
         self.forms = []
         self.submissions = {}
         for n, (archived, count) in enumerate([(False, 120), (False, 3), (False, 0), (True, 5)], start=1):
@@ -243,13 +244,13 @@ class HubSpotFake:
             return 200, {"results": [{"name": n, "label": label, "type": "string"}
                                      for n, label in self.meeting_properties]}
         if req.method == "GET" and p == "/crm/v3/objects/meetings":
-            if q.get("archived") != "true":
-                return 400, {"status": "error", "message": "fake serves only archived=true"}
-            if self.archived_meetings is None:
-                return 500, {"status": "error", "message": "internal error"}
-            rows = [{"id": str(i), "properties": {"hs_object_id": str(i)}, "archived": True,
-                     "archivedAt": iso(self.now - timedelta(hours=3))} for i in sorted(self.archived_meetings)]
-            return self._paged(rows, q.get("after"), min(int(q.get("limit") or 10), self.ARCHIVED_PAGE))
+            if q.get("archived") == "true":
+                # What HubSpot answers: it does not page archived meetings (object type 0-47).
+                return 400, {"status": "error", "category": "VALIDATION_ERROR",
+                             "message": "Paging through deleted objects is not yet supported for 0-47"}
+            return 400, {"status": "error", "message": "fake does not list meetings"}
+        if req.method == "POST" and p == "/crm/v3/objects/meetings/batch/read":
+            return self._read_meetings(req)
         if req.method == "POST" and p.startswith("/crm/v3/objects/") and p.endswith("/search"):
             return self._search(p.split("/")[4], req.json())
         if req.method == "GET" and p.startswith("/crm/v4/objects/"):
@@ -320,6 +321,36 @@ class HubSpotFake:
                 return self.imports_status, {"status": "error", "category": "MISSING_SCOPES"}
             return 200, {"results": self.imports}
         return 404, {"status": "error", "message": "fake has no route %s %s" % (req.method, p)}
+
+    def _read_meetings(self, req):
+        """Batch read as HubSpot answers it: 200 when every id is found, else 207 naming the missing ids."""
+        fault = self.meeting_read_faults.pop(0) if self.meeting_read_faults else None
+        if isinstance(fault, int) or fault == "drop":
+            return (None, None) if fault == "drop" else (fault, {"status": "error", "message": "internal error"})
+        body = req.json() or {}
+        ids = [str(x.get("id")) for x in body.get("inputs") or []]
+        if len(ids) > 100:
+            return 400, {"status": "error", "category": "VALIDATION_ERROR", "message": "at most 100 inputs"}
+        archived = req.query.get("archived", "false") == "true"
+        found = [i for i in ids if i.isdigit() and int(i) in self.meetings and not archived]
+        missing = [i for i in ids if i not in found]
+        out = {"status": "COMPLETE", "startedAt": iso(self.now), "completedAt": iso(self.now), "results": [
+            {"id": i, "properties": {k: self.meetings[int(i)].get(k) for k in body.get("properties") or []},
+             "createdAt": iso(self.now - timedelta(days=90)), "updatedAt": self.meetings[int(i)]["hs_lastmodifieddate"],
+             "archived": False} for i in found]}
+        if isinstance(fault, tuple) and fault[0] == "unsent":
+            missing.append(fault[1])
+        if not missing or fault == "gap":
+            return 200, out
+        out["errors"] = [{
+            "status": "error", "category": "OBJECT_NOT_FOUND",
+            "message": "Could not get some MEETING objects, they may be deleted or not exist. Check that ids are valid.",
+            "context": {"ids": missing}}]
+        if fault == "other":
+            out["errors"].append({"status": "error", "category": "VALIDATION_ERROR", "message": "test error",
+                                  "context": {"ids": [found[0]]}})
+        out["numErrors"] = len(out["errors"])
+        return 207, out
 
     @staticmethod
     def _paged(rows, after, size):
@@ -503,6 +534,9 @@ class _Handler(BaseHTTPRequestHandler):
                 status, payload = world.secrets.handle(req)
             else:
                 status, payload = 502, {"error": "plain HTTP to the fake proxy"}
+        if status is None:  # a network failure: the connection closes with no answer
+            self.close_connection = True
+            return
         data = json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/x-amz-json-1.1" if host == "secretsmanager"
