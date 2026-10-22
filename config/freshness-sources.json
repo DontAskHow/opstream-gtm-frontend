@@ -1,5 +1,23 @@
 {
   "about": "Which sync_outcomes rows get a freshness chip in the one-page header (onepage/view.cjs). Only the sources listed here get a chip, in this order. A child row (an internal sync step) has no chip of its own: it rolls up into its parent, and a failing child turns the parent amber (red when the parent itself failed) and is named in the parent chip's tooltip. An unlisted row named '<parent>_…' rolls up into that parent. Any other unlisted row is hidden while it is ok and shown as its own red chip when it fails, so a failure never disappears. Rules only, no data.",
+  "staleness": {
+    "about": "When a sync_outcomes row or a data.times value inside the published snapshot is too old, the preview refresh (workspace/refresh/compose.mjs problems()) alarms source-stale:<source> or time-stale:<key>, even when the snapshot itself is on time. Minutes since lastOkAt: defaultMinutes for any row not under sources (the sync job runs every 15 minutes); a row that never succeeded (no lastOkAt) is stale. exempt rows never go stale. times lists the only data.times keys with a limit. Rules only, no data.",
+    "defaultMinutes": 60,
+    "sources": { "ga4": 180, "otterly": 780 },
+    "exempt": ["hubspot_contact_backfill", "hubspot_meeting_backfill"],
+    "times": { "ai": 780, "brief": 780 }
+  },
+  "auth": {
+    "about": "When a source row's latest outcome in the published snapshot is a failure whose HTTP status or detail means a rejected credential (a revoked or expired token, Google's invalid_grant), the preview refresh alarms auth:<provider>, one id per provider, whether or not the data is stale yet. providers names the sources that share one credential; any other source counts as the provider named by its source up to the first '_'. patterns are case-insensitive regular expressions matched against the detail. Rules only, no data.",
+    "providers": { "google": ["ga4", "sheets"] },
+    "http": [401, 403],
+    "patterns": [
+      "\\binvalid_grant\\b",
+      "\\b(?:token|credential)s? (?:was |were |has been |is )?(?:rejected|revoked|expired)\\b",
+      "\\b(?:returned|answered|HTTP) (?:HTTP )?40[13]\\b",
+      "\\btoken endpoint returned HTTP 4\\d\\d\\b"
+    ]
+  },
   "sources": [
     {
       "source": "hubspot",

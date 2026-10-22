@@ -9,8 +9,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { refresh } from '../workspace/refresh/handler.mjs';
+import { refresh, CONFIG } from '../workspace/refresh/handler.mjs';
 import { compose, stamp, NOW_TOKEN, alarmDecision, problems, isHubspotExport, hubspotLive } from '../workspace/refresh/compose.mjs';
+import * as composeModule from '../workspace/refresh/compose.mjs';
 import {
   assertHubspotRead, fetchHubspot, outboundFromCampaigns, recordingFromFathom, matchRecording, tokenFromSecret, validateHubspotDoc,
 } from '../workspace/refresh/sources.mjs';
@@ -310,6 +311,162 @@ test('isHubspotExport recognises the export by shape only', () => {
   assert.equal(isHubspotExport({ pipes: {}, stages: {}, deals: [{ id: 1 }] }), false);
   assert.equal(isHubspotExport({ prep: [], brief: {} }), false);
   assert.deepEqual(problems({ live: null, hubspotMode: 'snapshot', snapshotPublishedAt: '2026-01-16T20:00:00Z', nowMs: Date.parse('2026-01-16T20:30:00Z'), staleMinutes: 60 }), []);
+});
+
+// Source rows and times inside an on-time snapshot (published 5 minutes ago), against the
+// staleness rules in config/freshness-sources.json.
+const SNAP_NOW = Date.parse('2026-01-16T20:05:00Z');
+const ago = (min) => new Date(SNAP_NOW - min * 60e3).toISOString();
+const onTime = (stamps) => problems({ live: null, hubspotMode: 'snapshot', snapshotPublishedAt: ago(5), nowMs: SNAP_NOW, staleMinutes: 60, stamps, limits: CONFIG.sourceLimits });
+
+test('problems: a source past its staleness limit alarms even when the snapshot is on time', () => {
+  // ga4 is past its own 180-minute limit, sheets past the 60-minute default, hubspot within it.
+  assert.deepEqual(onTime({ 'sources.hubspot.lastOkAt': ago(10), 'sources.sheets.lastOkAt': ago(120), 'sources.ga4.lastOkAt': ago(240) }), ['source-stale:ga4', 'source-stale:sheets']);
+  // A source that never succeeded, with no limit of its own: the default applies and a null lastOkAt is stale.
+  assert.deepEqual(onTime({ 'sources.hubspot.lastOkAt': ago(10), 'sources.source-a.lastOkAt': null }), ['source-stale:source-a']);
+  // times.ai past its 780-minute limit; times.brief within it; times.records has no limit.
+  assert.deepEqual(onTime({ 'times.ai': ago(900), 'times.brief': ago(700), 'times.records': ago(3 * 1440) }), ['time-stale:ai']);
+  // The new ids come after the existing ones, sources before times.
+  assert.deepEqual(
+    problems({ live: null, hubspotMode: 'records', snapshotPublishedAt: ago(90), nowMs: SNAP_NOW, staleMinutes: 60, limits: CONFIG.sourceLimits,
+      stamps: { 'times.brief': ago(800), 'sources.sheets.lastOkAt': ago(61), 'times.ai': ago(800), 'sources.ga4.lastOkAt': null } }),
+    ['snapshot-has-no-hubspot-export', 'snapshot-stale', 'source-stale:ga4', 'source-stale:sheets', 'time-stale:ai', 'time-stale:brief'],
+  );
+});
+
+test('problems: sources within their limits, and an exempt old backfill, report nothing', () => {
+  assert.deepEqual(onTime({
+    'sources.hubspot.lastOkAt': ago(10), 'sources.sheets.lastOkAt': ago(59), 'sources.ga4.lastOkAt': ago(170), 'sources.otterly.lastOkAt': ago(720),
+    'sources.hubspot_meeting_backfill.lastOkAt': ago(30 * 1440), 'sources.hubspot_contact_backfill.lastOkAt': ago(30 * 1440), 'times.ai': ago(720), 'times.brief': ago(720), 'times.records': ago(2 * 1440), 'times.web': null,
+  }), []);
+});
+
+test('staleness rules: read from config/freshness-sources.json; a bad rule throws', () => {
+  assert.deepEqual(CONFIG.sourceLimits, { defaultMinutes: 60, sources: { ga4: 180, otterly: 780 }, exempt: ['hubspot_contact_backfill', 'hubspot_meeting_backfill'], times: { ai: 780, brief: 780 } });
+  const rules = (over) => composeModule.stalenessRules({ defaultMinutes: 60, sources: {}, exempt: [], times: {}, ...over });
+  assert.throws(() => rules({ defaultMinutes: 'sixty' }), /defaultMinutes/);
+  assert.throws(() => rules({ sources: { ga4: -1 } }), /ga4/);
+  assert.throws(() => rules({ exempt: 'hubspot_meeting_backfill' }), /exempt/);
+  assert.throws(() => composeModule.stalenessRules(undefined), /staleness/);
+});
+
+test('refresh.json `failing` lists stale sources and times of an on-time snapshot, and the alarm names them', async (t) => {
+  const w = world();
+  t.after(() => rmSync(w.tmp, { recursive: true, force: true }));
+  w.cfg.staleMinutes = 60;
+  w.cfg.sourceLimits = CONFIG.sourceLimits;
+  // The first check runs at 20:15; the snapshot was published at 20:10.
+  const files = JSON.parse(JSON.stringify(w.files));
+  files['marketing.json'].sources = [
+    { source: 'hubspot', label: 'HubSpot', ok: true, at: '2026-01-16T20:05:00Z', lastOkAt: '2026-01-16T20:05:00Z' },
+    { source: 'ga4', label: 'GA4', ok: true, at: '2026-01-16T15:00:00Z', lastOkAt: '2026-01-16T15:00:00Z' },
+    { source: 'source-a', label: 'Source A', ok: false, at: '2026-01-16T20:05:00Z', lastOkAt: null },
+    { source: 'hubspot_meeting_backfill', label: 'meeting backfill', ok: true, at: '2026-01-01T00:00:00Z', lastOkAt: '2026-01-01T00:00:00Z' },
+  ];
+  files['marketing.json'].ai = { connected: true, shareOfVoice: 10, fetchedAt: '2026-01-16T05:00:00Z' };
+  files['agent-brief.json'].generatedAt = '2026-01-16T19:00:00Z';
+  w.publish('run-test-2', files, '2026-01-16T20:10:00Z');
+  const r = await w.run();
+  const want = ['source-stale:ga4', 'source-stale:source-a', 'time-stale:ai'];
+  assert.deepEqual(r.failing, want);
+  const doc = JSON.parse(w.s3.get('preview/refresh.json'));
+  assert.deepEqual(doc.failing, want);
+  assert.match(doc.stamps['sources.ga4.lastOkAt'], /^2026-01-16T15:00/, 'checked against the real time, not a placeholder');
+  assert.equal(w.notes.length, 1);
+  assert.equal(w.notes[0].subject, `GTM preview refresh: ${want.join(', ')}`);
+  assert.match(w.notes[0].message, /source-stale:ga4: last ok 2026-01-16T15:00:00Z/);
+  assert.match(w.notes[0].message, /source-stale:source-a: last ok never/);
+  assert.match(w.notes[0].message, /time-stale:ai: 2026-01-16T05:00:00Z/);
+});
+
+// Credential rejections: the latest recorded error of a source row (ok false, with http or detail)
+// against config/freshness-sources.json `auth`. One auth:<provider> id per provider.
+const row = (source, lastOkMin, err = null) => ({ source, label: source, ok: !err, at: ago(1), lastOkAt: lastOkMin == null ? null : ago(lastOkMin), route: null, http: null, detail: '', ...(err || {}) });
+const withRows = (rows) => problems({
+  live: null, hubspotMode: 'snapshot', snapshotPublishedAt: ago(5), nowMs: SNAP_NOW, staleMinutes: 60, limits: CONFIG.sourceLimits, auth: CONFIG.authRules,
+  sources: rows, stamps: Object.fromEntries(rows.map((r) => [`sources.${r.source}.lastOkAt`, r.lastOkAt])),
+});
+
+test('auth: a rejected credential adds one auth:<provider> id next to the stale ids', () => {
+  // ga4 and sheets share the Google credential: one auth:google, after the stale ids.
+  assert.deepEqual(withRows([
+    row('ga4', 240, { detail: 'NeedsConnection: Google refresh token was rejected. Not touching watermarks.' }),
+    row('sheets', 120, { detail: "RefreshError: ('invalid_grant: Token has been expired or revoked.', {'error': 'invalid_grant'})" }),
+    row('hubspot', 10),
+  ]), ['source-stale:ga4', 'source-stale:sheets', 'auth:google']);
+  // HTTP 401/403 recorded as the status, or only in the text; a source with no provider entry uses its name up to the first '_'.
+  assert.deepEqual(withRows([
+    row('ga4', 240, { detail: 'analyticsdata.googleapis.com returned 401: credential rejected. Not touching watermarks.' }),
+    row('source-a_leads', 90, { route: 'GET /v1/leads', http: 403, detail: 'SourceRefused: api.source-a.example GET /v1/leads answered HTTP 403' }),
+  ]), ['source-stale:ga4', 'source-stale:source-a_leads', 'auth:google', 'auth:source-a']);
+  // A token endpoint's 400 is OAuth's invalid_grant answer.
+  assert.deepEqual(withRows([row('sheets', 120, { detail: 'NeedsConnection: Google token endpoint returned HTTP 400' })]), ['source-stale:sheets', 'auth:google']);
+  // Only the invalid_grant pattern catches this one.
+  assert.deepEqual(withRows([row('sheets', 120, { detail: "RefreshError: ('invalid_grant: Bad Request', {'error': 'invalid_grant', 'error_description': 'Bad Request'})" })]), ['source-stale:sheets', 'auth:google']);
+  // auth ids are sorted by provider, whatever the row order.
+  assert.deepEqual(withRows([
+    row('source-a_leads', 20, { route: 'GET /v1/leads', http: 403, detail: 'SourceRefused: api.source-a.example GET /v1/leads answered HTTP 403' }),
+    row('ga4', 20, { http: 401, detail: 'SourceRefused: analyticsdata.googleapis.com answered HTTP 401' }),
+  ]), ['auth:google', 'auth:source-a']);
+  // The credential id does not wait for the data to go stale.
+  assert.deepEqual(withRows([row('sheets', 20, { detail: 'NeedsConnection: Google Sheets returned 403. Not touching watermarks.' })]), ['auth:google']);
+});
+
+test('auth: stale data, a timeout, a 5xx or another 4xx gives no auth id', () => {
+  assert.deepEqual(withRows([
+    row('ga4', 240),
+    row('sheets', 120, { detail: 'TimeoutError: The read operation timed out' }),
+    row('source-a', 90, { route: 'GET /v1/items', http: 503, detail: 'SourceError: api.source-a.example GET /v1/items answered HTTP 503: unavailable' }),
+    row('source-b', 90, { route: 'GET /v1/items', http: 400, detail: 'SourceError: api.source-b.example GET /v1/items answered HTTP 400: bad paging' }),
+    row('source-c', 90, { detail: 'skipped: quota' }),
+    row('source-e', 90, { route: 'GET /v1/items', http: 429, detail: 'SourceError: api.source-e.example GET /v1/items answered HTTP 429: rate limit exceeded' }),
+    // An ok row's detail is a success summary, whatever it says.
+    { ...row('source-d', 10), http: 401, detail: 'ok after one retry (the first try answered HTTP 401 and the token was refreshed)' },
+  ]), ['source-stale:ga4', 'source-stale:sheets', 'source-stale:source-a', 'source-stale:source-b', 'source-stale:source-c', 'source-stale:source-e']);
+});
+
+test('auth rules: read from config/freshness-sources.json; a bad rule throws', () => {
+  assert.deepEqual(CONFIG.authRules.providers, { ga4: 'google', sheets: 'google' });
+  assert.deepEqual(CONFIG.authRules.http, [401, 403]);
+  assert.ok(CONFIG.authRules.patterns.every((p) => p instanceof RegExp && p.flags.includes('i')));
+  const rules = (over) => composeModule.authRules({ providers: {}, http: [401], patterns: [], ...over });
+  assert.throws(() => rules({ patterns: ['(unclosed'] }), /pattern/);
+  assert.throws(() => rules({ http: ['401'] }), /http/);
+  assert.throws(() => rules({ providers: { google: 'ga4' } }), /providers/);
+  assert.throws(() => composeModule.authRules(undefined), /auth/);
+});
+
+test('refresh.json: auth:google joins `failing` while the credential is rejected and leaves when it clears, alarming both times', async (t) => {
+  const w = world();
+  t.after(() => rmSync(w.tmp, { recursive: true, force: true }));
+  w.cfg.staleMinutes = 60;
+  w.cfg.sourceLimits = CONFIG.sourceLimits;
+  w.cfg.authRules = CONFIG.authRules;
+  const rejected = { ok: false, route: null, http: null, detail: 'NeedsConnection: Google refresh token was rejected. Not touching watermarks.' };
+  const files = JSON.parse(JSON.stringify(w.files));
+  files['marketing.json'].sources = [
+    { source: 'hubspot', label: 'HubSpot', ok: true, at: '2026-01-16T20:05:00Z', lastOkAt: '2026-01-16T20:05:00Z' },
+    { source: 'ga4', label: 'GA4', at: '2026-01-16T20:05:00Z', lastOkAt: '2026-01-16T15:00:00Z', ...rejected },
+    { source: 'sheets', label: 'Sheets', at: '2026-01-16T20:05:00Z', lastOkAt: '2026-01-16T18:00:00Z', ...rejected },
+  ];
+  files['agent-brief.json'].generatedAt = '2026-01-16T19:00:00Z';
+  w.publish('run-test-2', files, '2026-01-16T20:10:00Z');
+  const a = await w.run();
+  const want = ['source-stale:ga4', 'source-stale:sheets', 'auth:google'];
+  assert.deepEqual(a.failing, want);
+  assert.deepEqual(JSON.parse(w.s3.get('preview/refresh.json')).failing, want);
+  assert.equal(w.notes.length, 1);
+  assert.equal(w.notes[0].subject, `GTM preview refresh: ${want.join(', ')}`);
+  assert.match(w.notes[0].message, /auth:google: credential rejected for ga4, sheets/);
+  // Re-authorized: both sources succeed in the next snapshot.
+  files['marketing.json'].sources = files['marketing.json'].sources.map((s) => ({ ...s, ok: true, http: null, detail: '', at: '2026-01-16T20:20:00Z', lastOkAt: '2026-01-16T20:20:00Z' }));
+  w.publish('run-test-3', files, '2026-01-16T20:25:00Z');
+  const b = await w.run();
+  assert.deepEqual(b.failing, []);
+  assert.deepEqual(JSON.parse(w.s3.get('preview/refresh.json')).failing, []);
+  assert.equal(b.alarm, 'recovered');
+  assert.equal(w.notes.length, 2);
+  assert.equal(w.notes[1].subject, 'GTM preview refresh: problems cleared');
 });
 
 // ---------- LIVE_PULL=1 (off by default, not granted in IAM) ----------

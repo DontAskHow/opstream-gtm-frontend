@@ -132,7 +132,7 @@ class SyncE2E(unittest.TestCase):
             hub.forms_status, hub.lists_shape, hub.members_status = 200, None, {}
             hub.submissions_error = {}
             hub.meeting_properties_status, hub.fail_meeting_backfill_after = 200, None
-            hub.archived_meetings = []
+            hub.meeting_read_faults = []
 
     def assert_hubspot_read_only(self, reqs):
         hs = [r for r in reqs if r.host == fakes.HUBSPOT_HOST]
@@ -637,62 +637,134 @@ class SyncE2E(unittest.TestCase):
             self.assertIn("already complete", self.outcome("hubspot_meeting_backfill")[3])
 
     def test_hubspot_archived_meetings_removed(self):
-        """Archived meetings already stored are removed with their associations; others are kept."""
+        """Stored meetings HubSpot no longer has are removed with their associations; the others are kept.
+
+        HubSpot does not page archived meetings (the fake answers that GET with its 400), so the stored ids
+        are batch-read, 100 a call, and only ids HubSpot reports as OBJECT_NOT_FOUND are removed.
+        """
         hub = self.world.hubspot
         with self.fresh_db("archived.db") as db:
-            # 9101-9105 were stored before HubSpot archived them; the search no longer returns them.
-            # 9106 is archived but was never stored.
+            # 7003-7130 are live; the search stores 7001 and 7002 (changed in the last hour) as well.
+            # 9101-9105 were stored before they were deleted in HubSpot. Contact 9101 only shares an id with
+            # one of them. The old list cursor is left over.
+            live = list(range(7001, 7131))
             con = sqlite3.connect(str(db))
-            for i in (7100, 9101, 9102, 9103, 9104, 9105):
-                con.execute("INSERT INTO hubspot_objects VALUES('meetings', ?, ?, '2026-01-01T00:00:00+00:00')",
-                            (str(i), json.dumps({"hs_object_id": str(i), "hs_meeting_title": "Stored"})))
-                for a, b in ((("meetings", i), ("contacts", 200)), (("contacts", 200), ("meetings", i))):
-                    con.execute("INSERT INTO hubspot_associations VALUES(?,?,?,?)", (a[0], str(a[1]), b[0], str(b[1])))
+
+            def store(ids):
+                for i in ids:
+                    con.execute("INSERT INTO hubspot_objects VALUES('meetings', ?, ?, '2026-01-01T00:00:00+00:00')",
+                                (str(i), json.dumps({"hs_object_id": str(i), "hs_meeting_title": "Stored"})))
+                    for a, b in ((("meetings", i), ("contacts", 200)), (("contacts", 200), ("meetings", i))):
+                        con.execute("INSERT INTO hubspot_associations VALUES(?,?,?,?)",
+                                    (a[0], str(a[1]), b[0], str(b[1])))
+                con.commit()
+            store([7100, 9101, 9102, 9103, 9104, 9105] + live[2:99] + live[100:])
             con.execute("INSERT INTO hubspot_associations VALUES('contacts', '200', 'companies', '9101')")
+            con.execute("INSERT INTO hubspot_objects VALUES('contacts', '9101', '{}', '2026-01-01T00:00:00+00:00')")
+            con.execute("INSERT INTO sync_state VALUES('hubspot_meeting_archive', '{\"after\": \"4\"}', NULL, NULL)")
             con.commit()
-            con.close()
-            hub.archived_meetings = [9101, 9102, 9103, 9104, 9105, 9106]
 
             def stored():
-                return sorted(int(r[0]) for r in self.q("SELECT hs_id FROM hubspot_objects "
-                                                        "WHERE object_type='meetings' AND hs_id IN "
-                                                        "('7100','9101','9102','9103','9104','9105','9106')"))
+                return sorted(int(r[0]) for r in self.q("SELECT hs_id FROM hubspot_objects WHERE object_type='meetings'"))
 
-            # Run 1: two pages a run (two meetings a page). 9101-9104 go; the cursor is kept.
-            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_ARCHIVED_MAX_PAGES=2)
+            def links():
+                return self.q("SELECT COUNT(*) FROM hubspot_associations WHERE from_type='meetings' "
+                              "OR to_type='meetings'")[0][0]
+
+            def reads(reqs):
+                """The archive pull's requests: batch reads only, never the archived list."""
+                self.assertFalse([r for r in reqs if r.path == "/crm/v3/objects/meetings"])
+                out = [r for r in reqs if r.path == "/crm/v3/objects/meetings/batch/read"]
+                for r in out:
+                    self.assertEqual((r.method, r.query.get("archived"), r.json()["properties"]),
+                                     ("POST", "false", ["hs_object_id"]))
+                return [[x["id"] for x in r.json()["inputs"]] for r in out]
+
+            def failed(out, route, status, kept, n_links):
+                """The pull failed loudly and removed nothing; the sync itself is ok."""
+                self.assertEqual(self.outcome("hubspot")[0], 1)
+                self.assertEqual(self.outcome("hubspot_meeting_archive")[:3], (0, route, status))
+                self.assertIn("EXTRA_PULL_FAILED hubspot_meeting_archive %s %s" % (route or "-", status or "-"), out)
+                self.assertEqual(stored(), kept)
+                self.assertEqual(links(), n_links)
+
+            # Run 1: every stored id is read, in two calls (100, then 35), from the start: the old cursor
+            # is not used. 9101-9105 go with their associations; the live meetings stay.
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0)
             self.assert_hubspot_read_only(reqs)
-            lists = [r for r in reqs if r.path == "/crm/v3/objects/meetings"]
-            self.assertEqual([(r.query.get("archived"), r.query.get("properties"), r.query.get("after"))
-                              for r in lists], [("true", "hs_object_id", None), ("true", "hs_object_id", "2")])
-            self.assertEqual(stored(), [7100, 9105])
+            ids = reads(reqs)
+            self.assertEqual([len(x) for x in ids], [100, 35])
+            self.assertEqual(sorted(sum(ids, [])), sorted([str(i) for i in live] + ["9101", "9102", "9103", "9104", "9105"]))
+            self.assertEqual(stored(), live)
+            # Contact 9101 shares an id with a removed meeting and stays.
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_objects WHERE object_type='contacts' "
+                                    "AND hs_id='9101'")[0][0], 1)
             ok, _route, _http, detail = self.outcome("hubspot_meeting_archive")
             self.assertEqual(ok, 1)
-            self.assertIn("4 archived meetings listed, 4 removed", detail)
-            self.assertIn("resuming next run", detail)
-            self.assertEqual(json.loads(self.state("hubspot_meeting_archive")), {"after": "4"})
+            self.assertIn("135 stored meetings checked, 5 removed", detail)
+            self.assertEqual(json.loads(self.state("hubspot_meeting_archive")), {"afterId": None})
             self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_associations WHERE "
-                                    "(from_type='meetings' AND from_id IN ('9101','9102','9103','9104')) OR "
-                                    "(to_type='meetings' AND to_id IN ('9101','9102','9103','9104'))")[0][0], 0)
-            # Kept: the live meeting's links, and a row only sharing the id under another type.
+                                    "(from_type='meetings' AND from_id LIKE '91%') OR "
+                                    "(to_type='meetings' AND to_id LIKE '91%')")[0][0], 0)
+            # Kept: the live meetings' links, and a row only sharing the id under another type.
             self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_associations WHERE from_id='7100' "
                                     "OR to_id='7100'")[0][0], 2)
             self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_associations WHERE to_type='companies' "
                                     "AND to_id='9101'")[0][0], 1)
 
-            # Run 2: resumes at the cursor, removes 9105, ends the pass.
-            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_ARCHIVED_MAX_PAGES=2)
-            self.assertEqual([r.query.get("after") for r in reqs if r.path == "/crm/v3/objects/meetings"], ["4"])
-            self.assertEqual(stored(), [7100])
-            self.assertIn("2 archived meetings listed, 1 removed", self.outcome("hubspot_meeting_archive")[3])
-            self.assertEqual(json.loads(self.state("hubspot_meeting_archive")), {"after": None})
+            # 6901 and 6902 are deleted in HubSpot too, and sort into the first call.
+            store([6901, 6902])
+            kept, n_links = sorted(live + [6901, 6902]), links()
 
-            # Run 3: the list fails; the sync itself still succeeds and the failure is recorded alone.
-            hub.archived_meetings = None
+            # Run 2: the second call answers 500. Nothing is removed, the first call's misses included.
+            hub.meeting_read_faults = [None, 500]
             reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0)
-            self.assertEqual(self.outcome("hubspot")[0], 1)
-            self.assertEqual(self.outcome("hubspot_meeting_archive")[:3], (0, "GET /crm/v3/objects/meetings", 500))
-            self.assertIn("EXTRA_PULL_FAILED hubspot_meeting_archive GET /crm/v3/objects/meetings 500", out)
-            self.assertEqual(stored(), [7100])
+            self.assertEqual(len(reads(reqs)), 2)
+            failed(out, "POST /crm/v3/objects/meetings/batch/read", 500, kept, n_links)
+
+            # Run 3: the second call's connection closes unanswered (a network failure has no route or status).
+            hub.meeting_read_faults = [None, "drop"]
+            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0)
+            failed(out, None, None, kept, n_links)
+
+            # Run 4: a 200 that leaves the missing ids out of both results and errors. Nothing is removed.
+            hub.meeting_read_faults = ["gap"]
+            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0)
+            failed(out, "POST /crm/v3/objects/meetings/batch/read", 200, kept, n_links)
+
+            # Run 5: a 207 that also carries an error other than OBJECT_NOT_FOUND. Nothing is removed.
+            hub.meeting_read_faults = ["other"]
+            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0)
+            failed(out, "POST /crm/v3/objects/meetings/batch/read", 207, kept, n_links)
+
+            # Run 6: HUBSPOT_ARCHIVED_MAX_PAGES below 1 is refused, not reported as a complete pass.
+            hub.meeting_read_faults = []
+            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_ARCHIVED_MAX_PAGES=0)
+            self.assertEqual(reads(reqs), [])
+            failed(out, None, None, kept, n_links)
+            self.assertIn("HUBSPOT_ARCHIVED_MAX_PAGES must be at least 1", self.outcome("hubspot_meeting_archive")[3])
+            self.assertEqual(json.loads(self.state("hubspot_meeting_archive")), {"afterId": None})
+
+            # Runs 7 and 8: one call a run. Run 7 removes 6901 and 6902 and keeps its place; HubSpot also names
+            # 7130, which the call did not send, and it stays. Run 8 resumes after it and ends the pass.
+            hub.meeting_read_faults = [("unsent", "7130")]
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_ARCHIVED_MAX_PAGES=1)
+            ids = reads(reqs)
+            self.assertEqual(([len(x) for x in ids], ids[0][:2]), ([100], ["6901", "6902"]))
+            self.assertNotIn("7130", ids[0])
+            self.assertEqual(stored(), live)
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_associations WHERE from_id='7130' "
+                                    "OR to_id='7130'")[0][0], 2)
+            ok, _route, _http, detail = self.outcome("hubspot_meeting_archive")
+            self.assertEqual(ok, 1)
+            self.assertIn("100 stored meetings checked, 2 removed; HUBSPOT_ARCHIVED_MAX_PAGES reached, "
+                          "resuming next run", detail)
+            self.assertEqual(json.loads(self.state("hubspot_meeting_archive")), {"afterId": ids[0][-1]})
+            reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_ARCHIVED_MAX_PAGES=1)
+            self.assertEqual(sum(reads(reqs), []), [str(i) for i in live[98:]])
+            self.assertIn("32 stored meetings checked, 0 removed", self.outcome("hubspot_meeting_archive")[3])
+            self.assertEqual(json.loads(self.state("hubspot_meeting_archive")), {"afterId": None})
+            self.assertEqual(stored(), live)
 
     # ------------------------------------------------------------ Lemlist
 

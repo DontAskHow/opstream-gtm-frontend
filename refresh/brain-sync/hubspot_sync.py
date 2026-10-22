@@ -28,9 +28,11 @@ when that call fails they go without. Location and external URL are never
 stored (they can hold conference passcodes).
 
 HubSpot's search leaves out archived (deleted) objects, so a meeting archived
-after it was stored would stay in hubspot_objects. The hubspot_meeting_archive
-pull lists archived meetings (GET /crm/v3/objects/meetings?archived=true, ids
-only) and removes them and their hubspot_associations rows.
+after it was stored would stay in hubspot_objects. HubSpot does not page
+archived meetings (GET /crm/v3/objects/meetings?archived=true answers 400), so
+the hubspot_meeting_archive pull batch-reads the stored meeting ids (POST
+/crm/v3/objects/meetings/batch/read, ids only) and removes the ones HubSpot
+reports as not found, with their hubspot_associations rows.
 
 After the objects, up to six extra pulls run. Each records its own sync_outcomes
 row and a failure in one (a missing scope, say) does not fail the sync or
@@ -59,10 +61,12 @@ stop the others:
   hubspot_meeting_backfill  the same for meetings, with HUBSPOT_MEETING_BACKFILL;
                             each backfill reads at most HUBSPOT_BACKFILL_MAX_PAGES
                             (default 150) pages a run and resumes next run
-  hubspot_meeting_archive   archived meetings removed from hubspot_objects
+  hubspot_meeting_archive   deleted meetings removed from hubspot_objects
                             and hubspot_associations; at most
-                            HUBSPOT_ARCHIVED_MAX_PAGES (default 20) pages of 100
-                            a run, resumed next run, then a new pass starts
+                            HUBSPOT_ARCHIVED_MAX_PAGES (default 20) batch reads
+                            of 100 stored ids a run, resumed next run, then a
+                            new pass starts. A failed read removes nothing; a
+                            cap below 1 fails the pull
 A failed extra pull also logs `EXTRA_PULL_FAILED <name> <route> <status>` to
 stdout; the exit code does not change.
 """
@@ -580,7 +584,7 @@ FORMS_SKIP_TYPES = {x.strip() for x in (os.environ.get("HUBSPOT_FORMS_SKIP_TYPES
 BACKFILL_PAGE = 200  # CRM search maximum
 # Searches per backfill per run; the backfill resumes next run.
 BACKFILL_MAX_PAGES = int(os.environ.get("HUBSPOT_BACKFILL_MAX_PAGES") or 150)
-# Pages of archived meetings read per run; the next run resumes from the cursor.
+# Meetings batch reads (100 stored ids each) per run; the next run resumes after the last id read.
 ARCHIVED_MAX_PAGES = int(os.environ.get("HUBSPOT_ARCHIVED_MAX_PAGES") or 20)
 
 
@@ -604,13 +608,13 @@ EXTRA_TABLES = (
 )
 
 
-def hs_call(client, method, url, route, body=None, search=False):
+def hs_call(client, method, url, route, body=None, search=False, ok=(200,)):
     """hs_request that raises SourceError/SourceRefused with a route template, not ids."""
     try:
         status, payload = hs_request(client, method, url, body=body, search=search)
     except SourceRefused as e:
         raise SourceRefused(HOST, route, e.status, "missing scope or credential rejected") from None
-    if status != 200 or not isinstance(payload, dict):
+    if status not in ok or not isinstance(payload, dict):
         err = SourceError(HOST, route, status, str(payload)[:200])
         err.payload = payload
         raise err
@@ -1208,45 +1212,60 @@ def backfill_objects(client, otype, props, log):
 
 
 def purge_archived_meetings(client, log):
-    """Remove archived meetings from hubspot_objects and hubspot_associations.
+    """Remove deleted (archived) meetings from hubspot_objects and hubspot_associations.
 
     The CRM search the meetings pass uses never returns archived objects, so a
-    meeting archived after it was stored keeps its row. This lists archived
-    meetings with the CRM list endpoint (ids only, no other properties) and
-    deletes the ones stored. sync_state 'hubspot_meeting_archive' holds the
-    paging cursor when a run stops at HUBSPOT_ARCHIVED_MAX_PAGES; after the
-    last page the next run starts a new pass.
+    meeting deleted after it was stored keeps its row, and HubSpot does not page
+    archived meetings (GET ?archived=true answers 400). This batch-reads the
+    stored meeting ids instead (ids only, no other properties). HubSpot answers
+    207 for ids it no longer has, naming them in an OBJECT_NOT_FOUND error;
+    those are removed. Every read finishes before anything is removed: another
+    status, another error, or an id neither returned nor named fails the pull
+    and removes nothing. sync_state 'hubspot_meeting_archive' holds the last id
+    read when a run stops at HUBSPOT_ARCHIVED_MAX_PAGES; after the last stored
+    id the next run starts a new pass. A cap below 1 fails the pull.
     """
-    source, route = "hubspot_meeting_archive", "GET /crm/v3/objects/meetings"
-    after = _json_state(source).get("after")
-    seen, listed, removed = set(), 0, 0
+    source, route = "hubspot_meeting_archive", "POST /crm/v3/objects/meetings/batch/read"
+    if ARCHIVED_MAX_PAGES < 1:
+        raise ValueError("HUBSPOT_ARCHIVED_MAX_PAGES must be at least 1, got %d" % ARCHIVED_MAX_PAGES)
+    after_id = _json_state(source).get("afterId") or ""
     con = db_connect()
     try:
-        for _page in range(ARCHIVED_MAX_PAGES):
-            params = ["archived=true", "limit=100", "properties=hs_object_id"]
-            if after:
-                params.append("after=" + _query_value(after))
-            payload = hs_call(client, "GET", client.api_base + "/crm/v3/objects/meetings?" + "&".join(params), route)
-            ids = [str(obj.get("id") or "") for obj in payload.get("results") or []
-                   if obj.get("archived") is not False]
-            ids = [i for i in ids if i]
-            listed += len(ids)
-            for hs_id in ids:
-                removed += con.execute("DELETE FROM hubspot_objects WHERE object_type='meetings' AND hs_id=?",
-                                       (hs_id,)).rowcount
-                con.execute("DELETE FROM hubspot_associations WHERE (from_type='meetings' AND from_id=?) "
-                            "OR (to_type='meetings' AND to_id=?)", (hs_id, hs_id))
-            con.commit()
-            after = _next_after(payload)
-            if not after or after in seen:
-                after = None
-                break
-            seen.add(after)
-        set_sync_state(source, json.dumps({"after": after}), "resuming next run" if after else "pass complete")
+        ids = [r[0] for r in con.execute("SELECT hs_id FROM hubspot_objects WHERE object_type='meetings' "
+                                         "AND hs_id > ? ORDER BY hs_id", (after_id,))]
+        parts = list(_chunks(ids, 100))
+        checked, gone = 0, []
+        for part in parts[:ARCHIVED_MAX_PAGES]:
+            payload = hs_call(client, "POST", client.api_base + "/crm/v3/objects/meetings/batch/read?archived=false",
+                              route, body={"inputs": [{"id": i} for i in part], "properties": ["hs_object_id"]},
+                              ok=(200, 207))
+            found = {str(obj.get("id")) for obj in payload.get("results") or []}
+            not_found = set()
+            for err in payload.get("errors") or []:
+                if err.get("category") != "OBJECT_NOT_FOUND":
+                    raise SourceError(HOST, route, 207, "%s: %s" % (err.get("category"), err.get("message")))
+                not_found.update(str(i) for i in (err.get("context") or {}).get("ids") or [])
+            unexplained = set(part) - found - not_found
+            if unexplained:
+                raise SourceError(HOST, route, 207 if payload.get("errors") else 200,
+                                  "%d ids neither returned nor reported missing" % len(unexplained))
+            gone += [i for i in part if i in not_found and i not in found]
+            checked += len(part)
+            after_id = part[-1]
+        if len(parts) <= ARCHIVED_MAX_PAGES:
+            after_id = None
+        removed = 0
+        for hs_id in gone:
+            removed += con.execute("DELETE FROM hubspot_objects WHERE object_type='meetings' AND hs_id=?",
+                                   (hs_id,)).rowcount
+            con.execute("DELETE FROM hubspot_associations WHERE (from_type='meetings' AND from_id=?) "
+                        "OR (to_type='meetings' AND to_id=?)", (hs_id, hs_id))
+        con.commit()
+        set_sync_state(source, json.dumps({"afterId": after_id}), "resuming next run" if after_id else "pass complete")
     finally:
         con.close()
-    return "%d archived meetings listed, %d removed%s" % (
-        listed, removed, "; HUBSPOT_ARCHIVED_MAX_PAGES reached, resuming next run" if after else "")
+    return "%d stored meetings checked, %d removed%s" % (
+        checked, removed, "; HUBSPOT_ARCHIVED_MAX_PAGES reached, resuming next run" if after_id else "")
 
 
 def main_sync(log):
