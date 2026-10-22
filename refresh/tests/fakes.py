@@ -152,7 +152,7 @@ class HubSpotFake:
         self.meeting_properties_status = 200
         # Meetings batch read faults, one per call in order: None answers normally, an int answers that
         # status, "drop" closes the connection unanswered, "gap" leaves a missing id out of the errors too,
-        # "other" adds an error that is not OBJECT_NOT_FOUND.
+        # "other" adds an error that is not OBJECT_NOT_FOUND, ("unsent", id) also names an id the call did not send.
         self.meeting_read_faults = []
         self.forms = []
         self.submissions = {}
@@ -338,6 +338,8 @@ class HubSpotFake:
             {"id": i, "properties": {k: self.meetings[int(i)].get(k) for k in body.get("properties") or []},
              "createdAt": iso(self.now - timedelta(days=90)), "updatedAt": self.meetings[int(i)]["hs_lastmodifieddate"],
              "archived": False} for i in found]}
+        if isinstance(fault, tuple) and fault[0] == "unsent":
+            missing.append(fault[1])
         if not missing or fault == "gap":
             return 200, out
         out["errors"] = [{

@@ -645,7 +645,8 @@ class SyncE2E(unittest.TestCase):
         hub = self.world.hubspot
         with self.fresh_db("archived.db") as db:
             # 7003-7130 are live; the search stores 7001 and 7002 (changed in the last hour) as well.
-            # 9101-9105 were stored before they were deleted in HubSpot. The old list cursor is left over.
+            # 9101-9105 were stored before they were deleted in HubSpot. Contact 9101 only shares an id with
+            # one of them. The old list cursor is left over.
             live = list(range(7001, 7131))
             con = sqlite3.connect(str(db))
 
@@ -659,6 +660,7 @@ class SyncE2E(unittest.TestCase):
                 con.commit()
             store([7100, 9101, 9102, 9103, 9104, 9105] + live[2:99] + live[100:])
             con.execute("INSERT INTO hubspot_associations VALUES('contacts', '200', 'companies', '9101')")
+            con.execute("INSERT INTO hubspot_objects VALUES('contacts', '9101', '{}', '2026-01-01T00:00:00+00:00')")
             con.execute("INSERT INTO sync_state VALUES('hubspot_meeting_archive', '{\"after\": \"4\"}', NULL, NULL)")
             con.commit()
 
@@ -694,6 +696,9 @@ class SyncE2E(unittest.TestCase):
             self.assertEqual([len(x) for x in ids], [100, 35])
             self.assertEqual(sorted(sum(ids, [])), sorted([str(i) for i in live] + ["9101", "9102", "9103", "9104", "9105"]))
             self.assertEqual(stored(), live)
+            # Contact 9101 shares an id with a removed meeting and stays.
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_objects WHERE object_type='contacts' "
+                                    "AND hs_id='9101'")[0][0], 1)
             ok, _route, _http, detail = self.outcome("hubspot_meeting_archive")
             self.assertEqual(ok, 1)
             self.assertIn("135 stored meetings checked, 5 removed", detail)
@@ -732,13 +737,24 @@ class SyncE2E(unittest.TestCase):
             reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0)
             failed(out, "POST /crm/v3/objects/meetings/batch/read", 207, kept, n_links)
 
-            # Runs 6 and 7: one call a run. Run 6 removes 6901 and 6902 and keeps its place; run 7 resumes
-            # after it and ends the pass.
+            # Run 6: HUBSPOT_ARCHIVED_MAX_PAGES below 1 is refused, not reported as a complete pass.
             hub.meeting_read_faults = []
+            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_ARCHIVED_MAX_PAGES=0)
+            self.assertEqual(reads(reqs), [])
+            failed(out, None, None, kept, n_links)
+            self.assertIn("HUBSPOT_ARCHIVED_MAX_PAGES must be at least 1", self.outcome("hubspot_meeting_archive")[3])
+            self.assertEqual(json.loads(self.state("hubspot_meeting_archive")), {"afterId": None})
+
+            # Runs 7 and 8: one call a run. Run 7 removes 6901 and 6902 and keeps its place; HubSpot also names
+            # 7130, which the call did not send, and it stays. Run 8 resumes after it and ends the pass.
+            hub.meeting_read_faults = [("unsent", "7130")]
             reqs, _out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0, HUBSPOT_ARCHIVED_MAX_PAGES=1)
             ids = reads(reqs)
             self.assertEqual(([len(x) for x in ids], ids[0][:2]), ([100], ["6901", "6902"]))
+            self.assertNotIn("7130", ids[0])
             self.assertEqual(stored(), live)
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_associations WHERE from_id='7130' "
+                                    "OR to_id='7130'")[0][0], 2)
             ok, _route, _http, detail = self.outcome("hubspot_meeting_archive")
             self.assertEqual(ok, 1)
             self.assertIn("100 stored meetings checked, 2 removed; HUBSPOT_ARCHIVED_MAX_PAGES reached, "

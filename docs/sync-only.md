@@ -237,7 +237,7 @@ tables are created up front, so they exist even when the pull fails.
 | `hubspot_lists` | `POST /crm/v3/lists/search`, 500 a page | every run, mirrored (deleted lists go) |
 | `hubspot_list_memberships` | `GET /crm/v3/lists/{id}/memberships`, 250 a page, contact lists (`0-1`) only | each list at most every `LIST_MIN_INTERVAL_MIN` (default 360); `LIST_MEMBERSHIP_MAX_CALLS` pages a run (default 400) |
 | `hubspot_imports` | `GET /crm/v3/imports` | every run |
-| `hubspot_objects` / `hubspot_associations` (meetings removed) | `POST /crm/v3/objects/meetings/batch/read`, the stored meeting ids, ids only, 100 a call | every run; `HUBSPOT_ARCHIVED_MAX_PAGES` calls a run (default 20), last id read in `sync_state` `hubspot_meeting_archive` |
+| `hubspot_objects` / `hubspot_associations` (meetings removed) | `POST /crm/v3/objects/meetings/batch/read`, the stored meeting ids, ids only, 100 a call | every run; `HUBSPOT_ARCHIVED_MAX_PAGES` calls a run (default 20; below 1 fails the pull), last id read in `sync_state` `hubspot_meeting_archive` |
 
 The CRM search behind the incremental pull never returns archived objects, so
 a meeting archived after it was stored would keep its row (with no archived

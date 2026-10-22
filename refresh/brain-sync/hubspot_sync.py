@@ -65,7 +65,8 @@ stop the others:
                             and hubspot_associations; at most
                             HUBSPOT_ARCHIVED_MAX_PAGES (default 20) batch reads
                             of 100 stored ids a run, resumed next run, then a
-                            new pass starts. A failed read removes nothing
+                            new pass starts. A failed read removes nothing; a
+                            cap below 1 fails the pull
 A failed extra pull also logs `EXTRA_PULL_FAILED <name> <route> <status>` to
 stdout; the exit code does not change.
 """
@@ -1222,9 +1223,11 @@ def purge_archived_meetings(client, log):
     status, another error, or an id neither returned nor named fails the pull
     and removes nothing. sync_state 'hubspot_meeting_archive' holds the last id
     read when a run stops at HUBSPOT_ARCHIVED_MAX_PAGES; after the last stored
-    id the next run starts a new pass.
+    id the next run starts a new pass. A cap below 1 fails the pull.
     """
     source, route = "hubspot_meeting_archive", "POST /crm/v3/objects/meetings/batch/read"
+    if ARCHIVED_MAX_PAGES < 1:
+        raise ValueError("HUBSPOT_ARCHIVED_MAX_PAGES must be at least 1, got %d" % ARCHIVED_MAX_PAGES)
     after_id = _json_state(source).get("afterId") or ""
     con = db_connect()
     try:
