@@ -177,7 +177,10 @@ test('handler with a Lambda-style callback as its third argument still builds th
   const out = await handler({ dryRun: true }, { invokedFunctionArn: FN_ARN }, () => {});
   assert.equal(out.dryRun, true);
   assert.deepEqual(f.loaded, ['@aws-sdk/client-s3', '@aws-sdk/client-sns'], 'awsDeps built the clients through sdk.load');
-  assert.deepEqual(f.of('GetObjectCommand').filter((i) => i.Key.startsWith('published/')).map((i) => i.Bucket).filter((b) => b !== DATA), []);
+  const gets = f.of('GetObjectCommand');
+  assert.deepEqual(gets.filter((i) => i.Key.startsWith('published/')).map((i) => i.Bucket).filter((b) => b !== DATA), []);
+  assert.deepEqual(gets.filter((i) => !i.Key.startsWith('published/')).map((i) => i.Bucket).filter((b) => b !== CONFIG.previewBucket), [], 'preview reads stay on the preview bucket');
+  assert.ok(gets.some((i) => i.Key === CONFIG.refreshKey), 'the previous refresh.json was read');
   assert.deepEqual(f.of('ListObjectsV2Command').map((i) => [i.Bucket, i.Prefix]), [[DATA, `published/${f.runId}/`]]);
   assert.deepEqual(f.of('PutObjectCommand'), [], 'dryRun writes nothing');
 });
@@ -209,10 +212,12 @@ test('awsDeps: PublishCommand gets the resolved topic; S3 commands get the bucke
   await deps.notify('subject', 'message');
   assert.deepEqual(f.of('PublishCommand'), [{ TopicArn: TOPIC, Subject: 'subject', Message: 'message' }]);
   await deps.getText(DATA, 'published/LATEST.json');
+  await deps.getText('B-preview', 'refresh.json');
   await deps.list(DATA, 'published/');
+  await deps.list('B-preview', '_state/');
   await deps.put('B-preview', 'data.js', 'x', { contentType: 'text/javascript' });
   assert.deepEqual(f.sent.filter(([n]) => n !== 'PublishCommand').map(([n, i]) => [n, i.Bucket]),
-    [['GetObjectCommand', DATA], ['ListObjectsV2Command', DATA], ['PutObjectCommand', 'B-preview']]);
+    [['GetObjectCommand', DATA], ['GetObjectCommand', 'B-preview'], ['ListObjectsV2Command', DATA], ['ListObjectsV2Command', 'B-preview'], ['PutObjectCommand', 'B-preview']]);
   assert.deepEqual(f.clients, [['s3', CONFIG.region], ['sns', CONFIG.region]]);
 });
 
