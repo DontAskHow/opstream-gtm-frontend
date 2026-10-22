@@ -301,12 +301,39 @@ class _StdlibRequest:
             return _HttpResult(exc.code, exc.read())
 
 
+def _google_grant_is_allowed(request, refresh_token, client_id, client_secret) -> bool:
+    try:
+        response = request(
+            "https://oauth2.googleapis.com/token",
+            method="POST",
+            body=urllib.parse.urlencode({
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if response.status != 200:
+            return False
+        payload = json.loads(response.data)
+        if not isinstance(payload, dict):
+            return False
+        scope = payload.get("scope")
+        if not isinstance(scope, str):
+            return False
+        granted_scopes = scope.split()
+        return bool(granted_scopes) and frozenset(granted_scopes).issubset(GOOGLE_USER_SCOPES)
+    except Exception:
+        return False
+
+
 def google_access_token(scopes=None, credentials_cls=None, request=None) -> str:
     """Access token for the owner's Google account.
 
     Reads opstream-gtm/google-sheets-refresh-token plus the OAuth client id
-    and secret. There is no service account. A missing secret or a rejected
-    refresh raises NeedsConnection without the token or the provider error.
+    and secret. There is no service account. A missing secret, rejected refresh,
+    or unverified grant raises NeedsConnection without token or provider detail.
     """
     scope_list = tuple(scopes or GOOGLE_USER_SCOPES)
     cache_key = ("google-user", " ".join(scope_list))
@@ -316,6 +343,11 @@ def google_access_token(scopes=None, credentials_cls=None, request=None) -> str:
     refresh = _read_secret_string("google-sheets-refresh-token")
     client_id = _read_secret_string("google-oauth-client-id")
     client_secret = _read_secret_string("google-oauth-client-secret")
+    transport = request if request is not None else _StdlibRequest()
+    if not _google_grant_is_allowed(transport, refresh, client_id, client_secret):
+        raise NeedsConnection(
+            "Google connection needs reconnecting. Not touching watermarks."
+        )
     try:
         if credentials_cls is None:
             from google.oauth2.credentials import Credentials as credentials_cls
@@ -327,7 +359,12 @@ def google_access_token(scopes=None, credentials_cls=None, request=None) -> str:
             client_secret=client_secret,
             scopes=list(scope_list),
         )
-        creds.refresh(request if request is not None else _StdlibRequest())
+        creds.refresh(transport)
+        granted_scopes = getattr(creds, "granted_scopes", None)
+        if not granted_scopes or not frozenset(granted_scopes).issubset(GOOGLE_USER_SCOPES):
+            raise NeedsConnection(
+                "Google connection needs reconnecting. Not touching watermarks."
+            )
     except NeedsConnection:
         raise
     except Exception:
