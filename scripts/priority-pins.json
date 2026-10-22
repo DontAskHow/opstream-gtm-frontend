@@ -1,0 +1,10 @@
+{
+  "pins": [
+    {
+      "match": "NewRez",
+      "also": ["Newrez", "Newrez Mortgage"],
+      "rank": 2,
+      "note": "Lihi, Sep 10"
+    }
+  ]
+}
