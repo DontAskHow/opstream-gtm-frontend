@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { readInputs } from '../build.mjs';
-import { compose, stamp, stamps, sha256, refreshDoc, alarmDecision, problems, stalenessRules, isHubspotExport, hubspotLive } from './compose.mjs';
+import { compose, stamp, stamps, sha256, refreshDoc, alarmDecision, problems, stalenessRules, authRules, rejectedCredentials, isHubspotExport, hubspotLive } from './compose.mjs';
 import { publishWorkspace, scrubPatterns, staleness, WORKSPACE_FILE, PROBLEMS as WORKSPACE_PROBLEMS, MAX_AGE_MINUTES, WORKSPACE_STALE_MINUTES, FRESH_STALE_MINUTES } from './workspace-json.mjs';
 
 const require = createRequire(import.meta.url);
@@ -35,6 +35,8 @@ export const CONFIG = {
   staleMinutes: Number(process.env.SNAPSHOT_STALE_MINUTES || 60),
   // Source rows and times inside the snapshot older than these alarm (source-stale:<source>, time-stale:<key>).
   sourceLimits: stalenessRules(require('../../config/freshness-sources.json').staleness),
+  // A source whose latest error is a rejected credential alarms auth:<provider> (one per provider).
+  authRules: authRules(require('../../config/freshness-sources.json').auth),
   maxSnapshotFileBytes: 5e6,
   tmp: process.env.SNAPSHOT_TMP || '/tmp/gtm-snapshot',
   livePull: process.env.LIVE_PULL === '1',
@@ -199,7 +201,8 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
   }
 
   const resolved = stamps(vols, nowIso);
-  const failing = problems({ live, hubspotMode: data.refresh.hubspot, snapshotPublishedAt: snap.meta.publishedAt, nowMs: Date.parse(nowIso), staleMinutes: cfg.staleMinutes, stamps: resolved, limits: cfg.sourceLimits });
+  const snapSources = Array.isArray(snap.snapshot.marketing?.sources) ? snap.snapshot.marketing.sources : [];
+  const failing = problems({ live, hubspotMode: data.refresh.hubspot, snapshotPublishedAt: snap.meta.publishedAt, nowMs: Date.parse(nowIso), staleMinutes: cfg.staleMinutes, stamps: resolved, limits: cfg.sourceLimits, sources: snapSources, auth: cfg.authRules });
   if (ws.problem) failing.push(ws.problem);
   // The live copy's own age, after this run's upload (if any).
   const age = ws.block ? staleness(ws.block, nowIso, { workspaceStaleMinutes: cfg.workspaceStaleMinutes ?? WORKSPACE_STALE_MINUTES, freshStaleMinutes: cfg.freshStaleMinutes ?? FRESH_STALE_MINUTES }) : null;
@@ -223,6 +226,7 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
       if (kind === 'source-stale') lines.push(`${f}: last ok ${resolved[`sources.${name}.lastOkAt`] ?? 'never'}`);
       if (kind === 'time-stale') lines.push(`${f}: ${resolved[`times.${name}`]}`);
     }
+    if (cfg.authRules) for (const [p, srcs] of Object.entries(rejectedCredentials(snapSources, cfg.authRules))) lines.push(`auth:${p}: credential rejected for ${srcs.join(', ')}; re-authorize it`);
     if (ws.block) lines.push(`workspace.json: ${ws.block.status}${ws.problem ? ' (' + ws.problem + (ws.block.errors.length ? ': ' + ws.block.errors.join('; ') : '') + '); the page keeps the last good copy from ' + (ws.block.publishedGeneratedAt || 'never') : ''}`);
     if (age?.failing.length) lines.push(`workspace.json on the page: last written ${ws.block.writtenAt || ws.block.publishedGeneratedAt || 'never'} (${age.writtenAgeMinutes ?? '?'} min ago); fresh section ages (min): ${age.freshAges ? Object.entries(age.freshAges).map(([k, a]) => `${k} ${a ?? '?'}`).join(', ') || 'none' : 'unknown'}. Is the sync job publishing?`);
     if (live) for (const k of ['hubspot', 'lemlist', 'fathom']) lines.push(`${k}: ${live[k].ok ? 'ok' : 'FAILED - ' + live[k].error}`);

@@ -7,6 +7,17 @@
     "exempt": ["hubspot_meeting_backfill"],
     "times": { "ai": 780, "brief": 780 }
   },
+  "auth": {
+    "about": "When a source row's latest outcome in the published snapshot is a failure whose HTTP status or detail means a rejected credential (a revoked or expired token, Google's invalid_grant), the preview refresh alarms auth:<provider>, one id per provider, whether or not the data is stale yet. providers names the sources that share one credential; any other source counts as the provider named by its source up to the first '_'. patterns are case-insensitive regular expressions matched against the detail. Rules only, no data.",
+    "providers": { "google": ["ga4", "sheets"] },
+    "http": [401, 403],
+    "patterns": [
+      "\\binvalid_grant\\b",
+      "\\b(?:token|credential)s? (?:was |were |has been |is )?(?:rejected|revoked|expired)\\b",
+      "\\b(?:returned|answered|HTTP) (?:HTTP )?40[13]\\b",
+      "\\btoken endpoint returned HTTP 4\\d\\d\\b"
+    ]
+  },
   "sources": [
     {
       "source": "hubspot",

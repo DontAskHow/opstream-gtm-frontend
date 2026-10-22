@@ -139,6 +139,34 @@ export function stalenessRules(rules) {
   return { defaultMinutes: minutes('defaultMinutes', rules.defaultMinutes), sources: table('sources', rules.sources), exempt: [...(rules.exempt ?? [])], times: table('times', rules.times) };
 }
 
+// config/freshness-sources.json `auth`, checked: the provider each source's credential belongs to
+// (inverted to source -> provider), the HTTP statuses and the detail patterns that mean a rejected credential.
+export function authRules(rules) {
+  if (!rules || typeof rules !== 'object') throw new Error('freshness-sources.json has no auth rules');
+  const providers = {};
+  for (const [p, list] of Object.entries(rules.providers ?? {})) {
+    if (!Array.isArray(list) || !list.every((s) => typeof s === 'string')) throw new Error(`auth providers.${p} must be a list of source names`);
+    for (const s of list) providers[s] = p;
+  }
+  const http = rules.http ?? [];
+  if (!Array.isArray(http) || !http.every(Number.isInteger)) throw new Error('auth http must be a list of status codes');
+  const patterns = (rules.patterns ?? []).map((p) => { try { return new RegExp(p, 'i'); } catch { throw new Error(`auth pattern ${JSON.stringify(p)} is not a valid regular expression`); } });
+  return { providers, http: [...http], patterns };
+}
+
+// Sources whose latest outcome is a rejected credential, by provider (sorted): {google: ['ga4', 'sheets']}.
+// A source with no provider entry uses its name up to the first '_' (source-a_leads -> source-a).
+export function rejectedCredentials(sources, rules) {
+  const by = {};
+  for (const s of sources) {
+    if (s?.ok !== false) continue;
+    if (rules.http.includes(Number(s.http)) || rules.patterns.some((p) => p.test(String(s.detail ?? '')))) {
+      (by[rules.providers[s.source] ?? String(s.source).split('_')[0]] ??= []).push(s.source);
+    }
+  }
+  return Object.fromEntries(Object.keys(by).sort().map((p) => [p, by[p]]));
+}
+
 // Source rows and times past their limit, read from stamps() (the real values, not data.js's
 // placeholders). A source with no lastOkAt is stale; a time with no value is unknown and never flags.
 function staleIds(resolved, nowMs, limits) {
@@ -155,9 +183,10 @@ function staleIds(resolved, nowMs, limits) {
 }
 
 // Problems worth an alarm. Without LIVE_PULL the function only watches the
-// snapshot it was handed: a stale pointer, a missing HubSpot export, and (with
-// limits) source rows and times inside it that stopped updating.
-export function problems({ live, hubspotMode, snapshotPublishedAt, nowMs, staleMinutes, stamps: resolved = {}, limits = null }) {
+// snapshot it was handed: a stale pointer, a missing HubSpot export, (with
+// limits) source rows and times inside it that stopped updating, and (with auth)
+// sources whose credential was rejected. sources: the snapshot's raw rows (http kept).
+export function problems({ live, hubspotMode, snapshotPublishedAt, nowMs, staleMinutes, stamps: resolved = {}, limits = null, sources = [], auth = null }) {
   const out = [];
   if (live) {
     for (const k of LIVE_SOURCES) if (!live[k]?.ok) out.push(k);
@@ -167,6 +196,7 @@ export function problems({ live, hubspotMode, snapshotPublishedAt, nowMs, staleM
   const pub = Date.parse(snapshotPublishedAt ?? '');
   if (!Number.isFinite(pub) || nowMs - pub > staleMinutes * 60e3) out.push('snapshot-stale');
   if (limits) out.push(...staleIds(resolved, nowMs, limits));
+  if (auth) out.push(...Object.keys(rejectedCredentials(sources, auth)).map((p) => `auth:${p}`));
   return out;
 }
 
