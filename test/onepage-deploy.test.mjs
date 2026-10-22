@@ -97,14 +97,17 @@ test('deploy.sh --onepage-app builds and checks the data-less page, then needs A
 // A fake `aws` for the whole --onepage-app run: logs every call's arguments and answers the
 // queries deploy.sh makes. FAKE_FUNCTION_ERROR, FAKE_REFRESH, FAKE_NO_WORKSPACE and
 // FAKE_INDEX_META steer the invoke -> check -> upload sequence. FAKE_CURRENT_ENV is the function's
-// current environment (JSON); FAKE_ENV_OUT receives the environment file deploy.sh sends.
+// current environment (JSON); FAKE_ENV_OUT receives the environment file deploy.sh sends; FAKE_POLICY_DIR
+// receives each role policy document.
 const FAKE_AWS = `#!/bin/bash
 echo "$*" >> "$FAKE_LOG"
 case "$1 $2" in
-  "sts get-caller-identity") echo 080403790510 ;;
-  "iam get-role") [[ "$*" == *--query* ]] && echo arn:aws:iam::080403790510:role/fake ;;
+  "sts get-caller-identity") echo 123456789012 ;;
+  "iam get-role") [[ "$*" == *--query* ]] && echo arn:aws:iam::123456789012:role/fake ;;
   "lambda get-function-configuration")
     if [[ "$*" == *"--query Environment.Variables --"* ]]; then echo "\${FAKE_CURRENT_ENV:-null}"; else echo "\${FAKE_CURRENT_PATTERNS:-None}"; fi ;;
+  "iam put-role-policy")
+    for a in "$@"; do [[ "$a" == file://* ]] && [ -n "$FAKE_POLICY_DIR" ] && cp "\${a#file://}" "$FAKE_POLICY_DIR/"; done ;;
   "lambda update-function-configuration")
     for a in "$@"; do [[ "$a" == file://* ]] && [ -n "$FAKE_ENV_OUT" ] && cp "\${a#file://}" "$FAKE_ENV_OUT"; done ;;
   "lambda invoke")
@@ -229,6 +232,47 @@ test('deploy.sh --lambda-only: function code and environment only; IAM, schedule
     assert.match(r.stderr, /does not combine/);
     assert.equal(r.calls.length, 0, extra);
   }
+});
+
+test('deploy.sh takes the account from STS: policy, alarm topic and function ARN carry the caller\'s account', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'onepage-deploy-acct-'));
+  try {
+    const r = deployRun(['--no-app'], { FAKE_CURRENT_PATTERNS: SYNTHETIC_SCRUB, FAKE_POLICY_DIR: dir });
+    assert.equal(r.status, 0, r.stderr);
+    const statements = JSON.parse(readFileSync(join(dir, 'policy-lambda.json'), 'utf8')).Statement;
+    const resource = (sid) => statements.find((st) => st.Sid === sid).Resource;
+    assert.equal(resource('SnapshotList'), 'arn:aws:s3:::opstream-gtm-data-123456789012');
+    assert.equal(resource('SnapshotRead'), 'arn:aws:s3:::opstream-gtm-data-123456789012/published/*');
+    assert.equal(resource('Alarm'), 'arn:aws:sns:us-east-2:123456789012:opstream-gtm-refresh-failures');
+    assert.equal(resource('OwnLogGroupOnly'), 'arn:aws:logs:us-east-2:123456789012:log-group:/aws/lambda/gtm-preview-refresh:*');
+    assert.ok(r.calls.some((c) => c.startsWith('cloudwatch put-metric-alarm') && c.includes('--alarm-actions arn:aws:sns:us-east-2:123456789012:opstream-gtm-refresh-failures')));
+    assert.match(r.stdout, /^function {2}arn:aws:lambda:us-east-2:123456789012:function:gtm-preview-refresh$/m);
+    assert.equal(r.calls.filter((c) => c.startsWith('sts get-caller-identity')).length, 1, 'one STS call');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('deploy.sh refuses when AWS_ACCOUNT_ID is not the caller\'s account, before any other AWS call', () => {
+  const wrong = deployRun(['--lambda-only'], { FAKE_CURRENT_PATTERNS: SYNTHETIC_SCRUB, AWS_ACCOUNT_ID: '000000000000' });
+  assert.equal(wrong.status, 1);
+  assert.match(wrong.stderr, /wrong AWS account/);
+  assert.deepEqual(wrong.calls.map((c) => c.split(' ').slice(0, 2).join(' ')), ['sts get-caller-identity']);
+  const right = deployRun(['--lambda-only'], { FAKE_CURRENT_PATTERNS: SYNTHETIC_SCRUB, AWS_ACCOUNT_ID: '123456789012' });
+  assert.equal(right.status, 0, right.stderr);
+});
+
+test('deploy.sh stops when STS fails: exit status is the STS failure, no other AWS call', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'onepage-deploy-sts-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'aws'), `#!/bin/sh\necho "$*" >> "${join(dir, 'aws.log')}"\n[ "$1 $2" = "sts get-caller-identity" ] && exit 254\nexit 0\n`);
+    chmodSync(join(bin, 'aws'), 0o755);
+    const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('WORKSPACE_SCRUB') && !k.startsWith('FAKE_') && k !== 'AWS_ACCOUNT_ID'));
+    const r = spawnSync('bash', [join(ROOT, 'workspace', 'refresh', 'deploy.sh'), '--lambda-only'],
+      { env: { ...clean, PATH: `${bin}:${process.env.PATH}`, WORKSPACE_SCRUB_PATTERNS: SYNTHETIC_SCRUB }, encoding: 'utf8' });
+    assert.equal(r.status, 254, r.stderr);
+    assert.deepEqual(readFileSync(join(dir, 'aws.log'), 'utf8').trim().split('\n').map((c) => c.split(' ').slice(0, 2).join(' ')), ['sts get-caller-identity']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a plain deploy leaves any tagged index.html (the fresh frontend) unless --restore-app', () => {
