@@ -139,6 +139,43 @@ Resources:
     Properties:
       TopicName: opstream-gtm-refresh-failures
 
+  # The whole topic policy: AWS's default owner statement plus EventBridge publish for the opstream-gtm-* rules.
+  FailureTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref FailureTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: __default_policy_ID
+        Statement:
+          - Sid: __default_statement_ID
+            Effect: Allow
+            Principal:
+              AWS: "*"
+            Action:
+              - SNS:GetTopicAttributes
+              - SNS:SetTopicAttributes
+              - SNS:AddPermission
+              - SNS:RemovePermission
+              - SNS:DeleteTopic
+              - SNS:Subscribe
+              - SNS:ListSubscriptionsByTopic
+              - SNS:Publish
+            Resource: !Ref FailureTopic
+            Condition:
+              StringEquals:
+                AWS:SourceOwner: !Ref AWS::AccountId
+          - Sid: AllowEventBridgeGtmRules
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref FailureTopic
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/opstream-gtm-*"
+
   FailureEvents:
     Type: AWS::Events::Rule
     Properties:
@@ -225,6 +262,10 @@ Resources:
         RoleArn: !GetAtt SchedulerRole.Arn
         DeadLetterConfig:
           Arn: !GetAtt DeadLetterQueue.Arn
+        # Give up within an hour so a run that cannot start alarms well before the next 6-hourly slot.
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 3600
+          MaximumRetryAttempts: 3
         EcsParameters:
           TaskDefinitionArn: !Ref TaskDefinition
           LaunchType: FARGATE
