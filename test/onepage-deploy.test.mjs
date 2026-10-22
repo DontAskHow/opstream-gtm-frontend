@@ -260,6 +260,21 @@ test('deploy.sh refuses when AWS_ACCOUNT_ID is not the caller\'s account, before
   assert.equal(right.status, 0, right.stderr);
 });
 
+test('deploy.sh stops when STS fails: exit status is the STS failure, no other AWS call', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'onepage-deploy-sts-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'aws'), `#!/bin/sh\necho "$*" >> "${join(dir, 'aws.log')}"\n[ "$1 $2" = "sts get-caller-identity" ] && exit 254\nexit 0\n`);
+    chmodSync(join(bin, 'aws'), 0o755);
+    const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('WORKSPACE_SCRUB') && !k.startsWith('FAKE_') && k !== 'AWS_ACCOUNT_ID'));
+    const r = spawnSync('bash', [join(ROOT, 'workspace', 'refresh', 'deploy.sh'), '--lambda-only'],
+      { env: { ...clean, PATH: `${bin}:${process.env.PATH}`, WORKSPACE_SCRUB_PATTERNS: SYNTHETIC_SCRUB }, encoding: 'utf8' });
+    assert.equal(r.status, 254, r.stderr);
+    assert.deepEqual(readFileSync(join(dir, 'aws.log'), 'utf8').trim().split('\n').map((c) => c.split(' ').slice(0, 2).join(' ')), ['sts get-caller-identity']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a plain deploy leaves any tagged index.html (the fresh frontend) unless --restore-app', () => {
   const r = deployRun([], { FAKE_CURRENT_PATTERNS: SYNTHETIC_SCRUB, FAKE_INDEX_META: 'fresh-workspace' });
   assert.equal(r.status, 0, r.stderr);

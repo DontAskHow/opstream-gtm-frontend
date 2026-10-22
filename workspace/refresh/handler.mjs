@@ -251,11 +251,12 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
 
 // Event {"dryRun": true}: read everything, write nothing, publish nothing.
 // Any error: alarm, then rethrow so the invocation fails (Errors metric -> CloudWatch alarm).
-export async function handler(event = {}, context = {}) {
+// makeDeps is for tests; Lambda passes no third argument (or a callback, which has no makeDeps).
+export async function handler(event = {}, context = {}, { makeDeps = awsDeps } = {}) {
   let deps;
   try {
     const cfg = configFor(context);
-    deps = await awsDeps(cfg);
+    deps = await makeDeps(cfg);
     if (event?.dryRun === true) {
       return { dryRun: true, ...(await refresh({ ...deps, put: async () => {}, notify: async () => {} }, { cfg })) };
     }
