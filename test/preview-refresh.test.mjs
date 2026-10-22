@@ -9,8 +9,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { refresh } from '../workspace/refresh/handler.mjs';
+import { refresh, CONFIG } from '../workspace/refresh/handler.mjs';
 import { compose, stamp, NOW_TOKEN, alarmDecision, problems, isHubspotExport, hubspotLive } from '../workspace/refresh/compose.mjs';
+import * as composeModule from '../workspace/refresh/compose.mjs';
 import {
   assertHubspotRead, fetchHubspot, outboundFromCampaigns, recordingFromFathom, matchRecording, tokenFromSecret, validateHubspotDoc,
 } from '../workspace/refresh/sources.mjs';
@@ -310,6 +311,72 @@ test('isHubspotExport recognises the export by shape only', () => {
   assert.equal(isHubspotExport({ pipes: {}, stages: {}, deals: [{ id: 1 }] }), false);
   assert.equal(isHubspotExport({ prep: [], brief: {} }), false);
   assert.deepEqual(problems({ live: null, hubspotMode: 'snapshot', snapshotPublishedAt: '2026-01-16T20:00:00Z', nowMs: Date.parse('2026-01-16T20:30:00Z'), staleMinutes: 60 }), []);
+});
+
+// Source rows and times inside an on-time snapshot (published 5 minutes ago), against the
+// staleness rules in config/freshness-sources.json.
+const SNAP_NOW = Date.parse('2026-01-16T20:05:00Z');
+const ago = (min) => new Date(SNAP_NOW - min * 60e3).toISOString();
+const onTime = (stamps) => problems({ live: null, hubspotMode: 'snapshot', snapshotPublishedAt: ago(5), nowMs: SNAP_NOW, staleMinutes: 60, stamps, limits: CONFIG.sourceLimits });
+
+test('problems: a source past its staleness limit alarms even when the snapshot is on time', () => {
+  // ga4 is past its own 180-minute limit, sheets past the 60-minute default, hubspot within it.
+  assert.deepEqual(onTime({ 'sources.hubspot.lastOkAt': ago(10), 'sources.sheets.lastOkAt': ago(120), 'sources.ga4.lastOkAt': ago(240) }), ['source-stale:ga4', 'source-stale:sheets']);
+  // A source that never succeeded, with no limit of its own: the default applies and a null lastOkAt is stale.
+  assert.deepEqual(onTime({ 'sources.hubspot.lastOkAt': ago(10), 'sources.source-a.lastOkAt': null }), ['source-stale:source-a']);
+  // times.ai past its 780-minute limit; times.brief within it; times.records has no limit.
+  assert.deepEqual(onTime({ 'times.ai': ago(900), 'times.brief': ago(700), 'times.records': ago(3 * 1440) }), ['time-stale:ai']);
+  // The new ids come after the existing ones, sources before times.
+  assert.deepEqual(
+    problems({ live: null, hubspotMode: 'records', snapshotPublishedAt: ago(90), nowMs: SNAP_NOW, staleMinutes: 60, limits: CONFIG.sourceLimits,
+      stamps: { 'times.brief': ago(800), 'sources.sheets.lastOkAt': ago(61), 'times.ai': ago(800), 'sources.ga4.lastOkAt': null } }),
+    ['snapshot-has-no-hubspot-export', 'snapshot-stale', 'source-stale:ga4', 'source-stale:sheets', 'time-stale:ai', 'time-stale:brief'],
+  );
+});
+
+test('problems: sources within their limits, and an exempt old backfill, report nothing', () => {
+  assert.deepEqual(onTime({
+    'sources.hubspot.lastOkAt': ago(10), 'sources.sheets.lastOkAt': ago(59), 'sources.ga4.lastOkAt': ago(170), 'sources.otterly.lastOkAt': ago(720),
+    'sources.hubspot_meeting_backfill.lastOkAt': ago(30 * 1440), 'times.ai': ago(720), 'times.brief': ago(720), 'times.records': ago(2 * 1440), 'times.web': null,
+  }), []);
+});
+
+test('staleness rules: read from config/freshness-sources.json; a bad rule throws', () => {
+  assert.deepEqual(CONFIG.sourceLimits, { defaultMinutes: 60, sources: { ga4: 180, otterly: 780 }, exempt: ['hubspot_meeting_backfill'], times: { ai: 780, brief: 780 } });
+  const rules = (over) => composeModule.stalenessRules({ defaultMinutes: 60, sources: {}, exempt: [], times: {}, ...over });
+  assert.throws(() => rules({ defaultMinutes: 'sixty' }), /defaultMinutes/);
+  assert.throws(() => rules({ sources: { ga4: -1 } }), /ga4/);
+  assert.throws(() => rules({ exempt: 'hubspot_meeting_backfill' }), /exempt/);
+  assert.throws(() => composeModule.stalenessRules(undefined), /staleness/);
+});
+
+test('refresh.json `failing` lists stale sources and times of an on-time snapshot, and the alarm names them', async (t) => {
+  const w = world();
+  t.after(() => rmSync(w.tmp, { recursive: true, force: true }));
+  w.cfg.staleMinutes = 60;
+  w.cfg.sourceLimits = CONFIG.sourceLimits;
+  // The first check runs at 20:15; the snapshot was published at 20:10.
+  const files = JSON.parse(JSON.stringify(w.files));
+  files['marketing.json'].sources = [
+    { source: 'hubspot', label: 'HubSpot', ok: true, at: '2026-01-16T20:05:00Z', lastOkAt: '2026-01-16T20:05:00Z' },
+    { source: 'ga4', label: 'GA4', ok: true, at: '2026-01-16T15:00:00Z', lastOkAt: '2026-01-16T15:00:00Z' },
+    { source: 'source-a', label: 'Source A', ok: false, at: '2026-01-16T20:05:00Z', lastOkAt: null },
+    { source: 'hubspot_meeting_backfill', label: 'meeting backfill', ok: true, at: '2026-01-01T00:00:00Z', lastOkAt: '2026-01-01T00:00:00Z' },
+  ];
+  files['marketing.json'].ai = { connected: true, shareOfVoice: 10, fetchedAt: '2026-01-16T05:00:00Z' };
+  files['agent-brief.json'].generatedAt = '2026-01-16T19:00:00Z';
+  w.publish('run-test-2', files, '2026-01-16T20:10:00Z');
+  const r = await w.run();
+  const want = ['source-stale:ga4', 'source-stale:source-a', 'time-stale:ai'];
+  assert.deepEqual(r.failing, want);
+  const doc = JSON.parse(w.s3.get('preview/refresh.json'));
+  assert.deepEqual(doc.failing, want);
+  assert.match(doc.stamps['sources.ga4.lastOkAt'], /^2026-01-16T15:00/, 'checked against the real time, not a placeholder');
+  assert.equal(w.notes.length, 1);
+  assert.equal(w.notes[0].subject, `GTM preview refresh: ${want.join(', ')}`);
+  assert.match(w.notes[0].message, /source-stale:ga4: last ok 2026-01-16T15:00:00Z/);
+  assert.match(w.notes[0].message, /source-stale:source-a: last ok never/);
+  assert.match(w.notes[0].message, /time-stale:ai: 2026-01-16T05:00:00Z/);
 });
 
 // ---------- LIVE_PULL=1 (off by default, not granted in IAM) ----------
