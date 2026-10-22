@@ -19,7 +19,8 @@
 set -euo pipefail
 
 REGION=us-east-2
-BUCKET=opstream-gtm-data-080403790510
+ACCOUNT_ID=${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity --region "$REGION" --query Account --output text)}
+BUCKET=opstream-gtm-data-$ACCOUNT_ID
 STACK=opstream-gtm-refresh
 SOURCE_KEY=code/refresh-src/v14.zip
 ZIP=refresh-src-v14.zip

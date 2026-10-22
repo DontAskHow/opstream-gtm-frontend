@@ -128,10 +128,15 @@ class FsStore(Store):
         return names
 
 
+def resolve_bucket(name, account_id):
+    """Fill the {accountId} placeholder that refresh-config.json uses in dataBucket."""
+    return name.replace("{accountId}", account_id()) if "{accountId}" in name else name
+
+
 class S3Store(Store):
     def __init__(self, bucket, region):
         import boto3
-        self.bucket = bucket
+        self.bucket = resolve_bucket(bucket, lambda: boto3.client("sts", region_name=region).get_caller_identity()["Account"])
         self.s3 = boto3.client("s3", region_name=region)
         self.sm = boto3.client("secretsmanager", region_name=region)
         self.prefix = "opstream-gtm/"

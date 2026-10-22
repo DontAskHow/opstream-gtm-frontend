@@ -2,7 +2,7 @@
 
 The dashboard on Elastic Beanstalk keeps serving the last good `out/data`. This job builds a new collection and publishes it to S3. The server reads `refresh-config.json` from the bundle (not an environment property) and, every 10 minutes, swaps in `published/LATEST.json` when that run validates.
 
-Bucket: `opstream-gtm-data-080403790510` in `us-east-2`, account `080403790510`.
+Bucket: `opstream-gtm-data-<account-id>` in `us-east-2`, account `<account-id>`.
 
 ## What the container does
 
@@ -30,7 +30,7 @@ About **$1.70 a month**. There is no NAT gateway and no email subscription. A NA
 
 ## Console and CloudShell, in order
 
-Do these in account `080403790510`, region **US East (Ohio)**.
+Do these in account `<account-id>`, region **US East (Ohio)**.
 
 ### 1. Google authorization and other secrets
 
@@ -72,7 +72,7 @@ CloudShell cannot build this image reliably, and there is no local Docker. The s
 In CloudShell, Actions → Upload file, and choose `refresh-src-v14.zip`. Then:
 
 ```bash
-aws s3 cp refresh-src-v14.zip s3://opstream-gtm-data-080403790510/code/refresh-src/v14.zip --region us-east-2
+aws s3 cp refresh-src-v14.zip s3://opstream-gtm-data-<account-id>/code/refresh-src/v14.zip --region us-east-2
 ```
 
 The object key must match the `SourceKey` parameter (`code/refresh-src/v14.zip` unless you change it). The zip root must contain `refresh/Dockerfile`, not a parent folder.
@@ -110,7 +110,7 @@ while true; do
 done
 ```
 
-Logs: CloudWatch → Log groups → `/aws/codebuild/opstream-gtm-refresh`. The project reads `s3://opstream-gtm-data-080403790510/code/refresh-src/v14.zip`, runs `docker build -f refresh/Dockerfile`, and pushes `latest` to the ECR repository the stack created. CodeBuild is not placed in the VPC, so it can reach Docker Hub and ECR.
+Logs: CloudWatch → Log groups → `/aws/codebuild/opstream-gtm-refresh`. The project reads `s3://opstream-gtm-data-<account-id>/code/refresh-src/v14.zip`, runs `docker build -f refresh/Dockerfile`, and pushes `latest` to the ECR repository the stack created. CodeBuild is not placed in the VPC, so it can reach Docker Hub and ECR.
 
 ### 5. Attach the dashboard policy
 
@@ -126,7 +126,7 @@ echo "policy $POLICY"
 aws iam attach-role-policy --role-name "$ROLE" --policy-arn "$POLICY"
 ```
 
-That role can then read `published/*`, read and write `state/*` (including each person's brief at `state/users/<hash>/`), read `opstream-gtm/google-oauth-client-id` and `opstream-gtm/google-oauth-client-secret`, create or update `opstream-gtm/google-sheets-refresh-token`, and get, describe, create, or put `opstream-gtm/users/*`. The Fargate task role has `secretsmanager:GetSecretValue` and `DescribeSecret` on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/*`, plus `secretsmanager:ListSecrets` so the 6-hour job can find those user secrets. `PutSecretValue` on the task role is only on `arn:aws:secretsmanager:us-east-2:080403790510:secret:opstream-gtm/hubspot-oauth-*`, so a rotated HubSpot refresh token is written back to that secret. Do not add environment properties on the Beanstalk environment. The allow list and the bucket name are in `refresh-config.json` inside the application zip.
+That role can then read `published/*`, read and write `state/*` (including each person's brief at `state/users/<hash>/`), read `opstream-gtm/google-oauth-client-id` and `opstream-gtm/google-oauth-client-secret`, create or update `opstream-gtm/google-sheets-refresh-token`, and get, describe, create, or put `opstream-gtm/users/*`. The Fargate task role has `secretsmanager:GetSecretValue` and `DescribeSecret` on `arn:aws:secretsmanager:us-east-2:<account-id>:secret:opstream-gtm/*`, plus `secretsmanager:ListSecrets` so the 6-hour job can find those user secrets. `PutSecretValue` on the task role is only on `arn:aws:secretsmanager:us-east-2:<account-id>:secret:opstream-gtm/hubspot-oauth-*`, so a rotated HubSpot refresh token is written back to that secret. Do not add environment properties on the Beanstalk environment. The allow list and the bucket name are in `refresh-config.json` inside the application zip.
 
 If the managed policy is already attached, this one CloudShell command updates it in place (previous VPC and subnet parameters stay):
 
@@ -158,7 +158,7 @@ A failed task publishes a message to the SNS topic `opstream-gtm-refresh-failure
 ### 7. Confirm the pointer
 
 ```bash
-aws s3 cp s3://opstream-gtm-data-080403790510/published/LATEST.json -
+aws s3 cp s3://opstream-gtm-data-<account-id>/published/LATEST.json -
 ```
 
 Within 10 minutes the Beanstalk app swaps to that run. If the object is corrupt, the app keeps serving the previous files.

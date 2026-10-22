@@ -38,14 +38,18 @@ function writeFs(root, key, body) {
   fs.renameSync(tmp, file);
 }
 
-async function imdsCreds() {
+async function imdsToken() {
   const tokenRes = await fetch('http://169.254.169.254/latest/api/token', {
     method: 'PUT',
     headers: { 'X-aws-ec2-metadata-token-ttl-seconds': '21600' },
     signal: AbortSignal.timeout(500),
   });
   if (!tokenRes.ok) throw new Error('imds token');
-  const token = await tokenRes.text();
+  return tokenRes.text();
+}
+
+async function imdsCreds() {
+  const token = await imdsToken();
   const roleRes = await fetch('http://169.254.169.254/latest/meta-data/iam/security-credentials/', {
     headers: { 'X-aws-ec2-metadata-token': token },
     signal: AbortSignal.timeout(500),
@@ -57,6 +61,26 @@ async function imdsCreds() {
   });
   const body = await credRes.json();
   return { accessKeyId: body.AccessKeyId, secretAccessKey: body.SecretAccessKey, sessionToken: body.Token };
+}
+
+let accountIdPromise = null;
+function imdsAccountId() {
+  accountIdPromise ||= (async () => {
+    const res = await fetch('http://169.254.169.254/latest/dynamic/instance-identity/document', {
+      headers: { 'X-aws-ec2-metadata-token': await imdsToken() },
+      signal: AbortSignal.timeout(500),
+    });
+    const { accountId } = await res.json();
+    if (!/^\d{12}$/.test(String(accountId))) throw new Error('imds account id');
+    return accountId;
+  })().catch(err => { accountIdPromise = null; throw err; });
+  return accountIdPromise;
+}
+
+// refresh-config.json names the bucket with an {accountId} placeholder; the account comes from the instance.
+export async function dataBucket(cfg, accountId = imdsAccountId) {
+  const name = String(cfg.dataBucket);
+  return name.includes('{accountId}') ? name.replace('{accountId}', await accountId()) : name;
 }
 
 function s3Request({ region, bucket, key, method, body, creds }) {
@@ -107,14 +131,14 @@ async function getObject(cfg, key) {
   const root = fsRoot();
   if (root) return readFs(root, key);
   const creds = await imdsCreds();
-  return s3Request({ region: cfg.region || 'us-east-2', bucket: cfg.dataBucket, key, method: 'GET', creds });
+  return s3Request({ region: cfg.region || 'us-east-2', bucket: await dataBucket(cfg), key, method: 'GET', creds });
 }
 
 async function putObject(cfg, key, body) {
   const root = fsRoot();
   if (root) { writeFs(root, key, body); return; }
   const creds = await imdsCreds();
-  await s3Request({ region: cfg.region || 'us-east-2', bucket: cfg.dataBucket, key, method: 'PUT', body, creds });
+  await s3Request({ region: cfg.region || 'us-east-2', bucket: await dataBucket(cfg), key, method: 'PUT', body, creds });
 }
 
 function headGeneratedAt(buf) {
