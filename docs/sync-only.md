@@ -237,14 +237,21 @@ tables are created up front, so they exist even when the pull fails.
 | `hubspot_lists` | `POST /crm/v3/lists/search`, 500 a page | every run, mirrored (deleted lists go) |
 | `hubspot_list_memberships` | `GET /crm/v3/lists/{id}/memberships`, 250 a page, contact lists (`0-1`) only | each list at most every `LIST_MIN_INTERVAL_MIN` (default 360); `LIST_MEMBERSHIP_MAX_CALLS` pages a run (default 400) |
 | `hubspot_imports` | `GET /crm/v3/imports` | every run |
-| `hubspot_objects` / `hubspot_associations` (meetings removed) | `GET /crm/v3/objects/meetings?archived=true`, ids only, 100 a page | every run; `HUBSPOT_ARCHIVED_MAX_PAGES` pages a run (default 20), cursor in `sync_state` `hubspot_meeting_archive` |
+| `hubspot_objects` / `hubspot_associations` (meetings removed) | `POST /crm/v3/objects/meetings/batch/read`, the stored meeting ids, ids only, 100 a call | every run; `HUBSPOT_ARCHIVED_MAX_PAGES` calls a run (default 20), last id read in `sync_state` `hubspot_meeting_archive` |
 
 The CRM search behind the incremental pull never returns archived objects, so
 a meeting archived after it was stored would keep its row (with no archived
-flag) and still show in the workspace's meetings. `hubspot_meeting_archive`
-lists archived meetings and deletes those rows and their associations, both
-directions. A run that stops at the page cap resumes from its cursor; after the
-last page the next run starts a new pass.
+flag) and still show in the workspace's meetings. HubSpot does not page
+archived meetings (`GET /crm/v3/objects/meetings?archived=true` answers 400,
+"Paging through deleted objects is not yet supported for 0-47"), so
+`hubspot_meeting_archive` batch-reads the meeting ids `hubspot_objects`
+holds. HubSpot answers 207 for ids it no longer has, naming them in an
+`OBJECT_NOT_FOUND` error. Those rows go, with their associations in both
+directions. Every read in a run finishes before anything is deleted. Any
+other status, a network failure, another error, or an id HubSpot neither
+returns nor names fails the pull and deletes nothing. A run that stops at the
+call cap resumes after the last id read; after the last stored id the next run
+starts a new pass.
 
 The per-form watermark (`sync_state` `hubspot_forms`) is the newest
 `submittedAt` in ms. Forms without one are read in full, newest first; these
