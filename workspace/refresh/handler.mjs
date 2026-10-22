@@ -48,10 +48,14 @@ export function configFor(context, cfg = CONFIG) {
   return { ...cfg, dataBucket: fill(cfg.dataBucket), topicArn: fill(cfg.topicArn) };
 }
 
-// AWS SDK v3 ships with the nodejs20.x runtime; loaded lazily so tests run without it.
-export async function awsDeps(cfg = CONFIG) {
-  const { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } = await import('@aws-sdk/client-s3');
-  const { SNSClient, PublishCommand } = await import('@aws-sdk/client-sns');
+// AWS SDK v3 ships with the nodejs20.x runtime; loaded lazily (through sdk.load, which tests replace) so tests run without it.
+export const sdk = { load: (name) => import(name) };
+
+// cfg must be resolved (configFor): the SNS topic is taken from it, and an unfilled {accountId} is refused.
+export async function awsDeps(cfg, load = sdk.load) {
+  if ([cfg?.dataBucket, cfg?.topicArn].some((v) => String(v).includes('{accountId}'))) throw new Error('awsDeps needs the resolved config (configFor)');
+  const { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } = await load('@aws-sdk/client-s3');
+  const { SNSClient, PublishCommand } = await load('@aws-sdk/client-sns');
   const s3 = new S3Client({ region: cfg.region });
   const sns = new SNSClient({ region: cfg.region });
   const missing = (e) => e?.name === 'NoSuchKey' || e?.$metadata?.httpStatusCode === 404;
@@ -80,7 +84,7 @@ export async function awsDeps(cfg = CONFIG) {
     },
   };
   if (cfg.livePull) {
-    const { SecretsManagerClient, GetSecretValueCommand } = await import('@aws-sdk/client-secrets-manager');
+    const { SecretsManagerClient, GetSecretValueCommand } = await load('@aws-sdk/client-secrets-manager');
     const sm = new SecretsManagerClient({ region: cfg.region });
     deps.secret = async (id) => (await sm.send(new GetSecretValueCommand({ SecretId: id }))).SecretString ?? '';
     deps.fetch = globalThis.fetch;
