@@ -60,7 +60,6 @@ export function createSheetsConnect({ loadClient, saveRefreshToken, fetchImpl, n
       scope: SHEETS_SCOPES.join(' '),
       access_type: 'offline',
       prompt: 'consent',
-      include_granted_scopes: 'true',
       state,
     }).toString();
     return { url, state };
