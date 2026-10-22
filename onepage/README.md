@@ -19,7 +19,7 @@ python3 scripts/workspace-data.py --db brain.db --inputs-dir DIR --portal-id N \
   [--prior previous-run/live_deals.json] --out out/workspace.json
 ```
 
-`--inputs-dir` holds any of these files (the sync job copies them from `s3://opstream-gtm-data-080403790510/state/gtm-inputs/<name>`). Each one is optional; a missing one is listed in `meta.inputs` and its part of the page degrades:
+`--inputs-dir` holds any of these files (the sync job copies them from `s3://opstream-gtm-data-<account-id>/state/gtm-inputs/<name>`). Each one is optional; a missing one is listed in `meta.inputs` and its part of the page degrades:
 
 | File | From | Without it |
 |---|---|---|

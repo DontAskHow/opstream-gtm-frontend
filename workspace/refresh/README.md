@@ -1,11 +1,11 @@
 # GTM preview refresh (`gtm-preview-refresh`)
 
-Every 15 minutes this Lambda rebuilds the private preview's `data.js` from the newest published snapshot and uploads it only when the content changed. It calls no AI and no provider API, and it reads no secrets. The sync-only `opstream-gtm-refresh` job publishes the snapshot: it syncs HubSpot, Sheets, GA4, lemlist and Fathom into `s3://opstream-gtm-data-080403790510/published/<runId>/` and moves `published/LATEST.json`.
+Every 15 minutes this Lambda rebuilds the private preview's `data.js` from the newest published snapshot and uploads it only when the content changed. It calls no AI and no provider API, and it reads no secrets. The sync-only `opstream-gtm-refresh` job publishes the snapshot: it syncs HubSpot, Sheets, GA4, lemlist and Fathom into `s3://opstream-gtm-data-<account-id>/published/<runId>/` and moves `published/LATEST.json`.
 
 ```
 EventBridge Scheduler gtm-preview-refresh-15m (rate 15 min, no flex window, 0 retries)
   -> Lambda gtm-preview-refresh (nodejs20.x arm64, 512 MB, 120 s, reserved concurrency 1, async retries 0)
-       read  s3://opstream-gtm-data-080403790510/published/LATEST.json + that run's top-level JSON (read-only)
+       read  s3://opstream-gtm-data-<account-id>/published/LATEST.json + that run's top-level JSON (read-only)
        build workspace/lib/project.mjs buildData(), the same code as workspace/build.mjs
        put   s3://opstream-gtm-preview-db5553a4/data.js       only when sha256(content) changed
        put   s3://opstream-gtm-preview-db5553a4/refresh.json  every successful check
@@ -51,7 +51,7 @@ Distribution `EZQ1E2Y6O6NDG` has one behavior (the default, no additional behavi
 | Action | Resource |
 |---|---|
 | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/gtm-preview-refresh` only (the log group is created by `deploy.sh`, 14-day retention) |
-| `s3:ListBucket` (prefix `published/*`), `s3:GetObject` | `opstream-gtm-data-080403790510/published/*`, read-only |
+| `s3:ListBucket` (prefix `published/*`), `s3:GetObject` | `opstream-gtm-data-<account-id>/published/*`, read-only |
 | `s3:GetObject`, `s3:PutObject` | `opstream-gtm-preview-db5553a4/data.js`, `/refresh.json` and `/_state/hubspot-live.json` only |
 | `s3:PutObject` | `opstream-gtm-preview-db5553a4/workspace.json` only (write-only; no delete) |
 | `s3:ListBucket` | the preview bucket, so a missing `refresh.json` reads as 404 rather than 403 |

@@ -87,19 +87,21 @@ if [ "$ONEPAGE_APP" = 1 ]; then
   ONEPAGE_FILE=$(node "$ROOT/onepage/deploy-check.mjs" --app "$ONEPAGE_APP_DIR") || exit 1
   APP=0
 fi
-ACCOUNT=080403790510
+CALLER=$(aws sts get-caller-identity --query Account --output text)
+# AWS_ACCOUNT_ID, when set, must match the account the credentials are for.
+ACCOUNT=${AWS_ACCOUNT_ID:-$CALLER}
 FN=gtm-preview-refresh
 ROLE=gtm-preview-refresh-role
 SCHED_ROLE=gtm-preview-refresh-scheduler
 SCHEDULE=gtm-preview-refresh-15m
 ALARM=gtm-preview-refresh-errors
 LOG_GROUP=/aws/lambda/$FN
-DATA_BUCKET=opstream-gtm-data-080403790510
+DATA_BUCKET=opstream-gtm-data-$ACCOUNT
 PREVIEW_BUCKET=opstream-gtm-preview-db5553a4
 TOPIC=arn:aws:sns:us-east-2:$ACCOUNT:opstream-gtm-refresh-failures
 FN_ARN=arn:aws:lambda:$AWS_REGION:$ACCOUNT:function:$FN
 
-[ "$(aws sts get-caller-identity --query Account --output text)" = "$ACCOUNT" ] || { echo "wrong AWS account" >&2; exit 1; }
+[ "$CALLER" = "$ACCOUNT" ] || { echo "wrong AWS account" >&2; exit 1; }
 TMP="$(mktemp -d)"
 
 if [ "$LAMBDA_ONLY" != 1 ]; then

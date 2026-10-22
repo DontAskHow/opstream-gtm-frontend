@@ -14,7 +14,7 @@ const envMinutes = (name, dflt) => { const n = Number(process.env[name] ?? ''); 
 
 export const CONFIG = {
   region: process.env.AWS_REGION || 'us-east-2',
-  dataBucket: process.env.DATA_BUCKET || 'opstream-gtm-data-080403790510',
+  dataBucket: process.env.DATA_BUCKET || 'opstream-gtm-data-{accountId}',
   latestKey: 'published/LATEST.json',
   previewBucket: process.env.PREVIEW_BUCKET || 'opstream-gtm-preview-db5553a4',
   dataKey: 'data.js',
@@ -27,7 +27,7 @@ export const CONFIG = {
   // refresh.json `failing` gets workspace-stale / fresh-stale past these (workspace-json.mjs STALE).
   workspaceStaleMinutes: envMinutes('WORKSPACE_STALE_MIN', WORKSPACE_STALE_MINUTES),
   freshStaleMinutes: envMinutes('FRESH_STALE_MIN', FRESH_STALE_MINUTES),
-  topicArn: process.env.TOPIC_ARN || 'arn:aws:sns:us-east-2:080403790510:opstream-gtm-refresh-failures',
+  topicArn: process.env.TOPIC_ARN || 'arn:aws:sns:us-east-2:{accountId}:opstream-gtm-refresh-failures',
   // The sync job publishes every 15 minutes; an older pointer than this alarms.
   staleMinutes: Number(process.env.SNAPSHOT_STALE_MINUTES || 60),
   maxSnapshotFileBytes: 5e6,
@@ -37,6 +37,16 @@ export const CONFIG = {
   hubspotCacheKey: '_state/hubspot-live.json',
   secrets: { hubspot: 'opstream-gtm/hubspot-oauth', lemlist: 'opstream-gtm/lemlist-token', fathom: 'opstream-gtm/fathom-token' },
 };
+
+// Fills {accountId} in the bucket and topic defaults from the invoked function's ARN
+// (arn:aws:lambda:<region>:<account>:function:<name>).
+export function configFor(context, cfg = CONFIG) {
+  if (![cfg.dataBucket, cfg.topicArn].some((v) => String(v).includes('{accountId}'))) return cfg;
+  const account = String(context?.invokedFunctionArn ?? '').split(':')[4] ?? '';
+  if (!/^\d{12}$/.test(account)) throw new Error('no account id in context.invokedFunctionArn');
+  const fill = (v) => String(v).replace('{accountId}', account);
+  return { ...cfg, dataBucket: fill(cfg.dataBucket), topicArn: fill(cfg.topicArn) };
+}
 
 // AWS SDK v3 ships with the nodejs20.x runtime; loaded lazily so tests run without it.
 export async function awsDeps(cfg = CONFIG) {
@@ -241,14 +251,15 @@ export async function refresh(deps, { cfg = CONFIG, now = () => new Date(), log 
 
 // Event {"dryRun": true}: read everything, write nothing, publish nothing.
 // Any error: alarm, then rethrow so the invocation fails (Errors metric -> CloudWatch alarm).
-export async function handler(event = {}) {
+export async function handler(event = {}, context = {}) {
   let deps;
   try {
-    deps = await awsDeps();
+    const cfg = configFor(context);
+    deps = await awsDeps(cfg);
     if (event?.dryRun === true) {
-      return { dryRun: true, ...(await refresh({ ...deps, put: async () => {}, notify: async () => {} })) };
+      return { dryRun: true, ...(await refresh({ ...deps, put: async () => {}, notify: async () => {} }, { cfg })) };
     }
-    return await refresh(deps);
+    return await refresh(deps, { cfg });
   } catch (e) {
     console.error('gtm-preview-refresh failed:', errText(e));
     try { await deps?.notify('GTM preview refresh FAILED', `The refresh did not complete; the preview still serves the previous data.js.\n${errText(e)}`); } catch (n) { console.error('SNS publish failed:', errText(n)); }
