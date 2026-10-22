@@ -305,8 +305,8 @@ def google_access_token(scopes=None, credentials_cls=None, request=None) -> str:
     """Access token for the owner's Google account.
 
     Reads opstream-gtm/google-sheets-refresh-token plus the OAuth client id
-    and secret. There is no service account. A missing secret or a rejected
-    refresh raises NeedsConnection without the token or the provider error.
+    and secret. There is no service account. A missing secret, rejected refresh,
+    or unverified grant raises NeedsConnection without token or provider detail.
     """
     scope_list = tuple(scopes or GOOGLE_USER_SCOPES)
     cache_key = ("google-user", " ".join(scope_list))
@@ -328,6 +328,11 @@ def google_access_token(scopes=None, credentials_cls=None, request=None) -> str:
             scopes=list(scope_list),
         )
         creds.refresh(request if request is not None else _StdlibRequest())
+        granted_scopes = getattr(creds, "granted_scopes", None)
+        if not granted_scopes or not frozenset(granted_scopes).issubset(GOOGLE_USER_SCOPES):
+            raise NeedsConnection(
+                "Google connection needs reconnecting. Not touching watermarks."
+            )
     except NeedsConnection:
         raise
     except Exception:
