@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import https from 'node:https';
+import { EventEmitter } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -22,7 +24,7 @@ test('no tracked file carries a 12-digit account id', () => {
     const file = path.join(root, rel);
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
     const text = fs.readFileSync(file, 'utf8');
-    for (const m of text.matchAll(/(?<![\d.])\d{12}(?!\d)/g)) if (m[0] !== SYNTHETIC) hits.push(rel);
+    for (const m of text.matchAll(/(?<![\d.-])\d{12}(?!\d)/g)) if (m[0] !== SYNTHETIC) hits.push(rel);
   }
   assert.deepEqual([...new Set(hits)], []);
 });
@@ -99,4 +101,202 @@ test('deploy script takes AWS_ACCOUNT_ID over STS', () => {
 test('deploy script stops when STS fails', () => {
   const bin = fakeAws('exit 254');
   assert.throws(() => deployBucket({ PATH: bin + ':' + process.env.PATH }), /Command failed/);
+});
+
+// ---- wiring: the resolved name is what the live S3 calls use ----
+
+test('Python S3Store sends the resolved bucket on every S3 call', () => {
+  const py = String.raw`
+import json, sys, types
+calls = []
+class NoSuchKey(Exception): pass
+class FakeS3:
+    exceptions = types.SimpleNamespace(NoSuchKey=NoSuchKey)
+    def __getattr__(self, op):
+        def call(*args, **kwargs):
+            calls.append([op, kwargs.get("Bucket", args[1] if len(args) > 1 else None)])
+            if op == "get_object": return {"Body": types.SimpleNamespace(read=lambda: b"x")}
+            if op == "list_objects_v2": return {"Contents": [{"Key": "published/a"}], "IsTruncated": False}
+            return {}
+        return call
+class FakeSTS:
+    def get_caller_identity(self):
+        calls.append(["sts", None]); return {"Account": "123456789012"}
+clients = []
+def client(name, region_name=None):
+    clients.append([name, region_name])
+    return {"s3": FakeS3(), "sts": FakeSTS(), "secretsmanager": object()}[name]
+sys.modules["boto3"] = types.SimpleNamespace(client=client)
+sys.path.insert(0, "refresh")
+import run
+store = run.S3Store("opstream-gtm-data-{accountId}", "us-east-2")
+store.get_bytes("k"); store.put_bytes("k", b"x"); store.put_file("k", "/dev/null")
+store.exists("k"); store.list_keys("published/"); store.delete("k")
+print(json.dumps({"bucket": store.bucket, "calls": calls, "clients": clients}))
+`;
+  const out = JSON.parse(execFileSync('python3', ['-c', py], { cwd: root, encoding: 'utf8' }));
+  const bucket = 'opstream-gtm-data-' + SYNTHETIC;
+  assert.equal(out.bucket, bucket);
+  assert.deepEqual(out.calls, [['sts', null], ['get_object', bucket], ['put_object', bucket], ['upload_file', bucket],
+    ['head_object', bucket], ['list_objects_v2', bucket], ['delete_object', bucket]]);
+  assert.deepEqual(out.clients, [['sts', 'us-east-2'], ['s3', 'us-east-2'], ['secretsmanager', 'us-east-2']]);
+});
+
+// A fresh copy of published-swap.mjs, so its cached account id does not leak between tests.
+let fresh = 0;
+const freshSwap = () => import('../scripts/published-swap.mjs?fresh=' + ++fresh);
+
+function mockImds(t, { accountId = SYNTHETIC, document } = {}) {
+  const seen = [];
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    const u = String(url);
+    seen.push({ url: u, signal: init.signal });
+    if (u.endsWith('/latest/api/token')) return new Response('tok');
+    if (u.endsWith('/latest/meta-data/iam/security-credentials/')) return new Response('eb-role\n');
+    if (u.endsWith('/latest/meta-data/iam/security-credentials/eb-role')) return Response.json({ AccessKeyId: 'AKIDEXAMPLE', SecretAccessKey: 'secret', Token: 'session' });
+    if (u.endsWith('/latest/dynamic/instance-identity/document')) return document ? document(init) : Response.json({ accountId, region: 'us-east-2' });
+    throw new Error('unexpected fetch ' + u);
+  });
+  return seen;
+}
+
+function mockS3(t, body = 'state-body') {
+  const requests = [];
+  t.mock.method(https, 'request', (opts, onRes) => {
+    const req = new EventEmitter();
+    const chunks = [];
+    req.write = (c) => chunks.push(Buffer.from(c));
+    req.end = () => {
+      requests.push({ method: opts.method, host: opts.host, path: opts.path, hostHeader: opts.headers.host, body: Buffer.concat(chunks).toString() });
+      const res = new EventEmitter();
+      res.statusCode = 200;
+      onRes(res);
+      res.emit('data', Buffer.from(opts.method === 'GET' ? body : ''));
+      res.emit('end');
+    };
+    return req;
+  });
+  return requests;
+}
+
+test('readStateFile and persistStateFile GET and PUT on the resolved bucket host', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const before = process.env.REFRESH_FS_ROOT;
+  delete process.env.REFRESH_FS_ROOT;
+  t.after(() => { if (before !== undefined) process.env.REFRESH_FS_ROOT = before; });
+  mockImds(t);
+  const requests = mockS3(t);
+  const { readStateFile, persistStateFile } = await freshSwap();
+  assert.equal(await readStateFile(root, 'users/h/brief.json'), 'state-body');
+  await persistStateFile(root, 'users/h/sends.json', '{"n":1}');
+  const host = 'opstream-gtm-data-' + SYNTHETIC + '.s3.us-east-2.amazonaws.com';
+  assert.deepEqual(requests, [
+    { method: 'GET', host, path: '/state/users/h/brief.json', hostHeader: host, body: '' },
+    { method: 'PUT', host, path: '/state/users/h/sends.json', hostHeader: host, body: '{"n":1}' },
+  ]);
+});
+
+test('an IMDS account id that is not 12 digits is refused, nothing goes to S3, and the next call retries', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const before = process.env.REFRESH_FS_ROOT;
+  delete process.env.REFRESH_FS_ROOT;
+  t.after(() => { if (before !== undefined) process.env.REFRESH_FS_ROOT = before; });
+  const requests = mockS3(t);
+  const swap = await freshSwap();
+  for (const bad of ['12345678901', '1234567890123', 'abcdefghijkl', '', null]) {
+    mockImds(t, { accountId: bad });
+    await assert.rejects(swap.dataBucket(config), /imds account id/, String(bad));
+    assert.equal(await swap.readStateFile(root, 'x.json'), null);
+    await swap.persistStateFile(root, 'x.json', 'y');
+  }
+  assert.deepEqual(requests, []);
+  mockImds(t);
+  assert.equal(await swap.dataBucket(config), 'opstream-gtm-data-' + SYNTHETIC);
+});
+
+test('the IMDS identity-document request times out instead of hanging', { timeout: 5000 }, async (t) => {
+  const seen = mockImds(t, {
+    document: (init) => new Promise((_, reject) => {
+      if (!init.signal) return; // no timeout: hangs, and the test's own 5 s timeout fails it
+      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+    }),
+  });
+  // AbortSignal.timeout does not hold the event loop open; the server's listener does in production.
+  const alive = setTimeout(() => {}, 4500);
+  t.after(() => clearTimeout(alive));
+  const { dataBucket: freshDataBucket } = await freshSwap();
+  const started = Date.now();
+  await assert.rejects(freshDataBucket(config), (e) => e.name === 'TimeoutError');
+  assert.ok(Date.now() - started < 2000, 'gave up within 2 s');
+  assert.ok(seen.find((s) => s.url.endsWith('/instance-identity/document')).signal instanceof AbortSignal);
+});
+
+// ---- the CloudFormation template ----
+
+// Every scalar in the template with the mapping keys above it. Enough YAML for this file:
+// block mappings and sequences, "- " items, quoted scalars, block scalars (skipped), CFN short tags.
+function templateScalars(text) {
+  const out = [];
+  const stack = [];
+  let block = null;
+  text.split('\n').forEach((line, i) => {
+    const indentOf = (l) => l.length - l.trimStart().length;
+    if (block !== null) {
+      if (!line.trim() || indentOf(line) > block) return;
+      block = null;
+    }
+    let rest = line.trim();
+    if (!rest || rest.startsWith('#')) return;
+    let indent = indentOf(line);
+    while (rest.startsWith('- ')) { rest = rest.slice(2).trimStart(); indent += 2; }
+    while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+    const kv = /^([^\s{["'!][^\s]*?):(?: +(.*))?$/.exec(rest);
+    let value = rest;
+    if (kv) {
+      stack.push({ indent, key: kv[1] });
+      value = kv[2] ?? '';
+      if (value === '|' || value === '>') { block = indent; return; }
+      if (!value) return;
+    }
+    const sub = /^!Sub\s+/.test(value);
+    const raw = value.replace(/^!Sub\s+/, '').replace(/^"(.*)"$/, '$1');
+    out.push({ line: i + 1, path: stack.map((s) => s.key), sub, raw });
+  });
+  return out;
+}
+
+const fillPseudo = (s) => s.replaceAll('${AWS::AccountId}', SYNTHETIC).replaceAll('${AWS::Region}', 'us-east-2');
+const TEMPLATE = fs.readFileSync(path.join(root, 'infra/gtm-refresh.yaml'), 'utf8');
+const NAMED = /opstream-gtm-data-|arn:aws:secretsmanager|arn:aws:s3:::/;
+
+test('template: every S3 and Secrets Manager ARN and the CodeBuild source, filled with the synthetic account', () => {
+  const B = 'arn:aws:s3:::opstream-gtm-data-123456789012';
+  const S = 'arn:aws:secretsmanager:us-east-2:123456789012:secret:opstream-gtm/';
+  const found = templateScalars(TEMPLATE)
+    .filter((s) => s.path[0] !== 'Parameters' && NAMED.test(s.raw))
+    .map((s) => [s.path[1], s.path.at(-1), s.sub ? fillPseudo(s.raw) : 'NOT !Sub: ' + s.raw]);
+  assert.deepEqual(found, [
+    ['TaskRole', 'Resource', B],
+    ['TaskRole', 'Resource', B + '/*'],
+    ['TaskRole', 'Resource', S + '*'],
+    ['TaskRole', 'Resource', S + 'hubspot-oauth-*'],
+    ['BeanstalkReadPolicy', 'Resource', B + '/published/*'],
+    ['BeanstalkReadPolicy', 'Resource', B],
+    ['BeanstalkReadPolicy', 'Resource', B + '/state/*'],
+    ['BeanstalkReadPolicy', 'Resource', S + 'google-oauth-client-id-*'],
+    ['BeanstalkReadPolicy', 'Resource', S + 'google-oauth-client-secret-*'],
+    ['BeanstalkReadPolicy', 'Resource', S + 'google-sheets-refresh-token-*'],
+    ['BeanstalkReadPolicy', 'Resource', S + 'users/*'],
+    ['CodeBuildRole', 'Resource', B + '/code/refresh-src/*'],
+    ['RefreshBuild', 'Location', 'opstream-gtm-data-123456789012/${SourceKey}'],
+  ]);
+});
+
+test('template: no bucket or secret name outside !Sub, and no literal account or region inside one', () => {
+  const named = templateScalars(TEMPLATE).filter((s) => NAMED.test(s.raw));
+  const outside = named.filter((s) => !s.sub && !(s.path[0] === 'Parameters' && s.path.at(-1) === 'Description'));
+  assert.deepEqual(outside.map((s) => s.line + ': ' + s.raw), []);
+  const literal = named.filter((s) => s.sub && (/\d{12}/.test(s.raw) || /:us-east-2:|:us-[a-z]+-\d:/.test(s.raw) || /^arn:aws:secretsmanager::/.test(s.raw)));
+  assert.deepEqual(literal.map((s) => s.line + ': ' + s.raw), []);
+  for (const s of named.filter((x) => x.raw.startsWith('arn:aws:secretsmanager'))) assert.ok(s.raw.startsWith('arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:'), s.line + ': ' + s.raw);
 });
