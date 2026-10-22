@@ -4,7 +4,7 @@
     "about": "When a sync_outcomes row or a data.times value inside the published snapshot is too old, the preview refresh (workspace/refresh/compose.mjs problems()) alarms source-stale:<source> or time-stale:<key>, even when the snapshot itself is on time. Minutes since lastOkAt: defaultMinutes for any row not under sources (the sync job runs every 15 minutes); a row that never succeeded (no lastOkAt) is stale. exempt rows never go stale. times lists the only data.times keys with a limit. Rules only, no data.",
     "defaultMinutes": 60,
     "sources": { "ga4": 180, "otterly": 780 },
-    "exempt": ["hubspot_meeting_backfill"],
+    "exempt": ["hubspot_contact_backfill", "hubspot_meeting_backfill"],
     "times": { "ai": 780, "brief": 780 }
   },
   "auth": {

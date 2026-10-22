@@ -337,12 +337,12 @@ test('problems: a source past its staleness limit alarms even when the snapshot 
 test('problems: sources within their limits, and an exempt old backfill, report nothing', () => {
   assert.deepEqual(onTime({
     'sources.hubspot.lastOkAt': ago(10), 'sources.sheets.lastOkAt': ago(59), 'sources.ga4.lastOkAt': ago(170), 'sources.otterly.lastOkAt': ago(720),
-    'sources.hubspot_meeting_backfill.lastOkAt': ago(30 * 1440), 'times.ai': ago(720), 'times.brief': ago(720), 'times.records': ago(2 * 1440), 'times.web': null,
+    'sources.hubspot_meeting_backfill.lastOkAt': ago(30 * 1440), 'sources.hubspot_contact_backfill.lastOkAt': ago(30 * 1440), 'times.ai': ago(720), 'times.brief': ago(720), 'times.records': ago(2 * 1440), 'times.web': null,
   }), []);
 });
 
 test('staleness rules: read from config/freshness-sources.json; a bad rule throws', () => {
-  assert.deepEqual(CONFIG.sourceLimits, { defaultMinutes: 60, sources: { ga4: 180, otterly: 780 }, exempt: ['hubspot_meeting_backfill'], times: { ai: 780, brief: 780 } });
+  assert.deepEqual(CONFIG.sourceLimits, { defaultMinutes: 60, sources: { ga4: 180, otterly: 780 }, exempt: ['hubspot_contact_backfill', 'hubspot_meeting_backfill'], times: { ai: 780, brief: 780 } });
   const rules = (over) => composeModule.stalenessRules({ defaultMinutes: 60, sources: {}, exempt: [], times: {}, ...over });
   assert.throws(() => rules({ defaultMinutes: 'sixty' }), /defaultMinutes/);
   assert.throws(() => rules({ sources: { ga4: -1 } }), /ga4/);
@@ -401,6 +401,13 @@ test('auth: a rejected credential adds one auth:<provider> id next to the stale 
   ]), ['source-stale:ga4', 'source-stale:source-a_leads', 'auth:google', 'auth:source-a']);
   // A token endpoint's 400 is OAuth's invalid_grant answer.
   assert.deepEqual(withRows([row('sheets', 120, { detail: 'NeedsConnection: Google token endpoint returned HTTP 400' })]), ['source-stale:sheets', 'auth:google']);
+  // Only the invalid_grant pattern catches this one.
+  assert.deepEqual(withRows([row('sheets', 120, { detail: "RefreshError: ('invalid_grant: Bad Request', {'error': 'invalid_grant', 'error_description': 'Bad Request'})" })]), ['source-stale:sheets', 'auth:google']);
+  // auth ids are sorted by provider, whatever the row order.
+  assert.deepEqual(withRows([
+    row('source-a_leads', 20, { route: 'GET /v1/leads', http: 403, detail: 'SourceRefused: api.source-a.example GET /v1/leads answered HTTP 403' }),
+    row('ga4', 20, { http: 401, detail: 'SourceRefused: analyticsdata.googleapis.com answered HTTP 401' }),
+  ]), ['auth:google', 'auth:source-a']);
   // The credential id does not wait for the data to go stale.
   assert.deepEqual(withRows([row('sheets', 20, { detail: 'NeedsConnection: Google Sheets returned 403. Not touching watermarks.' })]), ['auth:google']);
 });
@@ -412,9 +419,10 @@ test('auth: stale data, a timeout, a 5xx or another 4xx gives no auth id', () =>
     row('source-a', 90, { route: 'GET /v1/items', http: 503, detail: 'SourceError: api.source-a.example GET /v1/items answered HTTP 503: unavailable' }),
     row('source-b', 90, { route: 'GET /v1/items', http: 400, detail: 'SourceError: api.source-b.example GET /v1/items answered HTTP 400: bad paging' }),
     row('source-c', 90, { detail: 'skipped: quota' }),
+    row('source-e', 90, { route: 'GET /v1/items', http: 429, detail: 'SourceError: api.source-e.example GET /v1/items answered HTTP 429: rate limit exceeded' }),
     // An ok row's detail is a success summary, whatever it says.
     { ...row('source-d', 10), http: 401, detail: 'ok after one retry (the first try answered HTTP 401 and the token was refreshed)' },
-  ]), ['source-stale:ga4', 'source-stale:sheets', 'source-stale:source-a', 'source-stale:source-b', 'source-stale:source-c']);
+  ]), ['source-stale:ga4', 'source-stale:sheets', 'source-stale:source-a', 'source-stale:source-b', 'source-stale:source-c', 'source-stale:source-e']);
 });
 
 test('auth rules: read from config/freshness-sources.json; a bad rule throws', () => {
