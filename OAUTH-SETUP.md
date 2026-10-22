@@ -2,7 +2,7 @@
 
 The dashboard uses the OAuth client already stored as `opstream-gtm/google-oauth-client-id` and `opstream-gtm/google-oauth-client-secret` in project `opstream-marketing-dashboard`. The callback stays `/api/gmail/oauth/callback`. Do not add a second redirect path. Sign-in uses a `user:` state and requests every scope below in that one consent, including `gmail.send` and `gmail.compose`. Sheets consent keeps using a `sheets:` state.
 
-The assistant can prepare a ready-to-send email. Gmail sends only when the signed-in user clicks Send on that specific draft and confirms the recipients and subject. The message is sent from that user's own Gmail. The assistant has no send tool. There is no scheduled send and no bulk send. Each send is logged (time, from, to, subject, Gmail message id; not the body) to `s3://opstream-gtm-data-080403790510/state/users/<hash>/sends.json` and listed in that user's profile menu.
+The assistant can prepare a ready-to-send email. Gmail sends only when the signed-in user clicks Send on that specific draft and confirms the recipients and subject. The message is sent from that user's own Gmail. The assistant has no send tool. There is no scheduled send and no bulk send. Each send is logged (time, from, to, subject, Gmail message id; not the body) to `s3://opstream-gtm-data-<account-id>/state/users/<hash>/sends.json` and listed in that user's profile menu.
 
 This repository does not record the consent screen's Publishing status. `refresh/README.md` only describes the Sheets scopes (`spreadsheets.readonly`, `drive.metadata.readonly`, `analytics.readonly`, plus `openid` and `userinfo.email`). v10 also asks for Gmail, Calendar, and Drive scopes.
 
@@ -45,4 +45,4 @@ In the Opstream Google Workspace admin console:
 2. Trust the OAuth client whose id is the value of `opstream-gtm/google-oauth-client-id`, or add it as an approved app, so `@opstream.ai` users are not blocked as an unconfigured third-party app.
 3. If the admin later switches this client to **Internal**, remove `zackkaufman39@gmail.com` from `googleAllow` or give that account a user in the Workspace. Internal apps cannot sign in a consumer Gmail account.
 
-No new server is required. Sign-in runs on the existing Elastic Beanstalk environment `opstream-gtm-prod` in `us-east-2`. The 6-hour Fargate refresh reads the same per-user secrets and writes each brief to `s3://opstream-gtm-data-080403790510/state/users/<hash>/brief.json`.
+No new server is required. Sign-in runs on the existing Elastic Beanstalk environment `opstream-gtm-prod` in `us-east-2`. The 6-hour Fargate refresh reads the same per-user secrets and writes each brief to `s3://opstream-gtm-data-<account-id>/state/users/<hash>/brief.json`.

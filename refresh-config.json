@@ -1,5 +1,5 @@
 {
-  "dataBucket": "opstream-gtm-data-080403790510",
+  "dataBucket": "opstream-gtm-data-{accountId}",
   "region": "us-east-2",
   "publishedPrefix": "published",
   "statePrefix": "state",
