@@ -5,6 +5,10 @@ Parameters:
   ImageTag:
     Type: String
     Default: latest
+  TaskImageTag:
+    Type: String
+    Default: ""
+    Description: Image tag the scheduled task runs. Empty means ImageTag. Set it to roll the task to an already built image without changing what CodeBuild tags.
   SourceKey:
     Type: String
     Default: code/refresh-src/v14.zip
@@ -15,6 +19,9 @@ Parameters:
   PublicSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Description: Public subnets in the default VPC, one per AZ you want
+
+Conditions:
+  TaskUsesImageTag: !Equals [!Ref TaskImageTag, ""]
 
 Resources:
   Repository:
@@ -106,7 +113,10 @@ Resources:
       TaskRoleArn: !GetAtt TaskRole.Arn
       ContainerDefinitions:
         - Name: refresh
-          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/opstream-gtm-refresh:${ImageTag}"
+          Image: !If
+            - TaskUsesImageTag
+            - !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/opstream-gtm-refresh:${ImageTag}"
+            - !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/opstream-gtm-refresh:${TaskImageTag}"
           Essential: true
           LogConfiguration:
             LogDriver: awslogs
@@ -145,6 +155,33 @@ Resources:
         - Id: notify
           Arn: !Ref FailureTopic
 
+  # Scheduled runs that cannot start (denied, throttled, bad target) land here instead of vanishing.
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: opstream-gtm-refresh-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: opstream-gtm-refresh-dlq-not-empty
+      AlarmDescription: A scheduled refresh run could not start; see the message in opstream-gtm-refresh-dlq.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref FailureTopic
+
   SchedulerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -161,9 +198,13 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # The whole family, so a new revision never silently drops the scheduled run.
               - Effect: Allow
                 Action: ecs:RunTask
-                Resource: !Ref TaskDefinition
+                Resource: !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/opstream-gtm-refresh:*"
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt DeadLetterQueue.Arn
               - Effect: Allow
                 Action: iam:PassRole
                 Resource:
@@ -182,6 +223,8 @@ Resources:
       Target:
         Arn: !GetAtt Cluster.Arn
         RoleArn: !GetAtt SchedulerRole.Arn
+        DeadLetterConfig:
+          Arn: !GetAtt DeadLetterQueue.Arn
         EcsParameters:
           TaskDefinitionArn: !Ref TaskDefinition
           LaunchType: FARGATE
@@ -324,3 +367,5 @@ Outputs:
     Value: !Ref TaskSecurityGroup
   ClusterName:
     Value: !Ref Cluster
+  DeadLetterQueueUrl:
+    Value: !Ref DeadLetterQueue
