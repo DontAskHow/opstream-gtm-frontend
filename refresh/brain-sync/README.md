@@ -25,7 +25,7 @@ exits non-zero **without touching watermarks**.
 | `sheets_sync.py` | Google Sheets | n/a (full re-pull) | Re-pulls the tracked spreadsheets, all tabs, with the owner's refresh token; read-only `spreadsheets.get` and `values.batchGet`; per-spreadsheet replace |
 | `lemlist_sync.py` | Lemlist | n/a (full campaign refresh) | `GET /api/campaigns`, then `GET /api/v2/campaigns/{id}/stats` with Basic auth; each campaign records the stats route and HTTP status |
 | `ga4_sync.py` | GA4 property 304508954 | n/a (re-runs 30d report) | sessions / totalUsers / screenPageViews |
-| `otterly_sync.py` | Otterly | n/a (all brand reports) | `https://data.otterly.ai/v1`: `accounts/info` first (**quota-gated**: skips if more than 50% of the period's API requests are used or usage is unknown), then `workspaces`, `reports/brand`, `reports/brand/{id}/stats` (last 30 days, the report's first country) and `reports/brand/{id}/prompts` |
+| `otterly_sync.py` | Otterly | n/a (all brand reports) | `https://data.otterly.ai/v1`: `accounts/info` first (**quota-gated**: skips if more than 75% of the period's API requests are used or usage is unknown), then `workspaces`, `reports/brand`, `reports/brand/{id}/stats` (last 30 days, the report's first country) and `reports/brand/{id}/prompts` |
 
 ## Credentials
 

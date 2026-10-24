@@ -15,7 +15,7 @@ spec at data.otterly.ai/v1/openapi.json). Bearer auth. Read-only.
 The prompts list is optional: when it fails, the report's stats still publish
 and the failure is kept on the report and in the sync note.
 
-Quota rule: check API usage first. Over 50% of the period's requests used, or
+Quota rule: check API usage first. Over 75% of the period's requests used, or
 usage unknown, skips the refresh (recorded, not an error).
 
 Auth: Secrets Manager opstream-gtm/otterly-token, sent only to data.otterly.ai.
@@ -41,7 +41,7 @@ HOST = "data.otterly.ai"
 BASE = "https://data.otterly.ai/v1"
 ALLOWED_HOSTS = [HOST]
 CONNECTORS = ["custom.otterly", "otterly"]
-QUOTA_THRESHOLD = 0.50
+QUOTA_THRESHOLD = 0.75
 STATS_DAYS = 30
 MAX_PAGES = 20
 PROMPT_PAGE = 50
