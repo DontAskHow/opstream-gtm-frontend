@@ -540,11 +540,9 @@ class Fresh(unittest.TestCase):
         self.assertEqual(out['scope']['total'], 2)
 
 
-class SourceOverrides(unittest.TestCase):
-    """source-overrides.json: human source rulings per deal and lead. The provenance text never reaches the output."""
-    PROVENANCE = 'Ruled by Quinn Example on a synthetic call'  # synthetic; stands in for a staff name
-    DOC = {'deals': {'d1': {'source': 'Customer referral', 'paid': False, 'provenance': PROVENANCE}},
-           'leads': {'L2': {'source': 'Customer referral', 'provenance': PROVENANCE}}}
+class SyntheticBuild:
+    """A two-lead brain.db (Alpha Synthetic: company c1, Lead Tracker row 2; Beta Synthetic: c2, row 3), both paid
+    Google until a ruling says otherwise, and a build over it."""
 
     def setUp(self):
         import tempfile
@@ -561,6 +559,65 @@ class SourceOverrides(unittest.TestCase):
             f.write(doc if isinstance(doc, str) else json.dumps(doc))
         return path
 
+    def brain(self, extra_rows=(), inserted=()):
+        import sqlite3
+        db = os.path.join(self.dir, 'brain.db')
+        if os.path.exists(db):
+            os.unlink(db)
+        con = sqlite3.connect(db)
+        con.executescript("""
+            CREATE TABLE hubspot_objects (object_type TEXT, hs_id TEXT, properties_json TEXT, fetched_at TEXT);
+            CREATE TABLE hubspot_associations (from_type TEXT, from_id TEXT, to_type TEXT, to_id TEXT);
+            CREATE TABLE hubspot_pipelines (pipeline_id TEXT, stage_id TEXT, stage_label TEXT, pipeline_label TEXT,
+                                            display_order INTEGER, is_closed INTEGER, probability TEXT);
+            CREATE TABLE sheets_data (spreadsheet_title TEXT, tab TEXT, row_num INTEGER, row_json TEXT);
+            CREATE TABLE lemlist_campaigns (campaign_id TEXT, name TEXT, status TEXT, raw_json TEXT);""")
+        sales = wd.SCOPE['salesPipelineId']
+        con.execute('INSERT INTO hubspot_pipelines VALUES (?,?,?,?,?,?,?)', (sales, 's1', 'SQL', 'Sales Pipeline', 0, 0, '0.1'))
+        obj = lambda kind, i, props: con.execute('INSERT INTO hubspot_objects VALUES (?,?,?,?)', (kind, i, json.dumps(props), ''))
+        link = lambda a, i, b, j: con.execute('INSERT INTO hubspot_associations VALUES (?,?,?,?)', (a, i, b, j))
+        for n, (co, name) in enumerate([('c1', 'Alpha Synthetic'), ('c2', 'Beta Synthetic')], start=1):
+            obj('companies', co, {'name': name, 'domain': 'co%d.example' % n, 'lifecyclestage': 'opportunity'})
+            obj('deals', 'd%d' % n, {'dealname': name + ' - New', 'pipeline': sales, 'dealstage': 's1', 'amount': '1000',
+                                     'createdate': '2026-09-01T00:00:00Z'})
+            link('deals', 'd%d' % n, 'companies', co)
+            # A Google click id: both deals (and both leads) are paid Google until a ruling says otherwise.
+            obj('contacts', 'k%d' % n, {'email': 'k%d@co%d.example' % (n, n), 'createdate': '2026-08-01T00:00:00Z',
+                                        'hs_google_click_id': 'synthetic-click'})
+            link('contacts', 'k%d' % n, 'companies', co)
+            link('deals', 'd%d' % n, 'contacts', 'k%d' % n)
+        for n, row in enumerate([['Company', 'Source', 'Owner', 'Lead Date', 'HubSpot Company ID', 'Company Domain'], *inserted,
+                                 ['Alpha Synthetic', 'Paid', 'Alex', '09/01/2026', 'c1', 'co1.example'],
+                                 ['Beta Synthetic', 'Paid', 'Alex', '09/02/2026', 'c2', 'co2.example'], *extra_rows], start=1):
+            con.execute('INSERT INTO sheets_data VALUES (?,?,?,?)', ('Synthetic Sheet', 'Lead Tracker', n, json.dumps(row)))
+        con.commit()
+        con.close()
+        return db
+
+    def build(self, overrides=None, review=None, extra_rows=(), inserted=()):
+        self.write('lead-sources.json', {'sheet': {'tab': 'Lead Tracker (Synthetic Sheet)'}, 'ads': {
+            'platforms': ['Google Ads', 'LinkedIn Ads'],
+            'paid_leads': [{'company': 'Alpha Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-01'},
+                           {'company': 'Beta Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-02'}]}})
+        if overrides is not None:
+            self.write('source-overrides.json', overrides)
+        if review is not None:
+            self.write('lead-source-review.csv', review)
+        args = wd.argparse.Namespace(db=self.brain(extra_rows, inserted), inputs_dir=self.dir, lead_sources=None, lost_reasons=None, insights=None,
+                                     lead_insights=None, prior=None, current_page=None, portal_id=None, as_of='2026-10-13T16:00:00Z',
+                                     call_classification=None, review_list=None, paid_export=None, scrub_patterns_file=None,
+                                     source_overrides=None, out=None, quiet=True)
+        from unittest import mock
+        with mock.patch.dict(os.environ, {'WORKSPACE_SCRUB_PATTERNS': PAT}):
+            return wd.build(args, warn=self.warnings.append)
+
+
+class SourceOverrides(SyntheticBuild, unittest.TestCase):
+    """source-overrides.json: human source rulings per deal and lead. The provenance text never reaches the output."""
+    PROVENANCE = 'Ruled by Quinn Example on a synthetic call'  # synthetic; stands in for a staff name
+    DOC = {'deals': {'d1': {'source': 'Customer referral', 'paid': False, 'provenance': PROVENANCE}},
+           'leads': {'c1': {'source': 'Customer referral', 'provenance': PROVENANCE}}}  # Alpha Synthetic's company
+
     def load(self, doc):
         return wd.load_source_overrides(self.write('source-overrides.json', doc), self.warnings.append)
 
@@ -568,7 +625,7 @@ class SourceOverrides(unittest.TestCase):
         out, ok = self.load(self.DOC)
         self.assertTrue(ok)
         self.assertEqual(out, {'deals': {'d1': {'source': 'Customer referral', 'paid': False}},
-                               'leads': {'L2': {'source': 'Customer referral'}}})
+                               'leads': {'c1': {'source': 'Customer referral'}}})
         self.assertEqual(self.warnings, [])
 
     def test_loader_missing_or_invalid_warns_and_applies_nothing(self):
@@ -596,54 +653,6 @@ class SourceOverrides(unittest.TestCase):
         self.assertEqual([r['id'] for r in view['sales']], ['d2'])
         self.assertEqual((view['total'], view['byPlatform'], view['branded'], view['companyLevel']), (1, {'Google Ads': 1}, 1, 1))
         self.assertEqual((deals[0]['sourceOverride'], 'sourceOverride' in deals[1]), ('Customer referral', False))
-
-    def brain(self):
-        import sqlite3
-        db = os.path.join(self.dir, 'brain.db')
-        con = sqlite3.connect(db)
-        con.executescript("""
-            CREATE TABLE hubspot_objects (object_type TEXT, hs_id TEXT, properties_json TEXT, fetched_at TEXT);
-            CREATE TABLE hubspot_associations (from_type TEXT, from_id TEXT, to_type TEXT, to_id TEXT);
-            CREATE TABLE hubspot_pipelines (pipeline_id TEXT, stage_id TEXT, stage_label TEXT, pipeline_label TEXT,
-                                            display_order INTEGER, is_closed INTEGER, probability TEXT);
-            CREATE TABLE sheets_data (spreadsheet_title TEXT, tab TEXT, row_num INTEGER, row_json TEXT);
-            CREATE TABLE lemlist_campaigns (campaign_id TEXT, name TEXT, status TEXT, raw_json TEXT);""")
-        sales = wd.SCOPE['salesPipelineId']
-        con.execute('INSERT INTO hubspot_pipelines VALUES (?,?,?,?,?,?,?)', (sales, 's1', 'SQL', 'Sales Pipeline', 0, 0, '0.1'))
-        obj = lambda kind, i, props: con.execute('INSERT INTO hubspot_objects VALUES (?,?,?,?)', (kind, i, json.dumps(props), ''))
-        link = lambda a, i, b, j: con.execute('INSERT INTO hubspot_associations VALUES (?,?,?,?)', (a, i, b, j))
-        for n, (co, name) in enumerate([('c1', 'Alpha Synthetic'), ('c2', 'Beta Synthetic')], start=1):
-            obj('companies', co, {'name': name, 'domain': 'co%d.example' % n, 'lifecyclestage': 'opportunity'})
-            obj('deals', 'd%d' % n, {'dealname': name + ' - New', 'pipeline': sales, 'dealstage': 's1', 'amount': '1000',
-                                     'createdate': '2026-09-01T00:00:00Z'})
-            link('deals', 'd%d' % n, 'companies', co)
-            # A Google click id: both deals (and both leads) are paid Google until a ruling says otherwise.
-            obj('contacts', 'k%d' % n, {'email': 'k%d@co%d.example' % (n, n), 'createdate': '2026-08-01T00:00:00Z',
-                                        'hs_google_click_id': 'synthetic-click'})
-            link('contacts', 'k%d' % n, 'companies', co)
-            link('deals', 'd%d' % n, 'contacts', 'k%d' % n)
-        for n, row in enumerate([['Company', 'Source', 'Owner', 'Lead Date', 'HubSpot Company ID', 'Company Domain'],
-                                 ['Alpha Synthetic', 'Paid', 'Alex', '09/01/2026', 'c1', 'co1.example'],
-                                 ['Beta Synthetic', 'Paid', 'Alex', '09/02/2026', 'c2', 'co2.example']], start=1):
-            con.execute('INSERT INTO sheets_data VALUES (?,?,?,?)', ('Synthetic Sheet', 'Lead Tracker', n, json.dumps(row)))
-        con.commit()
-        con.close()
-        return db
-
-    def build(self, overrides=None):
-        self.write('lead-sources.json', {'sheet': {'tab': 'Lead Tracker (Synthetic Sheet)'}, 'ads': {
-            'platforms': ['Google Ads', 'LinkedIn Ads'],
-            'paid_leads': [{'company': 'Alpha Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-01'},
-                           {'company': 'Beta Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-02'}]}})
-        if overrides is not None:
-            self.write('source-overrides.json', overrides)
-        args = wd.argparse.Namespace(db=self.brain(), inputs_dir=self.dir, lead_sources=None, lost_reasons=None, insights=None,
-                                     lead_insights=None, prior=None, current_page=None, portal_id=None, as_of='2026-10-13T16:00:00Z',
-                                     call_classification=None, review_list=None, paid_export=None, scrub_patterns_file=None,
-                                     source_overrides=None, out=None, quiet=True)
-        from unittest import mock
-        with mock.patch.dict(os.environ, {'WORKSPACE_SCRUB_PATTERNS': PAT}):
-            return wd.build(args, warn=self.warnings.append)
 
     def test_build_without_overrides_is_paid(self):
         out = self.build()
@@ -682,11 +691,88 @@ class SourceOverrides(unittest.TestCase):
         g = next(x for x in out['leads']['platforms'] if x['name'] == 'Google Ads')
         self.assertEqual((g['confirmed'], g['confirmedIds'], g['inPaid'], g['atMost']), (1, ['L3'], 1, 1))
 
+    def test_lead_ruling_follows_the_company_when_sheet_rows_move(self):
+        # A row inserted above Alpha moves it from L2 to L3 and Beta from L3 to L4; the ruling keyed c1 stays on Alpha.
+        gamma = ['Gamma Synthetic', 'Inbound', 'Alex', '09/03/2026', '', '']
+        for inserted, alpha, beta in (((), 'L2', 'L3'), ((gamma,), 'L3', 'L4')):
+            out = self.build(self.DOC, inserted=inserted)
+            got = {l['company']: (l['id'], l['source']) for l in out['leads']['items']}
+            self.assertEqual((got['Alpha Synthetic'], got['Beta Synthetic']), ((alpha, 'Customer referral'), (beta, 'Paid')))
+            if inserted:
+                self.assertEqual(got['Gamma Synthetic'], ('L2', 'Inbound'))
+
+    def test_sheet_row_keys_never_apply(self):
+        # Leftover L### keys (the old shape) match nothing, a lead with no HubSpot company included.
+        doc = {'leads': {k: {'source': 'Customer referral'} for k in ('L2', 'L3', 'L4', '2', '4')}}
+        out = self.build(doc, extra_rows=[['Gamma Synthetic', 'Inbound', 'Alex', '09/03/2026', '', '']])
+        leads = {l['id']: l for l in out['leads']['items']}
+        self.assertEqual(leads['L4']['hubspot']['companyIds'], [])
+        self.assertEqual({i: l['sourceBasis'] for i, l in leads.items()}, {'L2': 'hubspot', 'L3': 'hubspot', 'L4': 'sheet'})
+        self.assertEqual(out['leads']['overridden'], 0)
+        self.assertFalse(any(e['rule'] == 'Source override' for l in leads.values() for e in l['evidence']))
+
     def test_build_with_an_invalid_file_continues(self):
         out = self.build('{oops')
         self.assertFalse(out['meta']['inputs']['source-overrides.json'])
         self.assertEqual(len(out['paidDeals']['sales']), 2)
         self.assertTrue(any('source-overrides.json' in w and 'not used' in w for w in self.warnings))
+
+
+
+class ReviewList(SyntheticBuild, unittest.TestCase):
+    """lead-source-review.csv applies by its hubspot_company_id column, never by Sheet row."""
+    HEAD = 'row,hubspot_company_id,company,sheet_source,hubspot_sources,evidence,action,status,mql_channel,different_first_touch,attribution_evidence\n'
+
+    def leads(self, csv_text, **kw):
+        out = self.build(review=csv_text, **kw)
+        return out, {l['company']: l for l in out['leads']['items']}
+
+    def assert_untouched(self, lead):
+        self.assertEqual((lead['source'], lead['platform']), ('Paid', 'Google Ads'))
+        self.assertFalse(any(e['rule'].endswith('(review list)') for e in lead['evidence']))
+        self.assertNotIn('hold', lead)
+
+    def test_resolved_row_applies_by_company_id(self):
+        out, leads = self.leads(self.HEAD + '9,c1,Alpha Synthetic,Paid,,,,resolved,Events,Webinar (synthetic),booked at a synthetic event\n')
+        a = leads['Alpha Synthetic']
+        mql = next(e for e in a['evidence'] if e['rule'] == 'MQL touch (review list)')
+        self.assertEqual((mql['source'], mql['detail']), ('Events', 'booked at a synthetic event'))
+        self.assertEqual(a['firstTouch'], 'Webinar (synthetic)')
+        self.assert_untouched(leads['Beta Synthetic'])
+        self.assertEqual(out['reviewList']['leadIds'], {'c1': a['id']})
+        self.assertEqual(out['reviewList']['rows'][0]['hubspot_company_id'], 'c1')
+
+    def test_hold_follows_the_company_when_sheet_rows_move(self):
+        gamma = ['Gamma Synthetic', 'Inbound', 'Alex', '09/03/2026', '', '']
+        _, leads = self.leads(self.HEAD + '2,c2,Beta Synthetic,Paid,,,held,on_hold_pending_reviewer,,,\n', inserted=[gamma])
+        self.assertEqual((leads['Beta Synthetic']['id'], leads['Beta Synthetic']['hold']), ('L4', 'On hold, pending Reviewer'))
+        self.assertNotIn('hold', leads['Gamma Synthetic'])
+        self.assertNotIn('hold', leads['Alpha Synthetic'])
+
+    def test_row_without_company_id_never_applies_by_sheet_row(self):
+        # Rows 2 and 3 are Alpha and Beta in the Lead Tracker; without hubspot_company_id the rows are listed, not applied.
+        with_column = self.HEAD + '2,,Alpha Synthetic,Paid,,,,resolved,Events,,\n3,,Beta Synthetic,Paid,,,held,on_hold_pending_reviewer,,,\n'
+        old_shape = (self.HEAD.replace('hubspot_company_id,', '') +
+                     '2,Alpha Synthetic,Paid,,,,resolved,Events,,\n3,Beta Synthetic,Paid,,,held,on_hold_pending_reviewer,,,\n')
+        for text in (with_column, old_shape):
+            out, leads = self.leads(text)
+            self.assert_untouched(leads['Alpha Synthetic'])
+            self.assert_untouched(leads['Beta Synthetic'])
+            self.assertEqual((len(out['reviewList']['rows']), out['reviewList']['leadIds']), (2, {}))
+
+    def test_unknown_company_id_never_applies(self):
+        out, leads = self.leads(self.HEAD + '2,1001,Alpha Synthetic,Paid,,,,resolved,Events,,\n')
+        self.assert_untouched(leads['Alpha Synthetic'])
+        self.assert_untouched(leads['Beta Synthetic'])
+        self.assertEqual(out['reviewList']['leadIds'], {})
+
+
+class Docs(unittest.TestCase):
+    def test_docs_key_rulings_and_review_by_hubspot_company_id(self):
+        with open(os.path.join(HERE, '..', '..', 'docs', 'sync-only.md'), encoding='utf-8') as f:
+            text = ' '.join(f.read().split())
+        self.assertIn('leads are keyed by HubSpot company id', text)
+        self.assertIn('by its `hubspot_company_id` column', text)
 
 
 if __name__ == '__main__':
