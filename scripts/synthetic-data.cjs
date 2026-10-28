@@ -299,10 +299,10 @@ function brainFixture({ synced = false, scrub = SYNTHETIC_SCRUB } = {}) {
       objections: [{ category: 'price_budget', quote: 'Synthetic budget worry.' }], competitors: { Zip: 2 }, next_steps: ['Send the pilot plan.'] }),
     crec(1002, 'customer'), crec(1003, 'customer'), crec(1004, 'prospect', { deal: null }), crec(1005, 'customer'), crec(1006, 'internal'),
     crec(1007, 'prospect', { deal: null }), crec(1008, 'partner_other')].map((r) => JSON.stringify(r)).join('\n') + '\n';
-  const reviewList = 'row,company,sheet_source,hubspot_sources,evidence,sheet_note,action,status,mql_channel,different_first_touch,attribution_evidence\n' +
-    '9,Orchid Retail,Inbound,Paid,gus@orchid.example: OpenAI via utm,OpenAI ads lead,Analysis only,undetermined,undetermined,,no MQL booking yet\n' +
-    '5,Cedar Harbor,Events,Outbound,ben@cedar.example: Lemlist reply,Met at the booth,Analysis only,resolved,Outbound,Events (Synthetic show),meeting booked after a Lemlist reply\n' +
-    '13,Birch Co,Webinar,Events,synthetic contact: Event Attendee,,Held for review,on_hold_pending_reviewer,,,\n';
+  const reviewList = 'row,hubspot_company_id,company,sheet_source,hubspot_sources,evidence,sheet_note,action,status,mql_channel,different_first_touch,attribution_evidence\n' +
+    '9,' + C.orchid + ',Orchid Retail,Inbound,Paid,gus@orchid.example: OpenAI via utm,OpenAI ads lead,Analysis only,undetermined,undetermined,,no MQL booking yet\n' +
+    '5,' + C.cedar + ',Cedar Harbor,Events,Outbound,ben@cedar.example: Lemlist reply,Met at the booth,Analysis only,resolved,Outbound,Events (Synthetic show),meeting booked after a Lemlist reply\n' +
+    '13,,Birch Co,Webinar,Events,synthetic contact: Event Attendee,,Held for review,on_hold_pending_reviewer,,,\n';
   const paidExport = { generated_at: '2026-10-13T16:30:00+00:00', stages: {}, deals: [
     { id: '7002', properties: { dealname: 'Cedar expansion', pipeline: 'default' }, derived: { pipelineId: 'default', stageLabel: 'Demo meeting', paid_platform: 'Google', paid_evidence: { via: 'utm', level: 'deal' }, google_branded: true, conversion_date: '2026-08-18', predates_spend_window: false } },
     { id: '7011', properties: { dealname: 'Northstar enterprise', pipeline: 'default' }, derived: { pipelineId: 'default', stageLabel: 'Legal & Compliance', paid_platform: 'LinkedIn', paid_evidence: { via: 'form (company contact)', level: 'company' }, google_branded: false, conversion_date: '2026-02-20', predates_spend_window: true } },

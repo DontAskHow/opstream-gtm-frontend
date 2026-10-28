@@ -1196,7 +1196,7 @@ def build_leads(brain, ctx):
         lead['meetings'] = [{'id': m['id'], 'title': m['title'], 'start': m['start'], 'owner': m['owner'], 'inList': m['inWindow']} for m in ms[:8]]
         # Evidence: system rules (Lemlist, HubSpot, Pipeline's HubSpot reads), then Sheet-side.
         ev = attribute(lead, lcontacts, ctx)
-        rv = ctx['review'].get(lead['rows'][0]) or next((ctx['review'][r] for r in lead['rows'] if r in ctx['review']), None)
+        rv = by_company(ctx['review'], lead)
         status = str((rv or {}).get('status') or '').strip().lower()
         mql_ch = str((rv or {}).get('mql_channel') or '').strip()
         if rv and status == 'resolved' and mql_ch and mql_ch.lower() != 'undetermined':
@@ -1233,7 +1233,7 @@ def build_leads(brain, ctx):
         if named and re.search(r'\b(ad|ads|paid|ppc|cpc)\b', note, re.I):
             ev.append({'rule': 'Lead Tracker note', 'source': 'Paid', 'platform': named[0]['name'] if len(named) == 1 else None,
                        'detail': 'note names %s' % ' / '.join(p['name'] for p in named)})
-        ov = ctx.get('overrides', {}).get('leads', {}).get(lead['id'])
+        ov = by_company(ctx.get('overrides', {}).get('leads', {}), lead)
         if ov:
             # A human ruling (source-overrides.json) decides over every other rule, a hold included. Paid evidence
             # that disagrees is kept, marked superseded, and counts nowhere.
@@ -1375,8 +1375,16 @@ def hold_label(rv):
     return 'On hold'
 
 
+def by_company(index, lead):
+    """The entry in index (keyed by HubSpot company id) for the lead's first matching company id, else None. Never by
+    Sheet row or L### id: those move when rows are inserted; the company id does not."""
+    ids = sorted(str(i) for i in (lead.get('hubspot') or {}).get('companyIds') or [])
+    return next((index[i] for i in ids if i in index), None)
+
+
 def load_review_list(path):
-    """lead-source-review.csv (data-side): Sheet row -> row dict. None when no file."""
+    """lead-source-review.csv (data-side): HubSpot company id (column hubspot_company_id) -> row dict. A row without
+    one is shown but never applied; its Sheet row is for people only. None when no file."""
     if not path or not os.path.exists(path):
         return None
     import csv
@@ -1384,11 +1392,10 @@ def load_review_list(path):
         rows = list(csv.DictReader(f))
     out = {}
     for r in rows:
-        try:
-            out[int(str(r.get('row') or '').strip())] = r
-        except ValueError:
-            continue
-    return {'path': path, 'rows': rows, 'byRow': out}
+        k = str(r.get('hubspot_company_id') or '').strip()
+        if k:
+            out.setdefault(k, r)
+    return {'path': path, 'rows': rows, 'byCompany': out}
 
 
 def load_paid_export(path, platforms):
@@ -1453,7 +1460,7 @@ OVERRIDE_LABEL = 'Source override (human ruling)'
 
 def load_source_overrides(path, warn):
     """source-overrides.json (data-side): human source rulings, kept across refreshes. Returns ({'deals': {id: entry},
-    'leads': {id: entry}}, ok). An entry keeps only 'source' and, on deals, 'paid'; 'provenance' (who ruled, why) is
+    'leads': {HubSpot company id: entry}}, ok). An entry keeps only 'source' and, on deals, 'paid'; 'provenance' (who ruled, why) is
     never read into the output. A missing or invalid file warns and applies nothing."""
     empty = {'deals': {}, 'leads': {}}
     if not path or not os.path.exists(path):
@@ -2748,7 +2755,7 @@ def build_files(args, warn=lambda *a: print(*a, file=sys.stderr)):
            'booked': booked_contacts(brain, assoc)}
     ctx['call_class'], ctx['call_class_reason'] = load_call_classification(args.call_classification, warn)
     review = load_review_list(args.review_list)
-    ctx['review'] = review['byRow'] if review else {}
+    ctx['review'] = review['byCompany'] if review else {}
     paid = None
     if args.paid_export:
         try:
@@ -2829,10 +2836,11 @@ def build_files(args, warn=lambda *a: print(*a, file=sys.stderr)):
         'adLeads': ad,
         'mqlFunnel': funnel,
         'paidDeals': paid_deals_view(paid, ctx['deal_by_id'], comp_name),
-        'reviewList': ({'path': os.path.basename(review['path']), 'rows': [{**{k: r.get(k) for k in ('row', 'company', 'sheet_source', 'hubspot_sources', 'evidence', 'action', 'status',
+        'reviewList': ({'path': os.path.basename(review['path']), 'rows': [{**{k: r.get(k) for k in ('row', 'hubspot_company_id', 'company', 'sheet_source', 'hubspot_sources', 'evidence', 'action', 'status',
                                                     'mql_channel', 'different_first_touch', 'attribution_evidence')},
                                   'hold': hold_label(r) if str(r.get('status') or '').startswith('on_hold') else None} for r in review['rows']],
-                        'leadIds': {str(r): l['id'] for l in leads.get('items', []) for r in l['rows'] if r in ctx['review']}}
+                        'leadIds': {str(i): l['id'] for l in leads.get('items', [])
+                                    for i in (l.get('hubspot') or {}).get('companyIds') or [] if str(i) in ctx['review']}}
                        if review else None),
         'rules': {'answeredAt': RULES['answeredAt'], 'reportingApprovedAt': REPORTING['approvedAt'],
                   'sourcePrimary': RULES['source']['primary'], 'mql': RULES['mql']['definition'],

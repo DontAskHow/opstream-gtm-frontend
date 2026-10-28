@@ -174,11 +174,11 @@ print(json.dumps({'open': [o[0], round(o[1]), round(o[2])], 'onHold': [h[0], rou
   for (const p of d.leads.platforms) check(`${p.name}: named = leads resolved to it`, p.confirmed, d.leads.items.filter((l) => l.platform === p.name).length);
   check('review list rows = lead-source-review.csv rows', d.reviewList.rows.length, indep.review);
   // Each review row follows its status: resolved -> the MQL-touch channel; undetermined -> HubSpot-primary; on_hold* -> unchanged.
-  const byRow = Object.fromEntries(d.leads.items.flatMap((l) => l.rows.map((r) => [String(r), l])));
+  // Rows are applied by hubspot_company_id only; a row without one, or for a company no lead matches, applies nothing.
   const statuses = {};
   for (const r of d.reviewList.rows) {
-    const l = byRow[r.row];
-    assert.ok(l, `review row ${r.row} is a lead`);
+    const l = d.leads.items.find((x) => x.id === d.reviewList.leadIds[r.hubspot_company_id]);
+    if (!l) { statuses.unlinked = (statuses.unlinked || 0) + 1; continue; }
     statuses[r.status] = (statuses[r.status] || 0) + 1;
     if (l.sourceBasis === 'override') assert.equal(l.rule, 'Source override (human ruling)', `row ${r.row}: a human ruling decides`);
     else if (r.status === 'resolved' && r.mql_channel && r.mql_channel !== 'undetermined') assert.equal(l.source, r.mql_channel, `row ${r.row}: MQL touch`);
