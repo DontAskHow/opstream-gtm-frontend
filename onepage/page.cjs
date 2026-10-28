@@ -388,7 +388,7 @@ ${NAV}
         { key: 'hubspot_sources', label: 'HubSpot', cell: (x) => esc(x.hubspot_sources) },
         { key: 'status', label: 'Status', cell: (x) => (x.hold ? `<span class="tag tag-warn">${esc(x.hold)}</span>` : esc((x.status || '').replace(/_/g, ' '))) + (x.mql_channel && x.mql_channel !== 'undetermined' ? `<div class="small">MQL touch: ${esc(x.mql_channel)}</div>` : '') + (x.different_first_touch ? `<div class="muted small">first touch: ${esc(x.different_first_touch)}</div>` : '') },
         { key: 'evidence', label: 'Evidence', opt: true, cell: (x) => `<span class="small">${esc(x.evidence)}</span>${x.attribution_evidence ? `<div class="muted small">${esc(x.attribution_evidence)}</div>` : ''}` },
-      ], r.rows, { sort: 'company', dir: 'asc', noun: 'rows', noun1: 'row', target: (x) => (r.leadIds[x.row] ? 'lead=' + r.leadIds[x.row] : 'rv=1'), active: (x) => s.lead && r.leadIds[x.row] === s.lead, text: (x) => [x.company, x.sheet_source, x.hubspot_sources, x.evidence].join(' ') }) +
+      ], r.rows, { sort: 'company', dir: 'asc', noun: 'rows', noun1: 'row', target: (x) => (r.leadIds[x.hubspot_company_id] ? 'lead=' + r.leadIds[x.hubspot_company_id] : 'rv=1'), active: (x) => s.lead && r.leadIds[x.hubspot_company_id] === s.lead, text: (x) => [x.company, x.sheet_source, x.hubspot_sources, x.evidence].join(' ') }) +
         `<p class="muted small">Resolved rows are credited to the touch at the MQL booking; undetermined rows (no MQL yet) keep the HubSpot-primary source; rows on hold keep their current source. Nothing is written to the Sheet or HubSpot.</p>` : null,
     }];
     return `<h3>Review list</h3>` + table([{ label: 'List' }, { label: 'Rows', num: true }], rows);

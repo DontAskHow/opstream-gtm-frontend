@@ -129,7 +129,9 @@ pipeline is only dropped, so a booking on it still counts. It reads brain.db and
 `source-overrides.json`, and `scrub-patterns.txt`. Each is optional, and a missing one is logged and that
 part of the page degrades. `source-overrides.json` holds human source rulings per deal and lead, so they
 survive every refresh (`config/lead-rules.json` `source.overrides`); its `provenance` text is never written
-out. The scrub patterns are the exception. Without
+out. Deals are keyed by HubSpot deal id; leads are keyed by HubSpot company id, never by Lead Tracker row or
+`L###`, so a ruling stays on its company when Sheet rows move. `lead-source-review.csv` is keyed the same way,
+by its `hubspot_company_id` column; a row without one is listed but not applied (its `row` is for people only). The scrub patterns are the exception. Without
 them (or `WORKSPACE_SCRUB_PATTERNS` on the task) the script refuses to run.
 `--prior` is the LATEST run's `live_deals.json`, for the "what changed" note.
 

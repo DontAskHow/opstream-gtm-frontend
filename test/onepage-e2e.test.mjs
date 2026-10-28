@@ -150,18 +150,19 @@ test('HubSpot is primary for source; the Sheet is the fallback; review-list stat
   // resolved: credited to the channel of the touch at the MQL; a different first touch is shown.
   const cedar = lead(base, 'Cedar Harbor');
   assert.deepEqual([cedar.sheetSource, cedar.source, cedar.rule, cedar.firstTouch], ['Events', 'Outbound', 'MQL touch (review list)', 'Events (Synthetic show)']);
-  // on_hold*: neither side changes; the current source stays, flagged.
+  // A review row without hubspot_company_id is listed but never applied (never by Sheet row): Birch Co has no HubSpot
+  // company, so its on_hold row does not hold it.
   const birch = lead(base, 'Birch Co');
-  assert.deepEqual([birch.source, birch.sourceBasis, birch.hold], ['Webinar', 'sheet', 'On hold, pending Reviewer']);
-  assert.ok(birch.evidence.every((e) => !e.decides));
-  assert.ok(birch.flags.some((f) => f.kind === 'hold'));
+  assert.deepEqual([birch.source, birch.sourceBasis, birch.hold], ['Webinar', 'sheet', undefined]);
+  assert.ok(!birch.flags.some((f) => f.kind === 'hold'));
   const quartz = lead(base, 'Quartz Media');
   assert.deepEqual([quartz.source, quartz.sourceBasis, quartz.rule, quartz.review], ['Paid', 'hubspot', 'HubSpot check (Pipeline)', false]);
   assert.equal(base.data.leads.hubspotSourced, 5);
-  assert.equal(base.data.leads.reviewLeads, 5);
+  assert.equal(base.data.leads.reviewLeads, 4);  // Birch Co is not held (see above)
   // The review list file is shown as is, linked to the leads.
   assert.equal(base.data.reviewList.rows.length, 3);
-  assert.equal(base.data.reviewList.leadIds['9'], orchid.id);
+  assert.equal(base.data.reviewList.leadIds[orchid.hubspot.companyIds[0]], orchid.id);
+  assert.deepEqual(Object.keys(base.data.reviewList.leadIds).sort(), ['9002', '9006']);
   const rv = page.renderPage(base.view, { rv: '1' }).main;
   assert.match(rv, /Source disagreements to review/);
   assert.match(rv, /gus@orchid\.example: OpenAI via utm/);
