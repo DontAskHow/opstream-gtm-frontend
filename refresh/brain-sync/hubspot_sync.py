@@ -5,6 +5,11 @@ Pulls objects whose modified date is newer than the per-object-type watermark,
 upserts them into hubspot_objects, and refreshes associations for changed
 objects. Tickets are excluded (outside registered scope).
 
+Associations are read 100 objects a call per associated type (v4 batch read,
+following each object's paging). An object's rows are replaced only after all
+of its types were read in full; when a read fails its rows stay as they are and
+its id is kept in sync_state hubspot_assoc_retry and read again next run.
+
 Read-only against HubSpot. Paced under both HubSpot limits: 110 requests
 per 10 s per installing account for public OAuth apps, and 5 requests per
 second for the CRM search API (a separate SECONDLY limit, the cause of the
@@ -213,16 +218,35 @@ def _to_ms(iso: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
+def _result_ms(r: dict, modfield: str):
+    """A search result's modified time in ms (its modfield, else updatedAt), or None."""
+    raw = (r.get("properties") or {}).get(modfield) or r.get("updatedAt")
+    try:
+        return int(raw) if str(raw).isdigit() else _to_ms(raw)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+# CRM search answers 400 for any page past its first 10,000 results.
+SEARCH_WINDOW = 9900
+
+
 def search_objects(client, otype: str, modfield: str, props: list[str], since_ms: int):
-    """Yield result dicts from the CRM search API, paginated."""
-    after = None
+    """Yield result dicts from the CRM search API, paginated.
+
+    After SEARCH_WINDOW results with more to come, a new search starts at the
+    last result's modified time. Results at that time come back again; those
+    already yielded are skipped.
+    """
+    window_ms, after, window_n = since_ms, None, 0
+    edge_ms, edge_ids = None, set()  # newest modified time yielded, and the ids yielded at it
     while True:
         body = {
             "filterGroups": [{
                 "filters": [{
                     "propertyName": modfield,
                     "operator": "GTE",
-                    "value": since_ms,
+                    "value": window_ms,
                 }]
             }],
             "sorts": [{"propertyName": modfield, "direction": "ASCENDING"}],
@@ -238,57 +262,128 @@ def search_objects(client, otype: str, modfield: str, props: list[str], since_ms
             raise RuntimeError(f"HubSpot search {otype} returned HTTP {status}: {str(payload)[:300]}")
         results = payload.get("results", []) if isinstance(payload, dict) else []
         for r in results:
+            mod_ms = _result_ms(r, modfield)
+            if mod_ms is not None:
+                if mod_ms == edge_ms and r.get("id") in edge_ids:
+                    continue
+                if mod_ms != edge_ms:
+                    edge_ms, edge_ids = mod_ms, set()
+                edge_ids.add(r.get("id"))
             yield r
+        window_n += len(results)
         nxt = (payload.get("paging") or {}).get("next", {}) if isinstance(payload, dict) else {}
         after = nxt.get("after")
         if not after:
             break
+        if window_n >= SEARCH_WINDOW:
+            last_ms = _result_ms(results[-1], modfield) if results else None
+            if last_ms is None or last_ms <= window_ms:
+                at = datetime.fromtimestamp(window_ms / 1000, timezone.utc).isoformat(timespec="milliseconds")
+                raise RuntimeError(
+                    f"HubSpot search {otype}: {window_n}+ results have {modfield} {at}; search cannot "
+                    f"page past 10,000, so it cannot move past that value")
+            window_ms, after, window_n = last_ms, None, 0
 
 
-def refresh_associations(client, con, otype: str, hs_id: str, log) -> int:
-    """Re-pull all associations for one object; returns rows written."""
-    cur = con.cursor()
-    cur.execute(
-        "DELETE FROM hubspot_associations WHERE (from_type=? AND from_id=?) "
-        "OR (to_type=? AND to_id=?)",
-        (otype, hs_id, otype, hs_id),
-    )
+# Changed records whose association read failed, retried every run until a read succeeds:
+# sync_state watermark {object type: [ids]}.
+ASSOC_RETRY = "hubspot_assoc_retry"
+
+
+def _error_ids(err):
+    """The ids a batch error names (its context lists them; the key varies)."""
+    ids = set()
+    for value in (err.get("context") or {}).values():
+        if isinstance(value, list):
+            ids.update(str(v) for v in value)
+    return ids
+
+
+def read_associations(client, frm, to, ids, log):
+    """Batch read frm -> to associations for up to 100 ids, following each input's paging.
+
+    Returns ({id: [to ids]} for the ids read completely, set of ids whose read failed). An id
+    HubSpot reports as having no associations (or as not found) has none. A failed call (a 429
+    after its retries, another status, a network error) fails every id it carried; an error
+    naming ids fails those ids, and one naming none fails them all.
+    """
+    url = f"{client.api_base}/crm/v4/associations/{frm}/{to}/batch/read"
+    found = {i: [] for i in ids}
+    failed = set()
+    todo = [{"id": i} for i in ids]
+    seen = set()  # (id, after) pairs already asked for
+    while todo:
+        status, payload = None, None
+        try:
+            status, payload = hs_request(client, "POST", url, body={"inputs": todo})
+        except NeedsConnection:
+            raise
+        except Exception as e:
+            log.warning("assoc batch %s -> %s (%d ids) failed: %s", frm, to, len(todo), e)
+        if status not in (200, 207) or not isinstance(payload, dict):
+            if status is not None:
+                log.warning("assoc batch %s -> %s (%d ids) HTTP %s", frm, to, len(todo), status)
+            failed.update(x["id"] for x in todo)
+            break
+        asked = {x["id"] for x in todo}
+        first = {x["id"] for x in todo if "after" not in x}
+        for err in payload.get("errors") or []:
+            named = _error_ids(err) & asked
+            if err.get("category") == "OBJECT_NOT_FOUND" and named and named <= first:
+                continue  # no associations, or no such record
+            log.warning("assoc batch %s -> %s error %s: %s", frm, to, err.get("category"),
+                        str(err.get("message"))[:200])
+            failed.update(named or asked)
+        todo = []
+        for row in payload.get("results") or []:
+            fid = str((row.get("from") or {}).get("id"))
+            if fid not in asked:
+                continue
+            found[fid].extend(str(t["toObjectId"]) for t in row.get("to") or [] if t.get("toObjectId"))
+            after = _next_after(row)
+            if after:
+                if (fid, after) in seen:
+                    log.warning("assoc batch %s -> %s: paging for %s repeats", frm, to, fid)
+                    failed.add(fid)
+                else:
+                    seen.add((fid, after))
+                    todo.append({"id": fid, "after": after})
+        todo = [x for x in todo if x["id"] not in failed]
+    return {i: tos for i, tos in found.items() if i not in failed}, failed
+
+
+def refresh_associations(client, con, otype: str, hs_ids, log):
+    """Re-pull all associations for these objects, 100 a call per associated type.
+
+    Returns (rows written, ids whose read failed). A record's rows are replaced only after
+    every one of its associated types was read in full; a failed read leaves its stored rows
+    as they are, and the caller retries it next run.
+    """
     to_types = sorted({b for (a, b) in ASSOC_PAIRS if a == otype}
                       | {a for (a, b) in ASSOC_PAIRS if b == otype})
-    written = 0
-    for to_type in to_types:
-        # Query both directions explicitly via the v4 associations endpoint.
-        for frm, to in ((otype, to_type), (to_type, otype)):
-            if frm == to:
+    if not to_types:
+        return 0, []
+    written, failed = 0, []
+    for part in _chunks(list(dict.fromkeys(str(i) for i in hs_ids)), 100):
+        got, bad = {}, set()
+        for to_type in to_types:
+            # Associations are two-way, so one direction gives both rows.
+            read, fail = read_associations(client, otype, to_type, [i for i in part if i not in bad], log)
+            bad |= fail
+            got[to_type] = read
+        for hs_id in part:
+            if hs_id in bad:
+                failed.append(hs_id)
                 continue
-            url = f"{client.api_base}/crm/v4/objects/{frm}/{hs_id}/associations/{to}?limit=500"
-            try:
-                status, payload = hs_request(client, "GET", url)
-            except NeedsConnection:
-                raise
-            except Exception as e:
-                log.warning("assoc fetch %s/%s -> %s failed: %s", frm, to, hs_id, e)
-                continue
-            if status != 200 or not isinstance(payload, dict):
-                log.warning("assoc fetch %s/%s -> %s HTTP %s", frm, to, hs_id, status)
-                continue
-            for assoc in payload.get("results", []):
-                to_id = str(assoc.get("toObjectId", ""))
-                if not to_id:
-                    continue
-                cur.execute(
-                    "INSERT OR IGNORE INTO hubspot_associations(from_type, from_id, to_type, to_id) "
-                    "VALUES(?,?,?,?)",
-                    (frm, str(hs_id), to, to_id),
-                )
-                # Mirror row to keep the bidirectional convention used by the backfill.
-                cur.execute(
-                    "INSERT OR IGNORE INTO hubspot_associations(from_type, from_id, to_type, to_id) "
-                    "VALUES(?,?,?,?)",
-                    (to, to_id, frm, str(hs_id)),
-                )
-                written += 2
-    return written
+            con.execute("DELETE FROM hubspot_associations WHERE (from_type=? AND from_id=?) "
+                        "OR (to_type=? AND to_id=?)", (otype, hs_id, otype, hs_id))
+            for to_type in to_types:
+                for to_id in got[to_type][hs_id]:
+                    con.executemany(
+                        "INSERT OR IGNORE INTO hubspot_associations(from_type, from_id, to_type, to_id) "
+                        "VALUES(?,?,?,?)", ((otype, hs_id, to_type, to_id), (to_type, to_id, otype, hs_id)))
+                    written += 2
+    return written, failed
 
 
 def _query_value(value):
@@ -1305,6 +1400,8 @@ def main_sync(log):
     total_upserted = 0
     total_assoc = 0
     changed_deals = []
+    assoc_retry = {t: [str(i) for i in ids] for t, ids in _json_state(ASSOC_RETRY).items()
+                   if t in OBJECT_TYPES and isinstance(ids, list)}
     try:
         for otype, (modfield, _props) in OBJECT_TYPES.items():
             props = props_by_type[otype]
@@ -1332,10 +1429,12 @@ def main_sync(log):
                     max_seen = mod
             if otype == "deals":
                 changed_deals = list(changed_ids)
-            # Refresh associations for changed objects only.
-            assoc_written = 0
-            for hs_id in changed_ids:
-                assoc_written += refresh_associations(client, con, otype, hs_id, log)
+            # Refresh associations for changed objects, and for those whose last read failed.
+            assoc_written, assoc_retry[otype] = refresh_associations(
+                client, con, otype, changed_ids + assoc_retry.get(otype, []), log)
+            if assoc_retry[otype]:
+                log.warning("%s: associations of %d objects not read; retrying next run",
+                            otype, len(assoc_retry[otype]))
             con.commit()
             watermarks[otype] = max_seen
             total_upserted += count
@@ -1350,6 +1449,10 @@ def main_sync(log):
     note = (f"{total_upserted} objects upserted, {total_assoc} association rows refreshed, "
             f"{owner_rows} owners, {pipeline_rows} pipeline stages; tickets excluded (outside registered scope); "
             f"long text truncated at 8000 chars")
+    retrying = sum(len(ids) for ids in assoc_retry.values())
+    if retrying:
+        note += f"; associations of {retrying} objects to retry next run"
+    set_sync_state(ASSOC_RETRY, json.dumps({t: ids for t, ids in assoc_retry.items() if ids}), note)
     set_sync_state(SOURCE, json.dumps(watermarks), note)
 
     parts = [
