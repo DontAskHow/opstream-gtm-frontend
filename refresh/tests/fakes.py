@@ -96,7 +96,7 @@ class SecretsManagerFake:
         if sec is None:
             return 400, {"__type": "ResourceNotFoundException", "message": "not found"}
         if target.endswith(".GetSecretValue"):
-            return 200, {"ARN": "arn:aws:secretsmanager:us-east-2:000000000000:secret:test", "Name": doc["SecretId"],
+            return 200, {"ARN": "arn:aws:secretsmanager:us-east-2:ACCOUNT_ID:secret:test", "Name": doc["SecretId"],
                          "SecretString": sec["value"], "VersionId": sec["version"], "VersionStages": ["AWSCURRENT"]}
         if target.endswith(".DescribeSecret"):
             return 200, {"Name": doc["SecretId"], "VersionIdsToStages": {sec["version"]: ["AWSCURRENT"]}}
