@@ -271,9 +271,10 @@ class RulesE2E(unittest.TestCase):
             self.assertIn(p, search("deals")["properties"])
         for p in ("hs_createdate", "hs_meeting_source"):
             self.assertIn(p, search("meetings")["properties"])
-        # Meeting -> deal and meeting -> contact associations, read per changed meeting.
+        # Meeting -> deal and meeting -> contact associations, batch read for the changed meetings.
         for to in ("deals", "contacts"):
-            self.assertTrue([r for r in self.reqs if r.path == "/crm/v4/objects/meetings/7104/associations/" + to])
+            self.assertTrue([r for r in self.reqs if r.path == "/crm/v4/associations/meetings/%s/batch/read" % to
+                             and {"id": "7104"} in r.json()["inputs"]])
         # Deal stage history: the deals batch read asks for it.
         body = next(r.json() for r in self.reqs if r.path == "/crm/v3/objects/deals/batch/read")
         self.assertIn("dealstage", body["propertiesWithHistory"])

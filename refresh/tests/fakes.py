@@ -114,6 +114,7 @@ class HubSpotFake:
 
     FORMS_PAGE = 2   # forms list pages are small to exercise paging
     LISTS_PAGE = 2
+    ASSOC_PAGE = 500  # associations an input per associations batch read page, as HubSpot
 
     def __init__(self, now):
         self.now = now
@@ -197,6 +198,8 @@ class HubSpotFake:
         self.fail_backfill_after = None   # contacts keyset search with this GT value answers 500
         self.fail_meeting_backfill_after = None
         self.once_429 = set()             # route keys that answer 429 once
+        self.assoc_429 = {}               # (from type, to type) -> calls its association reads answer 429 (None: all)
+        self.assoc_errors = set()         # ids the associations batch read reports a (non not-found) error for
 
     def link(self, a, ai, b, bi):
         """An association, stored both ways."""
@@ -261,17 +264,14 @@ class HubSpotFake:
             return self._search(p.split("/")[4], req.json())
         if req.method == "GET" and p.startswith("/crm/v4/objects/"):
             _, _, _, _, frm, oid, _, to = p.split("/")
+            hit = self._assoc_429(frm, to)
+            if hit:
+                return hit
             return 200, {"results": [{"toObjectId": int(i), "associationTypes": []}
                                      for i in self.assocs.get((frm, oid), {}).get(to, [])]}
         if req.method == "POST" and p.startswith("/crm/v4/associations/") and p.endswith("/batch/read"):
             _, _, _, _, frm, to, _, _ = p.split("/")
-            out = []
-            for x in (req.json() or {}).get("inputs") or []:
-                tos = self.assocs.get((frm, str(x["id"])), {}).get(to, [])
-                if tos:
-                    out.append({"from": {"id": str(x["id"])}, "to": [
-                        {"toObjectId": int(i), "associationTypes": [{"typeId": 5 if n == 0 else 6}]} for n, i in enumerate(tos)]})
-            return 200, {"status": "COMPLETE", "results": out}
+            return self._read_assocs(frm, to, (req.json() or {}).get("inputs") or [])
         if req.method == "POST" and p == "/crm/v3/objects/deals/batch/read":
             body = req.json() or {}
             out = []
@@ -327,6 +327,55 @@ class HubSpotFake:
                 return self.imports_status, {"status": "error", "category": "MISSING_SCOPES"}
             return 200, {"results": self.imports}
         return 404, {"status": "error", "message": "fake has no route %s %s" % (req.method, p)}
+
+    def _assoc_429(self, frm, to):
+        """429 while assoc_429 has calls left for this pair (None: every call)."""
+        if (frm, to) not in self.assoc_429:
+            return None
+        left = self.assoc_429[(frm, to)]
+        if left is not None:
+            if left <= 1:
+                del self.assoc_429[(frm, to)]
+            else:
+                self.assoc_429[(frm, to)] = left - 1
+        return 429, {"status": "error", "message": "You have reached your secondly limit.", "category": "RATE_LIMITS",
+                     "policyName": "SECONDLY"}
+
+    def _read_assocs(self, frm, to, inputs):
+        """v4 associations batch read as HubSpot answers it: ASSOC_PAGE associations an input, paged per input;
+        207 with OBJECT_NOT_FOUND for inputs without any, and an error for the ids in assoc_errors."""
+        hit = self._assoc_429(frm, to)
+        if hit:
+            return hit
+        if len(inputs) > 100:
+            return 400, {"status": "error", "category": "VALIDATION_ERROR", "message": "at most 100 inputs"}
+        out, empty, broken = [], [], []
+        for x in inputs:
+            oid = str(x["id"])
+            if oid in self.assoc_errors:
+                broken.append(oid)
+                continue
+            tos = self.assocs.get((frm, oid), {}).get(to, [])
+            if not tos:
+                empty.append(oid)
+                continue
+            start = int(x.get("after") or 0)
+            row = {"from": {"id": oid}, "to": [
+                {"toObjectId": int(i), "associationTypes": [{"typeId": 5 if n == 0 else 6}]}
+                for n, i in enumerate(tos[start:start + self.ASSOC_PAGE], start=start)]}
+            if start + self.ASSOC_PAGE < len(tos):
+                row["paging"] = {"next": {"after": str(start + self.ASSOC_PAGE)}}
+            out.append(row)
+        errors = [{"status": "error", "category": "OBJECT_NOT_FOUND",
+                   "subCategory": "crm.associations.NO_ASSOCIATIONS_FOUND", "context": {"fromObjectId": [oid]},
+                   "message": "No %s is associated with %s %s." % (to, frm, oid)} for oid in empty]
+        if broken:
+            errors.append({"status": "error", "category": "INTERNAL_ERROR", "context": {"fromObjectId": broken},
+                           "message": "test error"})
+        body = {"status": "COMPLETE", "results": out}
+        if errors:
+            body.update(errors=errors, numErrors=len(errors))
+        return (207 if errors else 200), body
 
     def _read_meetings(self, req):
         """Batch read as HubSpot answers it: 200 when every id is found, else 207 naming the missing ids."""
