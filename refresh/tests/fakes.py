@@ -55,6 +55,12 @@ def iso(dt):
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
+def iso_ms(m):
+    """ISO time with milliseconds, as HubSpot writes modified times, from epoch ms."""
+    dt = datetime.fromtimestamp(m / 1000, timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (m % 1000)
+
+
 def ms(dt):
     return int(dt.timestamp() * 1000)
 
@@ -385,6 +391,9 @@ class HubSpotFake:
             ids = sorted((i for i in objs if ms(parse_iso(objs[i][modfield])) >= since),
                          key=lambda i: objs[i][modfield])
             start = int(body.get("after") or 0)
+            if start + limit > 10000:
+                # What HubSpot answers for a page past the first 10,000 results.
+                return 400, {"message": "There was a problem with the request."}
         else:
             return 400, {"status": "error", "message": "fake does not support this filter"}
         page = ids[start:start + limit]

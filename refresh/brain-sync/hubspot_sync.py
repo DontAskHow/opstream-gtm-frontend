@@ -213,16 +213,35 @@ def _to_ms(iso: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
+def _result_ms(r: dict, modfield: str):
+    """A search result's modified time in ms (its modfield, else updatedAt), or None."""
+    raw = (r.get("properties") or {}).get(modfield) or r.get("updatedAt")
+    try:
+        return int(raw) if str(raw).isdigit() else _to_ms(raw)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+# CRM search answers 400 for any page past its first 10,000 results.
+SEARCH_WINDOW = 9900
+
+
 def search_objects(client, otype: str, modfield: str, props: list[str], since_ms: int):
-    """Yield result dicts from the CRM search API, paginated."""
-    after = None
+    """Yield result dicts from the CRM search API, paginated.
+
+    After SEARCH_WINDOW results with more to come, a new search starts at the
+    last result's modified time. Results at that time come back again; those
+    already yielded are skipped.
+    """
+    window_ms, after, window_n = since_ms, None, 0
+    edge_ms, edge_ids = None, set()  # newest modified time yielded, and the ids yielded at it
     while True:
         body = {
             "filterGroups": [{
                 "filters": [{
                     "propertyName": modfield,
                     "operator": "GTE",
-                    "value": since_ms,
+                    "value": window_ms,
                 }]
             }],
             "sorts": [{"propertyName": modfield, "direction": "ASCENDING"}],
@@ -238,11 +257,27 @@ def search_objects(client, otype: str, modfield: str, props: list[str], since_ms
             raise RuntimeError(f"HubSpot search {otype} returned HTTP {status}: {str(payload)[:300]}")
         results = payload.get("results", []) if isinstance(payload, dict) else []
         for r in results:
+            mod_ms = _result_ms(r, modfield)
+            if mod_ms is not None:
+                if mod_ms == edge_ms and r.get("id") in edge_ids:
+                    continue
+                if mod_ms != edge_ms:
+                    edge_ms, edge_ids = mod_ms, set()
+                edge_ids.add(r.get("id"))
             yield r
+        window_n += len(results)
         nxt = (payload.get("paging") or {}).get("next", {}) if isinstance(payload, dict) else {}
         after = nxt.get("after")
         if not after:
             break
+        if window_n >= SEARCH_WINDOW:
+            last_ms = _result_ms(results[-1], modfield) if results else None
+            if last_ms is None or last_ms <= window_ms:
+                at = datetime.fromtimestamp(window_ms / 1000, timezone.utc).isoformat(timespec="milliseconds")
+                raise RuntimeError(
+                    f"HubSpot search {otype}: {window_n}+ results have {modfield} {at}; search cannot "
+                    f"page past 10,000, so it cannot move past that value")
+            window_ms, after, window_n = last_ms, None, 0
 
 
 def refresh_associations(client, con, otype: str, hs_id: str, log) -> int:

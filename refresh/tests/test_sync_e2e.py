@@ -27,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -86,14 +86,14 @@ class SyncE2E(unittest.TestCase):
         cls.world.stop()
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def run_sync(self, script, **env_extra):
+    def run_sync(self, script, rc=0, **env_extra):
         self.world.take_requests()
         env = self.world.env(os.environ, self.db)
         env.update({k: str(v) for k, v in env_extra.items()})
         proc = subprocess.run([sys.executable, str(self.sync_dir / script)], env=env, cwd=str(self.tmp),
                               capture_output=True, text=True, timeout=600)
         reqs = self.world.take_requests()
-        self.assertEqual(proc.returncode, 0, "%s exited %s\n%s\n%s" % (script, proc.returncode,
+        self.assertEqual(proc.returncode, rc, "%s exited %s\n%s\n%s" % (script, proc.returncode,
                                                                       proc.stdout[-4000:], proc.stderr[-4000:]))
         self.assertEqual(self.world.refused_connects, [], "a sync tried to reach a host other than the fakes")
         for secret in (fakes.ACCESS_TOKEN, fakes.REFRESH_TOKEN, fakes.LEMLIST_KEY, "test-client-secret"):
@@ -765,6 +765,106 @@ class SyncE2E(unittest.TestCase):
             self.assertIn("32 stored meetings checked, 0 removed", self.outcome("hubspot_meeting_archive")[3])
             self.assertEqual(json.loads(self.state("hubspot_meeting_archive")), {"afterId": None})
             self.assertEqual(stored(), live)
+
+    @staticmethod
+    def window_searches(reqs, otype):
+        """(GTE value, after) of each modified-time search for otype, in order."""
+        out = []
+        for r in reqs:
+            if r.path == "/crm/v3/objects/%s/search" % otype:
+                body = r.json()
+                flt = body["filterGroups"][0]["filters"][0]
+                if flt["operator"] == "GTE":
+                    out.append((int(flt["value"]), body.get("after")))
+        return out
+
+    @contextlib.contextmanager
+    def products(self, mods):
+        """Put products with these hs_lastmodifieddate values (ms, in id order) in the fake."""
+        objs = self.world.hubspot.objects
+        objs["products"] = {9_000_001 + k: {"hs_object_id": str(9_000_001 + k), "name": "Product %d" % k,
+                                            "hs_lastmodifieddate": fakes.iso_ms(m)} for k, m in enumerate(mods)}
+        try:
+            yield objs["products"]
+        finally:
+            objs.pop("products")
+
+    def test_hubspot_search_over_10k_windows(self):
+        """More than 10,000 changes since the watermark (HubSpot answers 400 past 10,000 results): the
+        search restarts from the last modified time it saw, every record arrives once, the watermark
+        moves to the newest change, and the extra pulls still run."""
+        now = self.world.now
+        since_ms = fakes.ms(fakes.parse_iso(fakes.iso(now - timedelta(days=1))))  # the seeded watermarks
+        bulk_ms = fakes.ms(now - timedelta(hours=2))
+        # 10,250 products, 37 to a millisecond (so window boundaries fall inside a group), then one
+        # group of 218 (the largest seen in the bulk edit), then 50 more.
+        mods = [bulk_ms + k // 37 for k in range(9_982)] + [bulk_ms + 1_000] * 218 + \
+               [bulk_ms + 2_000 + k for k in range(50)]
+        with self.fresh_db("search-10k.db"), self.products(mods):
+            started = datetime.now(timezone.utc)
+            reqs, out = self.run_sync("hubspot_sync.py", HUBSPOT_CONTACT_BACKFILL=0)
+            self.assert_hubspot_read_only(reqs)
+            searches = self.window_searches(reqs, "products")
+            # Window 1 pages to 9,900 from the watermark; window 2 starts at the 9,900th result's time.
+            self.assertEqual(searches[0], (since_ms, None))
+            self.assertEqual([a for v, a in searches[:99]], [None] + [str(n) for n in range(100, 9_900, 100)])
+            self.assertEqual(searches[99], (mods[9_899], None))
+            self.assertEqual({v for v, _a in searches}, {since_ms, mods[9_899]})
+            self.assertTrue(all(int(a or 0) + 100 <= 10_000 for _v, a in searches))
+            self.assertIn("products: 10250 changed objects", out)    # each record once
+            self.assertEqual(self.q("SELECT COUNT(*) FROM hubspot_objects WHERE object_type='products'")[0][0],
+                             10_250)
+            self.assertEqual(json.loads(self.state("hubspot"))["products"], fakes.iso_ms(mods[-1]))
+            for source in ("hubspot", "hubspot_meeting_archive", "hubspot_forms", "hubspot_lists",
+                           "hubspot_imports"):
+                ok, last_ok = self.q("SELECT ok, last_ok_at FROM sync_outcomes WHERE source=?", source)[0]
+                self.assertEqual(ok, 1, source)
+                self.assertGreaterEqual(datetime.fromisoformat(last_ok), started, source)
+
+        # Contacts, the type that hit this: the same search, called directly (a full run would refresh
+        # associations for every contact, 14 paced reads each).
+        sys.path.insert(0, str(self.sync_dir))
+        import hubspot_sync
+
+        fake = fakes.HubSpotFake(now)
+        base = dict(fake.contacts[101])
+        fake.contacts = {}
+        for k in range(10_500):
+            fake.contacts[1_000 + k] = dict(base, hs_object_id=str(1_000 + k),
+                                            lastmodifieddate=fakes.iso_ms(bulk_ms + k // 218))
+
+        class Client:
+            api_base = "https://api.hubapi.com"
+
+            def request(self, method, url, body=None):
+                return fake._search(url.split("/")[-2], json.loads(json.dumps(body)))
+
+        with mock.patch.object(hubspot_sync, "search_pace", hubspot_sync.RateLimiter(0)):
+            got = [r["id"] for r in hubspot_sync.search_objects(Client(), "contacts", "lastmodifieddate",
+                                                                ["email", "lastmodifieddate"], since_ms)]
+        self.assertEqual(sorted(got), sorted(str(i) for i in fake.contacts))  # all, none twice
+
+    def test_hubspot_search_window_no_progress_fails(self):
+        """A full 9,900-result window that ends at the time it started from cannot move on: the run fails
+        with that type and time, and the watermarks stay."""
+        now = self.world.now
+        since_ms = fakes.ms(fakes.parse_iso(fakes.iso(now - timedelta(days=1))))
+        bulk_ms = fakes.ms(now - timedelta(hours=2))
+        with self.fresh_db("search-stuck.db"), self.products([since_ms + 5] * 3 + [bulk_ms] * 10_050):
+            marks = self.state("hubspot")
+            reqs, out = self.run_sync("hubspot_sync.py", rc=1, HUBSPOT_CONTACT_BACKFILL=0)
+            searches = self.window_searches(reqs, "products")
+            # Window 1 reaches 9,900 and moves to bulk_ms; window 2 ends there too, and the run stops.
+            self.assertEqual([v for v, _a in searches], [since_ms] * 99 + [bulk_ms] * 99)
+            self.assertTrue(all(int(a or 0) + 100 <= 10_000 for _v, a in searches))
+            at = fakes.iso_ms(bulk_ms).replace("Z", "+00:00")
+            self.assertIn("RuntimeError: HubSpot search products: 9900+ results have hs_lastmodifieddate %s" % at,
+                          out)
+            self.assertNotIn("returned HTTP 400", out)
+            self.assertEqual(self.state("hubspot"), marks)
+            ok, _route, _http, detail = self.outcome("hubspot")
+            self.assertEqual(ok, 0)
+            self.assertIn("HubSpot search products", detail)
 
     # ------------------------------------------------------------ Lemlist
 
