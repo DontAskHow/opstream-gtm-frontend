@@ -135,20 +135,41 @@ class GoogleTokenScopes(unittest.TestCase):
         self.assertEqual(self.access(), "synthetic-access")
         self.assert_refresh_calls(None, READONLY_GRANTS)
 
-    def test_readonly_subset_returns_access_token(self):
-        self.assertEqual(self.access(READONLY_GRANTS[:1]), "synthetic-access")
-        self.assert_refresh_calls(None, READONLY_GRANTS)
+    def test_grant_missing_a_required_scope_requires_reconnection(self):
+        for missing in READONLY_GRANTS:
+            with self.subTest(missing=missing):
+                self.request.reset_mock()
+                grants = tuple(g for g in READONLY_GRANTS if g != missing)
+                self.assert_reconnect(lambda: self.access(grants))
+                self.assertFalse(common._TOKEN_CACHE)
+                self.assert_refresh_calls(None)
+
+    def test_superset_grant_returns_narrowed_token(self):
+        for extra in (WRITE_GRANT, GMAIL_SEND, UNKNOWN_GRANT,
+                      "https://www.googleapis.com/auth/drive"):
+            with self.subTest(extra=extra):
+                common._TOKEN_CACHE.clear()
+                self.request.reset_mock()
+                self.assertEqual(self.access(READONLY_GRANTS + (extra,)), "synthetic-access")
+                self.assert_refresh_calls(None, READONLY_GRANTS)
+
+    def test_superset_grant_warns_extra_scope_names_only(self):
+        token = "synthetic-private-access"
+        with self.assertLogs("sync.google", level="WARNING") as logs:
+            self.assertEqual(self.access(READONLY_GRANTS + (GMAIL_SEND, UNKNOWN_GRANT), token=token),
+                             token)
+        rendered = "\n".join(logs.output)
+        self.assertIn(GMAIL_SEND, rendered)
+        self.assertIn(UNKNOWN_GRANT, rendered)
+        for secret in (token, PROBE_ACCESS, PROBE_ID, "synthetic-secret"):
+            self.assertNotIn(secret, rendered)
 
     def test_reordered_duplicate_readonly_grants_return_access_token(self):
         grants = tuple(reversed(READONLY_GRANTS)) + READONLY_GRANTS[:1]
         self.assertEqual(self.access(grants), "synthetic-access")
         self.assert_refresh_calls(None, READONLY_GRANTS)
 
-    def test_write_grant_requires_reconnection(self):
-        self.assert_reconnect(lambda: self.access(READONLY_GRANTS + (WRITE_GRANT,)))
-        self.assert_refresh_calls(None)
-
-    def test_gmail_send_grant_requires_reconnection(self):
+    def test_gmail_send_grant_is_narrowed_out_of_the_token(self):
         self.transport = FakeGoogleTransport(READONLY_GRANTS + (GMAIL_SEND,))
         credentials = self.credentials()(
             token=None, refresh_token="synthetic-secret", client_id="synthetic-secret",
@@ -160,22 +181,8 @@ class GoogleTokenScopes(unittest.TestCase):
         self.assert_refresh_calls(READONLY_GRANTS)
 
         self.request.reset_mock()
-        self.assert_reconnect(lambda: self.access(READONLY_GRANTS + (GMAIL_SEND,)))
-        self.assertFalse(common._TOKEN_CACHE)
-        self.assert_refresh_calls(None)
-
-    def test_other_write_grants_require_reconnection(self):
-        for grant in ("https://www.googleapis.com/auth/drive",
-                      "https://www.googleapis.com/auth/gmail.compose",
-                      "https://www.googleapis.com/auth/gmail.modify"):
-            with self.subTest(grant=grant):
-                self.request.reset_mock()
-                self.assert_reconnect(lambda: self.access(READONLY_GRANTS + (grant,)))
-                self.assert_refresh_calls(None)
-
-    def test_unknown_grant_requires_reconnection(self):
-        self.assert_reconnect(lambda: self.access(READONLY_GRANTS + (UNKNOWN_GRANT,)))
-        self.assert_refresh_calls(None)
+        self.assertEqual(self.access(READONLY_GRANTS + (GMAIL_SEND,)), "synthetic-access")
+        self.assert_refresh_calls(None, READONLY_GRANTS)
 
     def test_requested_write_scope_does_not_expand_allowlist(self):
         self.assert_reconnect(lambda: self.access(
@@ -266,7 +273,7 @@ class GoogleTokenScopes(unittest.TestCase):
         self.assert_refresh_calls(None, READONLY_GRANTS)
         self.request.reset_mock()
         with patch.object(common.time, "time", return_value=5000):
-            self.assert_reconnect(lambda: self.access(READONLY_GRANTS + (GMAIL_SEND,)))
+            self.assert_reconnect(lambda: self.access(READONLY_GRANTS[1:] + (GMAIL_SEND,)))
         self.assert_refresh_calls(None)
 
     def test_each_expired_readonly_refresh_probes_again(self):
@@ -349,7 +356,7 @@ class GoogleTokenScopes(unittest.TestCase):
         watermark = Mock()
 
         def sync(_log):
-            self.access(READONLY_GRANTS + (GMAIL_SEND,), token="synthetic-private-access")
+            self.access(READONLY_GRANTS[:-1] + (GMAIL_SEND,), token="synthetic-private-access")
             watermark("synthetic-success")
             return "synthetic-success"
 
