@@ -322,10 +322,23 @@ def _google_grant_is_allowed(request, refresh_token, client_id, client_secret) -
         scope = payload.get("scope")
         if not isinstance(scope, str):
             return False
-        granted_scopes = scope.split()
-        return bool(granted_scopes) and frozenset(granted_scopes).issubset(GOOGLE_USER_SCOPES)
+        return _grant_covers(scope.split(), GOOGLE_USER_SCOPES)
     except Exception:
         return False
+
+
+def _grant_covers(granted_scopes, required) -> bool:
+    """True when every required scope was granted. Extra granted scopes are
+    valid (the refresh below narrows the access token to the requested
+    scopes), so they only log a warning with the scope names, never a token."""
+    granted = frozenset(granted_scopes or ())
+    if not granted or not frozenset(required).issubset(granted):
+        return False
+    extra = sorted(granted - frozenset(GOOGLE_USER_SCOPES))
+    if extra:
+        logging.getLogger("sync.google").warning(
+            "Google grant has extra scopes (allowed, not used): %s", " ".join(extra))
+    return True
 
 
 def google_access_token(scopes=None, credentials_cls=None, request=None) -> str:
@@ -344,7 +357,8 @@ def google_access_token(scopes=None, credentials_cls=None, request=None) -> str:
     client_id = _read_secret_string("google-oauth-client-id")
     client_secret = _read_secret_string("google-oauth-client-secret")
     transport = request if request is not None else _StdlibRequest()
-    if not _google_grant_is_allowed(transport, refresh, client_id, client_secret):
+    if (not _google_grant_is_allowed(transport, refresh, client_id, client_secret)
+            or not frozenset(scope_list).issubset(GOOGLE_USER_SCOPES)):
         raise NeedsConnection(
             "Google connection needs reconnecting. Not touching watermarks."
         )
@@ -361,7 +375,7 @@ def google_access_token(scopes=None, credentials_cls=None, request=None) -> str:
         )
         creds.refresh(transport)
         granted_scopes = getattr(creds, "granted_scopes", None)
-        if not granted_scopes or not frozenset(granted_scopes).issubset(GOOGLE_USER_SCOPES):
+        if not _grant_covers(granted_scopes, scope_list):
             raise NeedsConnection(
                 "Google connection needs reconnecting. Not touching watermarks."
             )
