@@ -18,7 +18,9 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import traceback
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -765,6 +767,13 @@ WORKSPACE_TIMEOUT_S = int(os.environ.get("WORKSPACE_TIMEOUT_S") or 120)
 # "no change" 15 minutes after a change.
 HASH_IGNORED = {WORKSPACE_JSON: (("headline", "change"),)}
 LOCK_KEY = "locks/sync-only.json"
+# A sync-only run rewrites heartbeatAt in its lock this often (at most a fifth
+# of SYNC_LOCK_TTL_MIN). The next run judges the lock on its last heartbeat, so
+# a run of any length keeps it and a dead run's lock goes stale after the TTL.
+LOCK_HEARTBEAT_S = 300
+# Heartbeats stop once a run has held the lock this long (SYNC_LOCK_MAX_MIN),
+# so a hung run's lock still goes stale instead of blocking every later run.
+LOCK_MAX_HOLD_MIN = 240
 # The content hash ignores times, so a quiet period publishes nothing and the
 # published fetch times (workspace.json fresh.*.fetchedAt among them) stop
 # moving. Once LATEST.json is older than this, unchanged content is published
@@ -849,26 +858,92 @@ def in_skip_window(now=None):
     return None
 
 
+def _minutes_since(iso, now):
+    return (now - datetime.fromisoformat(iso)).total_seconds() / 60.0
+
+
 def acquire_lock(store, ttl_min):
-    body = json.dumps({"startedAt": datetime.now(timezone.utc).isoformat(),
-                       "task": os.environ.get("ECS_CONTAINER_METADATA_URI_V4", "").rsplit("/", 1)[-1]}).encode()
-    for _ in range(2):
-        if store.create_if_absent(LOCK_KEY, body):
-            return True
-        try:
-            held = json.loads(store.get_bytes(LOCK_KEY).decode("utf-8"))
-            since = datetime.fromisoformat(held["startedAt"])
-            age = (datetime.now(timezone.utc) - since).total_seconds() / 60.0
-        except FileNotFoundError:
-            continue
-        except Exception:
-            age = ttl_min + 1
-        if age < ttl_min:
-            log("another sync-only run holds the lock (%.0f min old, ttl %d). Exiting." % (age, ttl_min))
-            return False
-        log("lock is %.0f min old, past ttl %d. Taking it over." % (age, ttl_min))
-        store.delete(LOCK_KEY)
-    return False
+    """This run's lock body (with its token) when it now holds the lock, else None.
+
+    A held lock is stale when its last heartbeat (startedAt for a lock written
+    before heartbeats) is ttl_min old. A stale lock is taken over with a write
+    conditional on the version just read, so of two runs that both saw it
+    stale only one gets it.
+    """
+    now = datetime.now(timezone.utc)
+    lock = {"token": uuid.uuid4().hex, "startedAt": now.isoformat(), "heartbeatAt": now.isoformat(),
+            "task": os.environ.get("ECS_CONTAINER_METADATA_URI_V4", "").rsplit("/", 1)[-1]}
+    body = json.dumps(lock).encode()
+    if store.create_if_absent(LOCK_KEY, body):
+        return lock
+    try:
+        raw, tag = store.get_with_tag(LOCK_KEY)
+    except FileNotFoundError:  # released in between
+        return lock if store.create_if_absent(LOCK_KEY, body) else None
+    try:
+        held = json.loads(raw.decode("utf-8"))
+        age = _minutes_since(held.get("heartbeatAt") or held["startedAt"], now)
+        started = _minutes_since(held["startedAt"], now)
+    except Exception:
+        age = started = ttl_min + 1
+    if age < ttl_min:
+        log("another sync-only run holds the lock (started %.0f min ago, last heartbeat %.0f min ago, ttl %d). "
+            "Exiting." % (started, age, ttl_min))
+        return None
+    log("lock's last heartbeat is %.0f min old, past ttl %d. Taking it over." % (age, ttl_min))
+    if store.put_bytes_if_match(LOCK_KEY, body, tag, "application/json"):
+        return lock
+    log("another run took the stale lock first. Exiting.")
+    return None
+
+
+def renew_lock(store, lock, max_hold_min):
+    """Rewrite heartbeatAt. False when the lock is no longer this run's or it has been held max_hold_min."""
+    try:
+        raw, tag = store.get_with_tag(LOCK_KEY)
+        held = json.loads(raw.decode("utf-8"))
+    except (FileNotFoundError, ValueError):
+        return False
+    now = datetime.now(timezone.utc)
+    if held.get("token") != lock["token"] or _minutes_since(held["startedAt"], now) >= max_hold_min:
+        return False
+    held["heartbeatAt"] = now.isoformat()
+    return store.put_bytes_if_match(LOCK_KEY, json.dumps(held).encode(), tag, "application/json")
+
+
+class LockHeartbeat(threading.Thread):
+    """Renews the lock every LOCK_HEARTBEAT_S (capped at ttl/5) until stop is set or renewal is refused."""
+
+    def __init__(self, store, lock, ttl_min, max_hold_min):
+        super().__init__(name="sync-lock-heartbeat", daemon=True)
+        self.store, self.lock, self.max_hold_min = store, lock, max_hold_min
+        self.interval = min(LOCK_HEARTBEAT_S, ttl_min * 60 / 5.0)
+        self.stop = threading.Event()
+
+    def run(self):
+        while not self.stop.wait(self.interval):
+            try:
+                if renew_lock(self.store, self.lock, self.max_hold_min):
+                    continue
+            except Exception as exc:  # a failed write is retried next beat
+                log("WARNING: lock heartbeat failed (%s: %s)" % (type(exc).__name__, str(exc)[-200:]))
+                continue
+            log("WARNING: lock heartbeat stopped: another run holds the lock, or this run has held it "
+                "%d min (SYNC_LOCK_MAX_MIN)." % self.max_hold_min)
+            return
+
+
+def release_lock(store, lock):
+    """Delete the lock only while it is still this run's. True when deleted."""
+    try:
+        held = json.loads(store.get_bytes(LOCK_KEY).decode("utf-8"))
+    except (FileNotFoundError, ValueError):
+        return False
+    if held.get("token") != lock["token"]:
+        log("WARNING: another run took the lock over during this run. Leaving its lock in place.")
+        return False
+    store.delete(LOCK_KEY)
+    return True
 
 
 def publish_age_min(latest, now=None):
@@ -933,12 +1008,18 @@ def main_sync_only(cfg, store):
     if window:
         log("sync-only: inside skip window %s (6-hourly refresh). Exiting." % window)
         return 0
-    if not acquire_lock(store, int(os.environ.get("SYNC_LOCK_TTL_MIN") or 50)):
+    ttl_min = int(os.environ.get("SYNC_LOCK_TTL_MIN") or 50)
+    lock = acquire_lock(store, ttl_min)
+    if not lock:
         return 0
+    beat = LockHeartbeat(store, lock, ttl_min, int(os.environ.get("SYNC_LOCK_MAX_MIN") or LOCK_MAX_HOLD_MIN))
+    beat.start()
     try:
         return _sync_only(store, published, state_prefix, brain_key)
     finally:
-        store.delete(LOCK_KEY)
+        beat.stop.set()
+        beat.join(timeout=30)
+        release_lock(store, lock)
 
 
 def build_workspace(store, state_prefix, work, out, db_path, previous, env):

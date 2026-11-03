@@ -8,8 +8,20 @@ between the 6-hourly full refresh runs without calling OpenAI.
 1. Exits at once inside `SYNC_SKIP_WINDOWS` (default `0,6,12,18:10-29`,
    America/Phoenix), the minutes around the 6-hourly run at :17.
 2. Takes the S3 lock `locks/sync-only.json` (conditional create,
-   `If-None-Match: *`). A lock younger than `SYNC_LOCK_TTL_MIN` (default 50)
-   means another sync-only run is still going, so this one exits 0.
+   `If-None-Match: *`). The lock holds a per-run `token`, `startedAt`, and
+   `heartbeatAt`. While the run lasts, a heartbeat thread rewrites
+   `heartbeatAt` every 5 minutes (at most a fifth of `SYNC_LOCK_TTL_MIN`),
+   with `If-Match` and only while the token is still this run's. A lock
+   whose last heartbeat is younger than `SYNC_LOCK_TTL_MIN` (default 50)
+   means another sync-only run is still going, however long ago it started,
+   so this one exits 0. A lock without `heartbeatAt` (written by an older
+   image) is judged on `startedAt`. A stale lock belongs to a dead run. It is
+   taken over with `If-Match` on the version just read, so only one of two
+   runs that both found it stale gets it. Heartbeats stop once a run has held
+   the lock `SYNC_LOCK_MAX_MIN` (default 240), so a hung run's lock goes
+   stale too. On exit the run deletes the lock only while it still carries
+   its token. If another run took it over, the run logs a WARNING and leaves
+   it in place.
 3. Reads `published/LATEST.json`, then streams `brain.db` and keeps its ETag.
 4. Runs the source syncs: sheets, hubspot, fathom, ga4, lemlist
    (`SYNC_ONLY_SOURCES`). Otterly is left to the 6-hourly run. Its API
