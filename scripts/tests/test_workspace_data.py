@@ -826,12 +826,20 @@ class LemlistFirstTouch(SyntheticBuild, unittest.TestCase):
         self.assertEqual(self.assert_assist('Paid', click=True, **early)['rule'], 'HubSpot UTM / click id')
 
     def test_lead_tracker_paid_lead_with_a_dated_form_fill_stays_paid(self):
-        # The form fill is the conversion from the ad: a Lead Tracker Source of Paid outranks it, and so does a click id.
+        # The form fill is the conversion from the ad: a Lead Tracker Source of Paid outranks it.
         lead, _ = self.alpha(**{**self.REPORT, 'sheet': 'Paid'})
         form = next(e for e in lead['evidence'] if e['rule'] == 'HubSpot form submission')
         self.assertEqual((lead['source'], lead['sourceBasis'], form['decides']), ('Paid', 'sheet', False))
-        lead, _ = self.alpha(click=True, **self.REPORT)
+        # With a click id too, the click id names the source.
+        lead, _ = self.alpha(click=True, **{**self.REPORT, 'sheet': 'Paid'})
         self.assertEqual((lead['source'], lead['rule']), ('Paid', 'HubSpot UTM / click id'))
+
+    def test_click_id_alone_does_not_outrank_an_earlier_form_fill(self):
+        # Lead Tracker Inbound: a HubSpot click id keeps its place below the dated form submission.
+        lead, _ = self.alpha(click=True, **self.REPORT)
+        click = next(e for e in lead['evidence'] if e['rule'] == 'HubSpot UTM / click id')
+        self.assertEqual((lead['source'], lead['rule'], click['decides']), ('Inbound', 'HubSpot form submission', True))
+        self.assertTrue(lead['conflict'])
 
     def test_undated_send_with_a_reply_never_decides(self):
         self.assert_assist('Inbound', reply='2026-09-21T15:00:00Z', meeting='2026-09-25T15:00:00Z')
