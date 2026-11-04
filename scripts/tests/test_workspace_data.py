@@ -825,6 +825,14 @@ class LemlistFirstTouch(SyntheticBuild, unittest.TestCase):
         self.assertEqual(self.assert_assist('Paid', sheet='Paid', **early)['sourceBasis'], 'sheet')
         self.assertEqual(self.assert_assist('Paid', click=True, **early)['rule'], 'HubSpot UTM / click id')
 
+    def test_lead_tracker_paid_lead_with_a_dated_form_fill_stays_paid(self):
+        # The form fill is the conversion from the ad: a Lead Tracker Source of Paid outranks it, and so does a click id.
+        lead, _ = self.alpha(**{**self.REPORT, 'sheet': 'Paid'})
+        form = next(e for e in lead['evidence'] if e['rule'] == 'HubSpot form submission')
+        self.assertEqual((lead['source'], lead['sourceBasis'], form['decides']), ('Paid', 'sheet', False))
+        lead, _ = self.alpha(click=True, **self.REPORT)
+        self.assertEqual((lead['source'], lead['rule']), ('Paid', 'HubSpot UTM / click id'))
+
     def test_undated_send_with_a_reply_never_decides(self):
         self.assert_assist('Inbound', reply='2026-09-21T15:00:00Z', meeting='2026-09-25T15:00:00Z')
 

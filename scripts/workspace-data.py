@@ -1273,6 +1273,11 @@ def build_leads(brain, ctx):
                 continue
             if e['rule'] == 'Lead Tracker note' and pipeline_platform and e.get('platform') and e['platform'] != pipeline_platform:
                 e['superseded'] = 'Pipeline\'s HubSpot check says %s' % pipeline_platform
+        if not ov and (lead['source'] == 'Paid' or any(e['decides'] and e.get('source') == 'Paid' for e in ev)):
+            # A paid-ad lead is always Paid: Paid evidence, a Lead Tracker Source of Paid included, is never outranked.
+            for e in ev:
+                if e['decides'] and e.get('source') != 'Paid':
+                    e['decides'] = False
         if hold:
             lead['hold'] = hold_label(rv)
         lead['evidence'] = ev
