@@ -594,11 +594,13 @@ class SyntheticBuild:
         con.close()
         return db
 
+    SOURCES = {'sheet': {'tab': 'Lead Tracker (Synthetic Sheet)'}, 'ads': {
+        'platforms': ['Google Ads', 'LinkedIn Ads'],
+        'paid_leads': [{'company': 'Alpha Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-01'},
+                       {'company': 'Beta Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-02'}]}}
+
     def build(self, overrides=None, review=None, extra_rows=(), inserted=()):
-        self.write('lead-sources.json', {'sheet': {'tab': 'Lead Tracker (Synthetic Sheet)'}, 'ads': {
-            'platforms': ['Google Ads', 'LinkedIn Ads'],
-            'paid_leads': [{'company': 'Alpha Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-01'},
-                           {'company': 'Beta Synthetic', 'platform': 'Google', 'conversion_date': '2026-09-02'}]}})
+        self.write('lead-sources.json', self.SOURCES)
         if overrides is not None:
             self.write('source-overrides.json', overrides)
         if review is not None:
@@ -765,6 +767,95 @@ class ReviewList(SyntheticBuild, unittest.TestCase):
         self.assert_untouched(leads['Alpha Synthetic'])
         self.assert_untouched(leads['Beta Synthetic'])
         self.assertEqual(out['reviewList']['leadIds'], {})
+
+
+class LemlistFirstTouch(SyntheticBuild, unittest.TestCase):
+    """A Lemlist send decides Alpha Synthetic's source only as a real first touch; otherwise it is an outbound assist.
+    Alpha has no paid signal unless a test adds one; its contact gets one send from an outbound campaign."""
+    SOURCES = {'sheet': {'tab': 'Lead Tracker (Synthetic Sheet)'}, 'ads': {'platforms': ['Google Ads']},
+               'lemlist': {'campaigns': [{'id': '1001', 'name': 'Synthetic Outbound', 'bucket': 'sales_outbound'}]}}
+    REPORT = {'sheet': 'Inbound', 'date': '10/08/2026', 'form': '2026-10-08T17:00:00Z'}  # a report download on 10/8
+
+    def alpha(self, **kw):
+        self.fixture = kw
+        out = self.build()
+        lead = next(l for l in out['leads']['items'] if l['company'] == 'Alpha Synthetic')
+        return lead, next(e for e in lead['evidence'] if e['rule'] == 'Lemlist lead email')
+
+    def brain(self, extra_rows=(), inserted=()):
+        import sqlite3
+        db = super().brain(extra_rows, inserted)
+        f = {'sheet': 'Inbound', 'date': '10/08/2026', **self.fixture}
+        con = sqlite3.connect(db)
+        con.execute('UPDATE sheets_data SET row_json = ? WHERE row_num = 2',
+                    (json.dumps(['Alpha Synthetic', f['sheet'], 'Alex', f['date'], 'c1', 'co1.example']),))
+        props = {'email': 'k1@co1.example', 'createdate': '2026-08-01T00:00:00Z'}
+        if f.get('click'):
+            props['hs_google_click_id'] = 'synthetic-click'
+        con.execute("UPDATE hubspot_objects SET properties_json = ? WHERE object_type = 'contacts' AND hs_id = 'k1'", (json.dumps(props),))
+        con.executescript("""
+            CREATE TABLE lemlist_leads (campaign_id TEXT, email TEXT, replied_at TEXT, contacted_at TEXT, meeting_booked_at TEXT, raw_json TEXT);
+            CREATE TABLE hubspot_form_submissions (form_id TEXT, conversion_id TEXT, submitted_at TEXT, contact_email TEXT,
+                                                   page_url TEXT, page_title TEXT, values_json TEXT);""")
+        con.execute('INSERT INTO lemlist_leads VALUES (?,?,?,?,?,?)',
+                    ('1001', 'k1@co1.example', f.get('reply'), f.get('send'), f.get('meeting'), json.dumps(f.get('raw') or {})))
+        if f.get('form'):
+            con.execute('INSERT INTO hubspot_form_submissions VALUES (?,?,?,?,?,?,?)',
+                        ('1002', 'cv1', f['form'], 'k1@co1.example', 'https://co1.example/report', 'Synthetic report', '{}'))
+        con.commit()
+        con.close()
+        return db
+
+    def assert_assist(self, source, **kw):
+        lead, row = self.alpha(**kw)
+        self.assertEqual((lead['source'], row['decides'], row.get('outboundAssist')), (source, False, True))
+        return lead
+
+    def test_report_download_lead_stays_inbound_after_a_later_send(self):
+        lead = self.assert_assist('Inbound', send='2026-10-19T15:00:00Z', reply='2026-10-20T15:00:00Z', **self.REPORT)
+        self.assertEqual((lead['rule'], lead['conflict']), ('HubSpot form submission', False))
+        # No form either: the Lead Tracker date alone is earlier, and the Sheet's Inbound is used.
+        lead = self.assert_assist('Inbound', send='2026-10-19T15:00:00Z', reply='2026-10-20T15:00:00Z')
+        self.assertEqual(lead['sourceBasis'], 'sheet')
+        # A Lead Tracker date after the send: the earlier form submission still comes first.
+        self.assert_assist('Inbound', send='2026-10-19T15:00:00Z', reply='2026-10-20T15:00:00Z', **{**self.REPORT, 'date': '10/25/2026'})
+
+    def test_paid_lead_stays_paid_after_an_earlier_send_and_reply(self):
+        early = {'send': '2026-09-20T15:00:00Z', 'reply': '2026-09-21T15:00:00Z'}
+        self.assertEqual(self.assert_assist('Paid', sheet='Paid', **early)['sourceBasis'], 'sheet')
+        self.assertEqual(self.assert_assist('Paid', click=True, **early)['rule'], 'HubSpot UTM / click id')
+
+    def test_lead_tracker_paid_lead_with_a_dated_form_fill_stays_paid(self):
+        # The form fill is the conversion from the ad: a Lead Tracker Source of Paid outranks it.
+        lead, _ = self.alpha(**{**self.REPORT, 'sheet': 'Paid'})
+        form = next(e for e in lead['evidence'] if e['rule'] == 'HubSpot form submission')
+        self.assertEqual((lead['source'], lead['sourceBasis'], form['decides']), ('Paid', 'sheet', False))
+        # With a click id too, the click id names the source.
+        lead, _ = self.alpha(click=True, **{**self.REPORT, 'sheet': 'Paid'})
+        self.assertEqual((lead['source'], lead['rule']), ('Paid', 'HubSpot UTM / click id'))
+
+    def test_click_id_alone_does_not_outrank_an_earlier_form_fill(self):
+        # Lead Tracker Inbound: a HubSpot click id keeps its place below the dated form submission.
+        lead, _ = self.alpha(click=True, **self.REPORT)
+        click = next(e for e in lead['evidence'] if e['rule'] == 'HubSpot UTM / click id')
+        self.assertEqual((lead['source'], lead['rule'], click['decides']), ('Inbound', 'HubSpot form submission', True))
+        self.assertTrue(lead['conflict'])
+
+    def test_undated_send_with_a_reply_never_decides(self):
+        self.assert_assist('Inbound', reply='2026-09-21T15:00:00Z', meeting='2026-09-25T15:00:00Z')
+
+    def test_auto_reply_alone_never_decides(self):
+        self.assert_assist('Inbound', send='2026-09-20T15:00:00Z', reply='2026-09-21T15:00:00Z',
+                           raw={'replyText': 'Out of office until Monday (synthetic)'})
+
+    def test_earliest_send_with_a_real_reply_or_meeting_after_it_is_outbound(self):
+        for after in ({'reply': '2026-09-22T15:00:00Z'}, {'meeting': '2026-09-25T15:00:00Z'}):
+            lead, row = self.alpha(send='2026-09-20T15:00:00Z', **after, **self.REPORT)
+            self.assertEqual((lead['source'], lead['rule'], row['decides'], 'outboundAssist' in row),
+                             ('Outbound', 'Lemlist lead email', True, False))
+        # The same send with no reply or meeting after it is only an assist.
+        for before in ({}, {'reply': '2026-09-19T15:00:00Z'}, {'meeting': '2026-09-19T15:00:00Z'}):
+            self.assert_assist('Inbound', send='2026-09-20T15:00:00Z', **before, **self.REPORT)
 
 
 class Docs(unittest.TestCase):

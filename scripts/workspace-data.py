@@ -1033,7 +1033,8 @@ def attribute(lead, lead_contacts, ctx):
                 ev.append({'rule': 'Lemlist lead email', 'source': 'Outbound', 'detail': name, 'contactId': c['id'],
                            'subSource': 'Job changer' if job else name, 'tag': 'job_changer' if job else None,
                            'replied': bool(r.get('replied_at')) and not is_auto_reply(r.get('raw_json')),
-                           'at': r.get('replied_at') or r.get('contacted_at')})
+                           'at': r.get('replied_at') or r.get('contacted_at'), 'sentAt': r.get('contacted_at'),
+                           'repliedAt': r.get('replied_at'), 'meetingAt': r.get('meeting_booked_at')})
         if ctx['submissions'] is not None and email in ctx['submissions']:
             for sub in ctx['submissions'][email]:
                 form = ls.forms.get(sub['formId']) or ls.forms_by_name.get(norm(ctx['form_names'].get(sub['formId'])))
@@ -1113,6 +1114,23 @@ RULE_ORDER = ['Source override', 'MQL touch (review list)', 'Lemlist lead email'
               'HubSpot source (review list)', 'HubSpot check (Pipeline)', 'Paid lead (Pipeline)', 'Paid deal (Pipeline export)',
               'Lead Tracker note']
 NOT_DECIDING = {'Paid deal (Pipeline export)', 'Lead Tracker note'}
+DATED_TOUCHES = {'HubSpot form / UTM', 'HubSpot form submission', 'Event list upload'}
+
+
+def outbound_first_touch(e, ev, lead_dt, sheet_source):
+    """Lead source is the first touch: a Lemlist row decides only when its send is dated, a real reply (not an
+    auto-reply) or a meeting booked followed it, the lead has no Paid evidence (deciding rows or a Lead Tracker Source
+    of Paid), and no Lead Tracker lead date or dated form, list upload or event row is on an earlier day."""
+    sent = parse_time(e.get('sentAt'))
+    if not sent:
+        return False
+    reply = parse_time(e.get('repliedAt')) if e.get('replied') else None
+    if not any(t and t >= sent for t in (reply, parse_time(e.get('meetingAt')))):
+        return False
+    if sheet_source == 'Paid' or any(x.get('source') == 'Paid' and x['rule'] not in NOT_DECIDING for x in ev):
+        return False
+    touches = [lead_dt] + [parse_time(x.get('at')) for x in ev if x['rule'] in DATED_TOUCHES]
+    return all(ymd(sent) <= ymd(t) for t in touches if t)
 
 
 def conversion_event_terms(ads):
@@ -1249,10 +1267,17 @@ def build_leads(brain, ctx):
             e['decides'] = e['rule'] not in NOT_DECIDING and bool(e.get('source')) and not hold
             if ov:
                 e['decides'] = e['rule'] == 'Source override'
+            if e['rule'] == 'Lemlist lead email' and e['decides'] and not outbound_first_touch(e, ev, lead_dt, lead['source']):
+                e['decides'], e['outboundAssist'] = False, True  # kept as evidence: an outbound assist, not the source
             if e.get('superseded'):
                 continue
             if e['rule'] == 'Lead Tracker note' and pipeline_platform and e.get('platform') and e['platform'] != pipeline_platform:
                 e['superseded'] = 'Pipeline\'s HubSpot check says %s' % pipeline_platform
+        if not ov and lead['source'] == 'Paid':
+            # A paid-ad lead is always Paid: a Lead Tracker Source of Paid is never outranked by a non-Paid rule.
+            for e in ev:
+                if e['decides'] and e.get('source') != 'Paid':
+                    e['decides'] = False
         if hold:
             lead['hold'] = hold_label(rv)
         lead['evidence'] = ev
@@ -1322,7 +1347,7 @@ def build_leads(brain, ctx):
         lead['tag'] = tag
         # Other evidence naming a different source than the one used: shown, not resolved.
         for e in ev:
-            if e.get('superseded') == OVERRIDE_LABEL:
+            if e.get('superseded') == OVERRIDE_LABEL or e.get('outboundAssist'):
                 continue
             if e.get('source') and e['source'] != lead['source'] and e is not hub and not (e['rule'] == 'Lead Tracker note' and lead['sheetSource'] == lead['source']):
                 what = e.get('platform') or e['source']
