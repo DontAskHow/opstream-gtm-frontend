@@ -425,6 +425,49 @@ test('auth: stale data, a timeout, a 5xx or another 4xx gives no auth id', () =>
   ]), ['source-stale:ga4', 'source-stale:sheets', 'source-stale:source-a', 'source-stale:source-b', 'source-stale:source-c', 'source-stale:source-e']);
 });
 
+// The detail refresh/brain-sync/sheets_sync.py records when some spreadsheets cannot be opened
+// (refresh/tests/test_sheets_sync.py pins the wording against the same config rules).
+const unreadableDetail = (why) => `SourceUnreadable: 1 of 4 spreadsheets unreadable (1 ${why}); 3 re-pulled. Not touching watermarks.`;
+const withUnreadable = (rows) => problems({
+  live: null, hubspotMode: 'snapshot', snapshotPublishedAt: ago(5), nowMs: SNAP_NOW, staleMinutes: 60, limits: CONFIG.sourceLimits, auth: CONFIG.authRules, unreadable: CONFIG.unreadableRules,
+  sources: rows, stamps: Object.fromEntries(rows.map((r) => [`sources.${r.source}.lastOkAt`, r.lastOkAt])),
+});
+
+test('unreadable: spreadsheets that cannot be opened give source-unreadable:sheets, never auth:google', () => {
+  for (const why of ['not found', 'permission denied']) {
+    assert.deepEqual(withUnreadable([row('ga4', 10), row('sheets', 20, { detail: unreadableDetail(why) })]), ['source-unreadable:sheets'], why);
+    assert.deepEqual(withUnreadable([row('sheets', 120, { detail: unreadableDetail(why) })]), ['source-stale:sheets', 'source-unreadable:sheets'], why);
+  }
+  // A rejected credential is still auth:google and nothing else, with the same rules on.
+  assert.deepEqual(withUnreadable([row('sheets', 20, { detail: 'Google Sheets returned 403. Not touching watermarks.' })]), ['auth:google']);
+  // A row that reads as both is the credential's: fail towards the credential alarm.
+  assert.deepEqual(withUnreadable([row('sheets', 20, { http: 403, detail: unreadableDetail('permission denied') })]), ['auth:google']);
+  // An ok row, or another failure, is not unreadable.
+  assert.deepEqual(withUnreadable([{ ...row('sheets', 10), detail: unreadableDetail('not found') }, row('ga4', 10, { detail: 'TimeoutError: The read operation timed out' })]), []);
+  assert.throws(() => composeModule.unreadableRules({ patterns: ['(unclosed'] }), /pattern/);
+  assert.throws(() => composeModule.unreadableRules(undefined), /unreadable/);
+});
+
+test('refresh.json: unreadable spreadsheets publish source-unreadable:sheets with the count in the alarm, not auth:google', async (t) => {
+  const w = world();
+  t.after(() => rmSync(w.tmp, { recursive: true, force: true }));
+  Object.assign(w.cfg, { staleMinutes: 60, sourceLimits: CONFIG.sourceLimits, authRules: CONFIG.authRules, unreadableRules: CONFIG.unreadableRules });
+  const files = JSON.parse(JSON.stringify(w.files));
+  files['marketing.json'].sources = [
+    { source: 'hubspot', label: 'HubSpot', ok: true, at: '2026-01-16T20:05:00Z', lastOkAt: '2026-01-16T20:05:00Z' },
+    { source: 'sheets', label: 'Sheets', at: '2026-01-16T20:05:00Z', lastOkAt: '2026-01-16T20:00:00Z', ok: false, route: null, http: null, detail: unreadableDetail('permission denied') },
+  ];
+  files['agent-brief.json'].generatedAt = '2026-01-16T19:00:00Z';
+  w.publish('run-test-2', files, '2026-01-16T20:10:00Z');
+  const a = await w.run();
+  assert.deepEqual(a.failing, ['source-unreadable:sheets']);
+  assert.deepEqual(JSON.parse(w.s3.get('preview/refresh.json')).failing, ['source-unreadable:sheets']);
+  assert.equal(w.notes.length, 1);
+  assert.equal(w.notes[0].subject, 'GTM preview refresh: source-unreadable:sheets');
+  assert.match(w.notes[0].message, /source-unreadable:sheets: SourceUnreadable: 1 of 4 spreadsheets unreadable \(1 permission denied\)/);
+  assert.doesNotMatch(w.notes[0].message, /auth:|credential rejected/);
+});
+
 test('auth rules: read from config/freshness-sources.json; a bad rule throws', () => {
   assert.deepEqual(CONFIG.authRules.providers, { ga4: 'google', sheets: 'google' });
   assert.deepEqual(CONFIG.authRules.http, [401, 403]);

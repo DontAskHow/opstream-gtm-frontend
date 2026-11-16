@@ -31,6 +31,35 @@ SOURCE = "sheets"
 pace = RateLimiter(1.0)
 
 
+class SheetUnreadable(Exception):
+    """This one spreadsheet cannot be opened (unshared, deleted). The credential is fine."""
+
+
+class SourceUnreadable(Exception):
+    """Some tracked spreadsheets were unreadable; the others were re-pulled."""
+
+
+def _file_permission_denied(body: str) -> bool:
+    """True only when a 403 body says this file is not shared with the account.
+
+    Google answers PERMISSION_DENIED for an unshared file and also for a token
+    whose scope is too small or an API that is switched off; those carry a
+    reason (ACCESS_TOKEN_SCOPE_INSUFFICIENT, SERVICE_DISABLED...). Any reason,
+    any mention of scopes, or a body that does not parse counts as a credential
+    problem.
+    """
+    try:
+        err = json.loads(body)["error"]
+        if err.get("status") != "PERMISSION_DENIED":
+            return False
+        entries = list(err.get("details") or []) + list(err.get("errors") or [])
+        if any(e.get("reason") for e in entries):
+            return False
+        return "scope" not in str(err.get("message") or "").lower()
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
 def _sheets_get(url: str):
     pace.wait()
     token = google_access_token()
@@ -42,12 +71,14 @@ def _sheets_get(url: str):
         with urllib.request.urlopen(req, timeout=120) as resp:
             return json.loads(resp.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        if exc.code in (404, 410) or (exc.code == 403 and _file_permission_denied(body)):
+            raise SheetUnreadable("permission denied" if exc.code == 403 else "not found")
         if exc.code in (401, 403):
             raise NeedsConnection(
                 "Google Sheets returned %s. Not touching watermarks." % exc.code
             )
-        detail = exc.read().decode("utf-8", errors="replace")[:300]
-        raise RuntimeError("Google Sheets HTTP %s: %s" % (exc.code, detail))
+        raise RuntimeError("Google Sheets HTTP %s: %s" % (exc.code, body[:300]))
 
 
 def gws(*args: str):
@@ -110,19 +141,26 @@ def main_sync(log):
 
     total_rows = 0
     total_tabs = 0
+    unreadable = {}
     fetched_at = now_iso()
     con = db_connect()
     try:
         for ss_id, ss_title in sheets:
             log.info("re-pulling %s (%s)", ss_title, ss_id)
-            meta = gws("sheets", "spreadsheets", "get", "--params",
-                       json.dumps({"spreadsheetId": ss_id, "fields": "sheets.properties.title,sheets.properties.sheetId"}))
-            tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
-            gids = [(ss_id, s["properties"]["title"], s["properties"].get("sheetId"))
-                    for s in meta.get("sheets", []) if s["properties"].get("sheetId") is not None]
-            batch = gws("sheets", "spreadsheets", "values", "batchGet", "--params",
-                        json.dumps({"spreadsheetId": ss_id,
-                                    "ranges": [quote_tab(t) for t in tabs]}))
+            try:
+                meta = gws("sheets", "spreadsheets", "get", "--params",
+                           json.dumps({"spreadsheetId": ss_id, "fields": "sheets.properties.title,sheets.properties.sheetId"}))
+                tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+                gids = [(ss_id, s["properties"]["title"], s["properties"].get("sheetId"))
+                        for s in meta.get("sheets", []) if s["properties"].get("sheetId") is not None]
+                batch = gws("sheets", "spreadsheets", "values", "batchGet", "--params",
+                            json.dumps({"spreadsheetId": ss_id,
+                                        "ranges": [quote_tab(t) for t in tabs]}))
+            except SheetUnreadable as e:
+                # Its stored rows stay as they are; the other spreadsheets still refresh.
+                log.error("UNREADABLE %s (%s): %s", ss_title, ss_id, e)
+                unreadable[str(e)] = unreadable.get(str(e), 0) + 1
+                continue
             rows_to_write = []
             for vr in batch.get("valueRanges", []):
                 tab = _tab_from_range(vr.get("range", "")) or "?"
@@ -149,6 +187,13 @@ def main_sync(log):
     finally:
         con.close()
 
+    if unreadable:
+        count = sum(unreadable.values())
+        why = ", ".join("%d %s" % (n, k) for k, n in sorted(unreadable.items()))
+        raise SourceUnreadable(
+            f"{count} of {len(sheets)} spreadsheets unreadable ({why}); "
+            f"{len(sheets) - count} re-pulled. Not touching watermarks."
+        )
     note = f"{len(sheets)} spreadsheets, {total_tabs} tabs, {total_rows} rows re-pulled (batchGet, read-only)"
     set_sync_state(SOURCE, fetched_at, note)
     return note
