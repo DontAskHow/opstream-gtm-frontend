@@ -1,0 +1,54 @@
+{
+  "about": "Scope rules for the one-page GTM workspace (scripts/workspace-data.py, onepage/build.mjs). Data-free: ids and rules only. Lead-source mapping (forms, lists, campaigns, ad platforms) is NOT here; it comes from lead-sources.json at build time.",
+  "salesPipelineId": "default",
+  "excludedPipelines": {
+    "686463412": "Renewal",
+    "686100770": "Partnerships",
+    "855205465": "Customer Success"
+  },
+  "customerPipelines": [
+    "686463412",
+    "855205465"
+  ],
+  "csOwnerIds": [
+    "76564046",
+    "82316863"
+  ],
+  "hiddenOwner": {
+    "about": "People whose owner name or email matches a scrub pattern render as this label everywhere, and every build step fails if a pattern appears in its output. The patterns are never in the repo: WORKSPACE_SCRUB_PATTERNS (comma list) or WORKSPACE_SCRUB_PATTERNS_FILE, or scrub-patterns.txt in the data step's --inputs-dir.",
+    "label": "Unassigned"
+  },
+  "eventListExclusions": {
+    "about": "Event lists from lead-sources.json that do not make a contact a lead on their own. Every other list there with kind 'event' and counts_as_lead_source counts.",
+    "692": "pre-show delegate list, not attendees",
+    "867": "sponsor outbound targets: Outbound when they reply"
+  },
+  "formBucketSource": {
+    "about": "Lead Tracker Source implied by a lead-sources.json form bucket, when the form's detail does not name one ('Sheet source: X').",
+    "demo_request": "Inbound",
+    "contact": "Inbound",
+    "content_download": "Inbound",
+    "tradeshow": "Events",
+    "ads_conversion": "Paid",
+    "webinar": "Webinar",
+    "rfp": "RFP",
+    "outbound": "Outbound"
+  },
+  "paidUtmValues": [
+    "cpc",
+    "paid",
+    "ppc",
+    "google",
+    "linkedin",
+    "reddit",
+    "openai",
+    "chatgpt"
+  ],
+  "paidAnalyticsSources": [
+    "PAID_SEARCH",
+    "PAID_SOCIAL"
+  ],
+  "meetingsWindowDays": 90,
+  "callsWindowDays": 90,
+  "workspaceSchemaVersion": 1
+}

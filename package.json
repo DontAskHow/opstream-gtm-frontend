@@ -5,7 +5,8 @@
   "scripts": {
     "build": "node build.cjs",
     "dev": "node scripts/preview.mjs",
-    "security:scan": "node scripts/security-scan.cjs"
+    "security:scan": "node scripts/security-scan.cjs",
+    "test": "node --test test/ && python3 -m unittest discover -s scripts/tests"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
