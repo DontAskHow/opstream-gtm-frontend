@@ -18,6 +18,10 @@
       "\\btoken endpoint returned HTTP 4\\d\\d\\b"
     ]
   },
+  "unreadable": {
+    "about": "When a source row's latest outcome is a failure whose detail says some of its items could not be opened (a spreadsheet unshared or deleted) while the credential still works, the preview refresh alarms source-unreadable:<source> with the detail, which carries the count. A row that also reads as a rejected credential (auth above) alarms auth:<provider> only. patterns are case-insensitive regular expressions matched against the detail. Rules only, no data.",
+    "patterns": ["\\b\\d+ of \\d+ \\w+ unreadable\\b"]
+  },
   "sources": [
     {
       "source": "hubspot",
