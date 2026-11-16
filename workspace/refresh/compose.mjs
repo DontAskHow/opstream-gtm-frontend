@@ -167,6 +167,23 @@ export function rejectedCredentials(sources, rules) {
   return Object.fromEntries(Object.keys(by).sort().map((p) => [p, by[p]]));
 }
 
+// config/freshness-sources.json `unreadable`, checked: the detail patterns that mean some items could not be opened.
+export function unreadableRules(rules) {
+  if (!rules || typeof rules !== 'object' || !Array.isArray(rules.patterns)) throw new Error('freshness-sources.json has no unreadable rules');
+  return { patterns: rules.patterns.map((p) => { try { return new RegExp(p, 'i'); } catch { throw new Error(`unreadable pattern ${JSON.stringify(p)} is not a valid regular expression`); } }) };
+}
+
+// Sources whose latest outcome says some items were unreadable, by source (sorted), with the detail.
+// A row that reads as a rejected credential is left to rejectedCredentials.
+export function unreadableSources(sources, rules, auth = null) {
+  const rejected = new Set(auth ? Object.values(rejectedCredentials(sources, auth)).flat() : []);
+  const by = {};
+  for (const s of sources) {
+    if (s?.ok === false && !rejected.has(s.source) && rules.patterns.some((p) => p.test(String(s.detail ?? '')))) by[s.source] = String(s.detail);
+  }
+  return Object.fromEntries(Object.keys(by).sort().map((k) => [k, by[k]]));
+}
+
 // Source rows and times past their limit, read from stamps() (the real values, not data.js's
 // placeholders). A source with no lastOkAt is stale; a time with no value is unknown and never flags.
 function staleIds(resolved, nowMs, limits) {
@@ -185,8 +202,8 @@ function staleIds(resolved, nowMs, limits) {
 // Problems worth an alarm. Without LIVE_PULL the function only watches the
 // snapshot it was handed: a stale pointer, a missing HubSpot export, (with
 // limits) source rows and times inside it that stopped updating, and (with auth)
-// sources whose credential was rejected. sources: the snapshot's raw rows (http kept).
-export function problems({ live, hubspotMode, snapshotPublishedAt, nowMs, staleMinutes, stamps: resolved = {}, limits = null, sources = [], auth = null }) {
+// sources whose credential was rejected, (with unreadable) sources that could not open some items. sources: the snapshot's raw rows (http kept).
+export function problems({ live, hubspotMode, snapshotPublishedAt, nowMs, staleMinutes, stamps: resolved = {}, limits = null, sources = [], auth = null, unreadable = null }) {
   const out = [];
   if (live) {
     for (const k of LIVE_SOURCES) if (!live[k]?.ok) out.push(k);
@@ -196,6 +213,7 @@ export function problems({ live, hubspotMode, snapshotPublishedAt, nowMs, staleM
   const pub = Date.parse(snapshotPublishedAt ?? '');
   if (!Number.isFinite(pub) || nowMs - pub > staleMinutes * 60e3) out.push('snapshot-stale');
   if (limits) out.push(...staleIds(resolved, nowMs, limits));
+  if (unreadable) out.push(...Object.keys(unreadableSources(sources, unreadable, auth)).map((s) => `source-unreadable:${s}`));
   if (auth) out.push(...Object.keys(rejectedCredentials(sources, auth)).map((p) => `auth:${p}`));
   return out;
 }
