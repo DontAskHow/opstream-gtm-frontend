@@ -29,7 +29,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sheet_links import link as sheet_link  # noqa: E402
 from gtm_metrics import lead_flags  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -271,7 +270,59 @@ def bucket_of_prob(prob):
     return "pipeline"
 
 
+def prob_as_percent(prob):
+    """Sheet stores percent; HubSpot hs_deal_stage_probability is 0-1. None if missing."""
+    if prob is None:
+        return None
+    return prob * 100.0 if prob <= 1 else float(prob)
+
+
+def probs_differ(sheet_prob, hs_prob):
+    """True when both sides have a probability and they are not the same percent."""
+    a, b = prob_as_percent(sheet_prob), prob_as_percent(hs_prob)
+    if a is None or b is None:
+        return False
+    return abs(a - b) > 0.5
+
+
+def hubspot_stage_label(hd, stage_label):
+    raw_stage = stage_label.get(hd.get("stage")) or str(hd.get("stage") or "").strip()
+    if raw_stage and not raw_stage.isdigit() and "probability" not in raw_stage.lower():
+        return raw_stage
+    if hd.get("probability") is not None:
+        return "a stage at %d%% probability" % round(prob_as_percent(hd["probability"]))
+    return "not available"
+
+
+def stage_mismatch_row(sd, hd, buckets, stage_label, did):
+    """A field=stage mismatch when forecast buckets differ, or when stage
+    probabilities differ even inside one bucket. None if neither disagrees."""
+    sb = bucket_of_stage(sd["stage"], buckets)
+    hb = bucket_of_stage(stage_label.get(hd["stage"], hd["stage"]), buckets)
+    if hb is None and not stage_label.get(hd["stage"]):
+        hb = bucket_of_prob(hd["probability"])
+    if not ((sb and hb and sb != hb) or probs_differ(sd.get("probability"), hd.get("probability"))):
+        return None
+    sheet_pct = prob_as_percent(sd.get("probability"))
+    hub_pct = prob_as_percent(hd.get("probability"))
+    return {
+        "dealId": did, "name": sd["name"] or hd["name"],
+        "company": sd["company"], "field": "stage",
+        "sheet": sd["stage"],
+        "hubspot": hubspot_stage_label(hd, stage_label),
+        "sheetBucket": sb, "hubspotBucket": hb,
+        "sheetProbability": None if sheet_pct is None else round(sheet_pct),
+        "hubspotProbability": None if hub_pct is None else round(hub_pct),
+    }
+
+
 CLOSED_WORDS = ("closed", "lost", "won")
+
+
+def sheet_row_link(db, title, tab, row=None, last_col=None):
+    """Deep link into a Sheet row. The helper lives with the sync deploy, not this repo."""
+    from sheet_links import link as sheet_link
+    return sheet_link(db, title, tab, row, last_col)
 
 
 def main():
@@ -349,28 +400,11 @@ def main():
         # Compare like with like: bucket BOTH sides by stage label (the Forecast tab's
         # stage lists). Bucketing the Sheet by stage but HubSpot by probability produced
         # false mismatches (seen Oct 2026 on a deal whose probability was overridden). Fall back to probability only when
-        # the HubSpot stage label is unavailable.
-        sb = bucket_of_stage(sd["stage"], buckets)
-        hb = bucket_of_stage(stage_label.get(hd["stage"], hd["stage"]), buckets)
-        if hb is None and not stage_label.get(hd["stage"]):
-            hb = bucket_of_prob(hd["probability"])
-        if sb and hb and sb != hb:
-            raw_stage = stage_label.get(hd.get("stage")) or str(hd.get("stage") or "").strip()
-            if raw_stage and not raw_stage.isdigit() and "probability" not in raw_stage.lower():
-                hub_label = raw_stage
-            elif hd.get("probability") is not None:
-                prob = hd["probability"]
-                prob = prob * 100 if prob <= 1 else prob
-                hub_label = "a stage at %d%% probability" % round(prob)
-            else:
-                hub_label = "not available"
-            mismatches.append({
-                "dealId": did, "name": sd["name"] or hd["name"],
-                "company": sd["company"], "field": "stage",
-                "sheet": sd["stage"],
-                "hubspot": hub_label,
-                "sheetBucket": sb, "hubspotBucket": hb,
-            })
+        # the HubSpot stage label is unavailable. A probability difference inside one
+        # bucket is also a stage mismatch (two stages in Pipeline can still disagree).
+        row = stage_mismatch_row(sd, hd, buckets, stage_label, did)
+        if row:
+            mismatches.append(row)
         if sd["amount"] is not None and hd["amount"] is not None:
             if abs(sd["amount"] - hd["amount"]) > max(1.0, 0.01 * abs(sd["amount"])):
                 mismatches.append({
@@ -435,7 +469,7 @@ def main():
             "sql": sql,
             "note": str(row[6]).strip() if len(row) > 6 and row[6] else "",
             "contact": pick_contact(contacts.get(company_key(row[0])), row[6] if len(row) > 6 else ""),
-            "sheetRow": sheet_link(con, SHEET, "Lead Tracker", rn, "H"),
+            "sheetRow": sheet_row_link(con, SHEET, "Lead Tracker", rn, "H"),
             "flags": lead_flags(row[6] if len(row) > 6 else ""),
         })
         if not mql:
