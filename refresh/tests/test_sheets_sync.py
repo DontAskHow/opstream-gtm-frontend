@@ -72,10 +72,12 @@ class SheetsSync(unittest.TestCase):
     def run_sync(self, failures=None, token=None):
         """Run the script's entrypoint. failures: {spreadsheet id: (http status, body)}."""
         failures = failures or {}
+        self.requested = []
 
         def urlopen(req, timeout=None):
             path = urllib.parse.urlparse(req.full_url).path
             ss_id = path.split("/")[3].split(":")[0]
+            self.requested.append(ss_id)
             if ss_id in failures:
                 code, body = failures[ss_id]
                 raise urllib.error.HTTPError(req.full_url, code, "error", {}, io.BytesIO(body.encode()))
@@ -97,6 +99,27 @@ class SheetsSync(unittest.TestCase):
         finally:
             con.close()
         return {"exit": done.exception.code, "rows": rows, "ok": ok, "http": http, "detail": detail, "watermarks": marks}
+
+    def retire(self, *ids, keep_only=None):
+        """List ids in sheets_retired, as the operator does by hand. keep_only trims the tracked set."""
+        con = sqlite3.connect(self.db)
+        con.execute("CREATE TABLE IF NOT EXISTS sheets_retired(spreadsheet_id TEXT PRIMARY KEY, retired_at TEXT, reason TEXT)")
+        con.execute("CREATE TABLE IF NOT EXISTS sheets_tabs(spreadsheet_id TEXT, tab TEXT, gid INTEGER, PRIMARY KEY(spreadsheet_id, tab))")
+        for ss_id in ids:
+            con.execute("INSERT INTO sheets_retired VALUES(?,?,?)", (ss_id, "2026-01-01T00:00:00Z", "synthetic: no longer used"))
+            con.execute("INSERT INTO sheets_tabs VALUES(?,?,?)", (ss_id, "Tab", 99))
+        if keep_only:
+            con.execute("DELETE FROM sheets_data WHERE spreadsheet_id NOT IN (%s)" % ",".join("?" * len(keep_only)), keep_only)
+        con.commit()
+        con.close()
+
+    def stored(self, ss_id):
+        con = sqlite3.connect(self.db)
+        try:
+            return (con.execute("SELECT * FROM sheets_data WHERE spreadsheet_id=? ORDER BY tab, row_num", (ss_id,)).fetchall(),
+                    con.execute("SELECT * FROM sheets_tabs WHERE spreadsheet_id=? ORDER BY tab", (ss_id,)).fetchall())
+        finally:
+            con.close()
 
     def assert_needs_connection(self, out):
         self.assertEqual(out["exit"], self.common.EXIT_NEEDS_CONNECTION)
@@ -121,6 +144,36 @@ class SheetsSync(unittest.TestCase):
         self.assertIn("1 of 4 spreadsheets unreadable (1 not found)", out["detail"])
         out = self.run_sync()
         self.assertEqual((out["exit"], out["ok"], out["watermarks"]), (0, 1, 1))
+
+    def test_a_retired_spreadsheet_is_not_requested_and_the_run_succeeds(self):
+        self.retire("sheet-2", keep_only=["sheet-1", "sheet-2"])
+        before = self.stored("sheet-2")
+        out = self.run_sync({"sheet-2": NOT_SHARED})
+        self.assertEqual((out["exit"], out["ok"], out["watermarks"]), (0, 1, 1), out["detail"])
+        self.assertNotIn("sheet-2", self.requested)
+        self.assertEqual(set(self.requested), {"sheet-1"})
+        self.assertEqual(self.stored("sheet-2"), before)
+        self.assertEqual(before, ([("sheet-2", "Synthetic 2", "Tab", 1, '["old"]')], [("sheet-2", "Tab", 99)]))
+        self.assertEqual(out["rows"], {"sheet-1": '["new", "sheet-1"]', "sheet-2": '["old"]'})
+        con = sqlite3.connect(self.db)
+        note = con.execute("SELECT note FROM sync_state WHERE source='sheets'").fetchone()[0]
+        con.close()
+        self.assertTrue(note.startswith("1 spreadsheets, "), note)
+
+    def test_a_retired_spreadsheet_is_left_out_of_the_unreadable_count(self):
+        self.retire("sheet-2")
+        out = self.run_sync({"sheet-2": NOT_SHARED, "sheet-3": NOT_FOUND})
+        self.assertEqual((out["exit"], out["ok"], out["watermarks"]), (self.common.EXIT_ERROR, 0, 0))
+        self.assertEqual(out["detail"], "SourceUnreadable: 1 of 3 spreadsheets unreadable (1 not found); "
+                                        "2 re-pulled. Not touching watermarks.")
+        self.assertNotIn("sheet-2", self.requested)
+
+    def test_every_tracked_spreadsheet_retired_is_nothing_to_re_pull(self):
+        self.retire("sheet-1", "sheet-2", "sheet-3", "sheet-4")
+        out = self.run_sync()
+        self.assertEqual((out["exit"], out["ok"], out["watermarks"]), (self.common.EXIT_ERROR, 0, 0))
+        self.assertIn("nothing to re-pull", out["detail"])
+        self.assertEqual(self.requested, [])
 
     def test_a_401_still_needs_connection(self):
         out = self.run_sync({"sheet-2": (401, google_error(401, "UNAUTHENTICATED", "Invalid Credentials"))})

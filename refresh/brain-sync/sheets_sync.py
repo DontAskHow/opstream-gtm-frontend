@@ -2,7 +2,7 @@
 """Incremental Sheets sync into the company brain.
 
 Re-pulls the spreadsheets already tracked in sheets_data (all tabs) and
-replaces their rows. Read-only against the Google Sheets API
+replaces their rows. A spreadsheet listed in sheets_retired is skipped. Read-only against the Google Sheets API
 (spreadsheets.get, then one values.batchGet per spreadsheet).
 
 Auth is the owner's Google account: opstream-gtm/google-sheets-refresh-token
@@ -131,8 +131,14 @@ def main_sync(log):
     google_access_token()
     con = db_connect()
     try:
+        # A retired spreadsheet is no longer tracked: never requested, never counted.
+        # Its stored rows stay as they are.
+        con.execute("CREATE TABLE IF NOT EXISTS sheets_retired(spreadsheet_id TEXT PRIMARY KEY, "
+                    "retired_at TEXT, reason TEXT)")
+        con.commit()
         sheets = con.execute(
             "SELECT DISTINCT spreadsheet_id, spreadsheet_title FROM sheets_data"
+            " WHERE spreadsheet_id NOT IN (SELECT spreadsheet_id FROM sheets_retired)"
         ).fetchall()
     finally:
         con.close()
