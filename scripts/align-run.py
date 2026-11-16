@@ -225,6 +225,8 @@ def main():
         "mql": book["mql"],
         "sql": book["sql"],
         "commitAmount": commit["amount"],
+        "commitMonth": month,
+        "commitMonthDefinition": "Commit-stage deals whose close date is in this month and has not passed.",
         "commitDeals": [d.get("companyName") or d.get("name") for d in commit["deals"]],
         "collectedAt": collected,
     }, indent=1), encoding="utf-8")
