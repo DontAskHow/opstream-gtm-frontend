@@ -1,0 +1,281 @@
+{
+  "about": "Lead-source override layer (answers given Oct 13 2026, 9:48 AM PT, and the r12 metric definitions). Rules only, no data. Where these conflict with lead-sources.json or earlier rules, these win. scripts/workspace-data.py reads this file; change a rule here, not in code.",
+  "answeredAt": "2026-10-13T09:48:00-07:00",
+  "source": {
+    "primary": "hubspot",
+    "about": "HubSpot evidence decides a lead's Source (its channel = where its conversion happened). The Lead Tracker Source is used only when HubSpot has no evidence, and is shown as evidence. A disagreement goes to the review list; neither side is overwritten, and nothing is written to the Sheet.",
+    "sheetLabel": "Lead Tracker (fallback: no HubSpot evidence)",
+    "overrides": {
+      "about": "Human source rulings, kept across refreshes: source-overrides.json in state/gtm-inputs/ (data-side, optional), shaped {\"deals\": {\"<dealId>\": {\"source\": \"...\", \"paid\": false, \"provenance\": \"...\"}}, \"leads\": {\"<HubSpot company id>\": {\"source\": \"...\", \"provenance\": \"...\"}}}. A ruling wins over every other rule. A deal with paid false leaves the paid deals (paidDeals counts, its paid field) and carries sourceOverride. A lead whose HubSpot company ids include a key takes the ruled source (never matched by Lead Tracker row or L### id; a lead with no HubSpot company takes none) with sourceBasis override and the rule 'Source override (human ruling)'; paid evidence is kept but superseded, so no paid platform, sub-source or tag and no paid-lead count. The Lead Tracker value stays as sheetSource; the Sheet is not changed. provenance is never written to workspace.json. A missing or invalid file is logged and nothing is overridden."
+    },
+    "attribution": {
+      "about": "Review-list rows (lead-source-review.csv) carry a status. resolved: the lead is credited to mql_channel, the channel of the touch at its MQL booking (outbound-booked meetings stay Outbound); different_first_touch is shown when the first touch was another channel. undetermined: no MQL yet, the HubSpot-primary source is kept. on_hold*: neither side changes; the current source stays and the lead is flagged.",
+      "statusResolved": "resolved",
+      "statusUndetermined": "undetermined",
+      "statusHoldPrefix": "on_hold"
+    }
+  },
+  "forms": {
+    "everyFillIsLead": true,
+    "notLeadBuckets": [
+      "not_a_lead_source"
+    ],
+    "about": "Every form fill is a lead except forms lead-sources.json marks as not a lead source (careers/job applications). The old 'uncertain' flag no longer gates anything.",
+    "mainForms": [
+      "hero email",
+      "contact",
+      "pricing"
+    ]
+  },
+  "mql": {
+    "metric": "lead_to_mql_rate",
+    "label": "Lead → MQL (book-a-demo), 90 days (proposed)",
+    "definition": "Distinct external contacts who booked through the website book-a-demo HubSpot scheduling page (meeting source MEETINGS_PUBLIC and hs_created_by_scheduling_page in bookingLinkIds, via meeting → contact associations, meeting created in the window) ÷ distinct external contacts who filled a lead form (every form except those lead-sources.json marks not a lead source, i.e. careers) or booked, trailing 90 days. External: email domain not an owner's domain (free-mail domains are never internal). Narrower than the Lead Tracker's MQL date, which also counts Outbound and Events first meetings.",
+    "windowDays": 90,
+    "meetingSourceProperty": "hs_meeting_source",
+    "meetingSourceValue": "MEETINGS_PUBLIC",
+    "bookingLinkProperty": "hs_created_by_scheduling_page",
+    "bookingLinkIds": [
+      "12536147"
+    ],
+    "bookingLinkEvidence": "Validated Oct 13 2026 (MQL-VALIDATION.md, outside the repo): every contact whose conversion event is the website-book-a-demo meetings link that has a scheduling-page meeting booked it through this page, and the page maps to no other link; fixed meeting title, first booking the day the website's booking form stopped.",
+    "denominatorIncludesBookers": true,
+    "excludeInternalContacts": true,
+    "freeMailDomains": [
+      "gmail.com",
+      "googlemail.com",
+      "yahoo.com",
+      "hotmail.com",
+      "outlook.com",
+      "live.com",
+      "icloud.com",
+      "aol.com",
+      "proton.me",
+      "protonmail.com"
+    ],
+    "formContactProperties": [
+      "first_conversion_date",
+      "num_conversion_events"
+    ],
+    "show": false,
+    "hiddenBecause": "Hidden after validation (Oct 13 2026): the HubSpot cross-check is not possible (hs_lifecyclestage_marketingqualifiedlead_date is not synced), and incremental meeting syncs drop hs_meeting_source / hs_created_by_scheduling_page from meetings re-read after the backfill, so bookings silently fall out of the numerator. Computed figures stay in workspace.json (mqlFunnel.computed) for monitoring; set show to true once both are fixed and the cross-check agrees.",
+    "hideWhenUnavailable": true
+  },
+  "ads": {
+    "brandedGoogleIsPaid": true,
+    "brandedFlag": "branded term",
+    "checksKeyPrefix": "checks_",
+    "about": "Paid platform per deal comes from Pipeline's export (deals[].derived.paid_platform, paid_evidence, google_branded) when given; otherwise the same rules are applied to synced contact fields: a paid form (incl. LinkedIn Lead Gen forms), UTMs with a paid signal (cpc/paid/ppc medium, hsa_net or a click id), paid_touch_campaign, then original source; then the deal company's other contacts (level 'company').",
+    "paidForms": [
+      "LinkedIn/Google Ads - Demo Requests",
+      "ProcureCon Connect Ad",
+      "LinkedIn Lead Generation"
+    ],
+    "paidMediums": [
+      "cpc",
+      "paid",
+      "ppc",
+      "paid_social",
+      "paidsocial",
+      "paid_search"
+    ],
+    "clickIdKeys": [
+      "gclid",
+      "hs_google_click_id",
+      "li_fat_id",
+      "msclkid",
+      "hsa_net"
+    ],
+    "spendWindowStart": {
+      "about": "A paid conversion before its platform's spend start is flagged \"predates spend window\" (it still counts). Pipeline's export sets the flag itself; this is used when deals are computed here.",
+      "LinkedIn Ads": "2026-09-01"
+    }
+  },
+  "lemlist": {
+    "replyRate": {
+      "metric": "outbound_reply_rate",
+      "campaigns": "all",
+      "about": "Total replies ÷ total sends over every Lemlist campaign in any status (job-changer, website-intent and Bad ICP included). Tags are filters, not exclusions."
+    },
+    "tags": [
+      {
+        "tag": "job_changer",
+        "bucketContains": "separate sub-source",
+        "label": "Job changer"
+      },
+      {
+        "tag": "website_intent",
+        "bucketContains": "intent-triggered",
+        "label": "Website intent"
+      },
+      {
+        "tag": "event",
+        "bucketContains": "event/webinar",
+        "label": "Event outreach"
+      },
+      {
+        "tag": "nurture",
+        "bucketContains": "nurture",
+        "label": "Nurture"
+      },
+      {
+        "tag": "excluded",
+        "bucketStartsWith": "exclude",
+        "label": "Hiring / test"
+      },
+      {
+        "tag": "sales",
+        "bucketStartsWith": "sales_outbound",
+        "label": "Sales outbound"
+      }
+    ],
+    "flags": [
+      {
+        "nameContains": "Bad ICP",
+        "flag": "Bad ICP",
+        "note": "counted in totals per the r12 definition; flagged for review"
+      }
+    ],
+    "outboundTags": [
+      "sales",
+      "job_changer",
+      "website_intent",
+      "event"
+    ]
+  },
+  "reviewList": {
+    "about": "The page shows the review list file (lead-source-review.csv, data-side) as is. Rows apply to the lead whose HubSpot company ids include hubspot_company_id (never by Sheet row; a row without one is listed only). Columns used: row, hubspot_company_id, company, sheet_source, hubspot_sources, evidence, action."
+  },
+  "reporting": {
+    "about": "Oct 13 2026 reporting rules (lead-sources.json reporting_rules, approved Oct 13 2026). Rules only, no data. scripts/workspace-data.py applies them once, in its scope step (ReportingScope); form counts (forms), meeting bookings (meetings.bookings), ad-platform leads (adLeads, ads[].hubspotLeads) and lead -> MQL (mqlFunnel.computed.afterReportingRules) all read that scope. These are added workspace.json fields; existing fields keep their meaning.",
+    "approvedAt": "2026-10-13",
+    "customers": {
+      "about": "A contact is a customer when it, or a company it is associated with, has lifecyclestage customer or is owned by a customer-success owner. Deals in these pipelines are dropped. A meeting-link booking is a customer booking when a contact on it is a customer or a deal on it is owned by a customer-success owner (a deal in these pipelines is dropped, not a customer marker).",
+      "lifecycleStages": [
+        "customer"
+      ],
+      "ownerIds": [
+        "76564046",
+        "82316863"
+      ],
+      "dealPipelines": [
+        "855205465",
+        "686463412",
+        "686100770"
+      ]
+    },
+    "contacts": {
+      "about": "Also out of every count: free-mail addresses, internal addresses (these domains) and careers forms (names starting with these prefixes, besides the forms lead-sources.json marks not a lead source).",
+      "freeMailDomains": [
+        "gmail.com",
+        "googlemail.com",
+        "yahoo.com",
+        "hotmail.com",
+        "outlook.com",
+        "live.com",
+        "icloud.com",
+        "aol.com",
+        "proton.me",
+        "protonmail.com",
+        "me.com",
+        "msn.com"
+      ],
+      "internalDomains": [
+        "opstream.ai"
+      ],
+      "excludedFormNamePrefixes": [
+        "Open Position"
+      ]
+    },
+    "meetings": {
+      "about": "Bookings are meetings with hs_meeting_source MEETINGS_PUBLIC, dated by hs_createdate. A booking is a customer booking when any associated contact is a customer; it is dropped as an opportunity when, at hs_createdate, an associated Sales (default) pipeline deal was already in a past-Discovery stage (dealstage history, propertiesWithHistory=dealstage). No deal, SQL or Discovery/RFP received count; On Hold is not past Discovery. A booking whose associated contacts are all free-mail or internal is dropped too.",
+      "sourceProperty": "hs_meeting_source",
+      "sourceValue": "MEETINGS_PUBLIC",
+      "timeProperty": "hs_createdate",
+      "dealPipeline": "default",
+      "pastDiscoveryStages": [
+        "15879262",
+        "34538004",
+        "27052677",
+        "contractsent",
+        "closedwon",
+        "closedlost",
+        "1270127483"
+      ],
+      "countedStages": [
+        "943743501",
+        "decisionmakerboughtin"
+      ],
+      "notPastStages": [
+        "207126699"
+      ],
+      "notPastNote": "On Hold is not past Discovery (uncertain in the rules; confirm)"
+    },
+    "forms": {
+      "about": "The count of record is every submission (GET /form-integrations/v1/submissions/forms/{guid}, hubspot_form_submissions) of every form in lead-sources.json, joined to contacts by email. Per contact, first_conversion_event_name maps to a form by its ': <form name>' suffix, longest name first. recent_conversion_* is never used alone: a meeting booking overwrites it. Opportunity contacts' form fills count.",
+      "contactProperties": [
+        "first_conversion_event_name",
+        "first_conversion_date",
+        "recent_conversion_event_name",
+        "recent_conversion_date",
+        "num_conversion_events"
+      ],
+      "eventNameSeparator": ": "
+    },
+    "adLeads": {
+      "about": "Per ad platform, HubSpot-sourced leads: contacts whose first touch (hs_analytics_first_url query: utm_*, hsa_net, click ids; contact utm_* fields; hs_analytics_source PAID_*) carries a paid signal, after the exclusions above, and verified against the contact's conversions: a lead form submission, a conversion event that is not a careers form, or a meeting-link booking. Careers-only and unconverted contacts are not leads. AI-referral traffic (hs_analytics_source AI_REFERRALS, or a ChatGPT referrer / utm_source with no paid signal) is organic and counted apart. Platform conversion counts are platform-reported events, not leads.",
+      "contactProperties": [
+        "hs_analytics_first_url",
+        "hs_analytics_first_referrer",
+        "hs_analytics_source",
+        "hs_analytics_source_data_1",
+        "hs_analytics_source_data_2"
+      ],
+      "paidAnalyticsSources": [
+        "PAID_SEARCH",
+        "PAID_SOCIAL"
+      ],
+      "paidMediums": [
+        "cpc",
+        "paid",
+        "ppc",
+        "paid_social",
+        "paidsocial",
+        "paid_search"
+      ],
+      "clickIds": {
+        "gclid": "google",
+        "gbraid": "google",
+        "wbraid": "google",
+        "li_fat_id": "linkedin",
+        "rdt_cid": "reddit",
+        "msclkid": null
+      },
+      "hsaNetworks": {
+        "adwords": "google",
+        "linkedin": "linkedin"
+      },
+      "aiReferral": {
+        "label": "ChatGPT (organic AI referral)",
+        "analyticsSources": [
+          "AI_REFERRALS"
+        ],
+        "referrerDomains": [
+          "chatgpt.com",
+          "chat.openai.com"
+        ],
+        "utmSources": [
+          "chatgpt.com",
+          "chatgpt",
+          "openai"
+        ]
+      },
+      "contactFields": {
+        "about": "A reporting contact field (hs_analytics_first_url, say) counts as synced once every stored contact has it: when the contact backfill (sync_state hubspot_contact_backfill) is done and started after the field was added to the sync (addedAt), or when at least minCoverage of stored contacts carry the key. Until then adLeads.firstUrlSynced is false and meta.reportingContactFields leaves the field out.",
+        "minCoverage": 0.99,
+        "addedAt": {"hs_analytics_first_url": "2026-10-14T00:00:00Z", "hs_analytics_first_referrer": "2026-10-14T00:00:00Z"}
+      },
+      "platformFigureLabel": "platform-reported events, not leads"
+    }
+  }
+}

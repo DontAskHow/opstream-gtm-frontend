@@ -1,0 +1,101 @@
+# GTM preview refresh (`gtm-preview-refresh`)
+
+Every 15 minutes this Lambda rebuilds the private preview's `data.js` from the newest published snapshot and uploads it only when the content changed. It calls no AI and no provider API, and it reads no secrets. The sync-only `opstream-gtm-refresh` job publishes the snapshot: it syncs HubSpot, Sheets, GA4, lemlist and Fathom into `s3://opstream-gtm-data-<account-id>/published/<runId>/` and moves `published/LATEST.json`.
+
+```
+EventBridge Scheduler gtm-preview-refresh-15m (rate 15 min, no flex window, 0 retries)
+  -> Lambda gtm-preview-refresh (nodejs20.x arm64, 512 MB, 120 s, reserved concurrency 1, async retries 0)
+       read  s3://opstream-gtm-data-<account-id>/published/LATEST.json + that run's top-level JSON (read-only)
+       build workspace/lib/project.mjs buildData(), the same code as workspace/build.mjs
+       put   s3://opstream-gtm-preview-db5553a4/data.js       only when sha256(content) changed
+       put   s3://opstream-gtm-preview-db5553a4/refresh.json  every successful check
+       put   s3://opstream-gtm-preview-db5553a4/workspace.json  the run's workspace.json, checked, when its content changed (or the live copy is old)
+       on problems / errors -> SNS opstream-gtm-refresh-failures; Errors alarm gtm-preview-refresh-errors -> same topic
+```
+
+## What the page gets
+
+- **HubSpot per-deal fields** (amount, stage, closed status, pipeline, and the deal list itself) come from the snapshot's HubSpot deal export. The function finds it by shape, not by name: a top-level JSON with `pipes`, `stages` and `deals[].properties`, the `live_deals.json` shape `workspace/README.md` describes. `fetchedAt` (or `generatedAt`) is its HubSpot time. If the snapshot has no such file, the page falls back to `records.json` and labels it **unreconciled**. In that case pipelines can't be split and HubSpot-only deals are missing, and the function alarms (`snapshot-has-no-hubspot-export`) once.
+- **Sheet and GA4 fields** (the master Sheet's deal rows, budget, show calendar, ad exports) are shown "as of <snapshot time>". The data-quality panel compares HubSpot against the Sheet as of the snapshot.
+- **Header**: "Last refreshed <time PT>" from `/refresh.json` (fetched with `no-store`; falls back to `data.js` `refreshedAt`), then "data changed …" and "snapshot …". It turns amber when the last check is more than 45 minutes old.
+
+## workspace.json (the one-page workspace)
+
+The sync job writes `workspace.json` (scripts/workspace-data.py) into each published run. Every run, `workspace-json.mjs`:
+
+- **checks** it: the scrub patterns (from the function's `WORKSPACE_SCRUB_PATTERNS`, set by `deploy.sh`) on the raw text before parsing and on every decoded string after; valid JSON (the error never quotes the file); `schemaVersion` 1; every top-level section the page reads; and a trial render with the page's own code (`onepage/view.cjs`, `onepage/page.cjs`, packaged with the function). Patterns are never logged or sent in alarms, only their position.
+- **copies** it to the preview bucket (`no-store`, `x-amz-meta-sha256`) when the sha256 of its content without timestamps (the sync job's volatile keys) differs from the live copy (`reason: "content"`), or when the content is the same but the live copy's `publishedGeneratedAt` is older than `WORKSPACE_MAX_AGE_MIN` (default 25) and the snapshot's file is a different, newer one (`reason: "refresh-age"`), so the times inside the file (the fresh frontend reads `fresh.*.fetchedAt`) keep moving. Otherwise unchanged content uploads nothing; `refresh.json.workspace.stamps` carries the newer timestamps, keyed by `forTextSha256` to the live object's text, and the page applies them only to that exact file.
+- **keeps the last good copy** when the run has no `workspace.json` (`snapshot-has-no-workspace-json`), the file fails a check (`workspace-json-invalid`), or the function has no scrub patterns (`workspace-scrub-patterns-missing`). Only the sync-only job (`LATEST.json` `mode: "sync-only"`) writes `workspace.json`; a snapshot from the 6-hourly full job (any other mode, or none) without it keeps the last good copy quietly (`note` in refresh.json, no alarm, no page banner) as long as a sync-only snapshot with a good copy was seen in the last 60 minutes (`workspace.workspaceSeenAt`). Past that, or with nothing seen since deploy, it alarms `snapshot-has-no-workspace-json` as before. A sync-only snapshot without the file alarms at once.
+- **withholds** the live copy when a scrub pattern matches the latest snapshot and the live copy was never checked against the current pattern set (a newly added pattern): it PutObjects a small `{"withheld": true, …}` document over `workspace.json` (`workspace-withheld-scrub-match`), and the page shows a notice. The next clean snapshot is uploaded again.
+
+Each problem alarms once when it starts and once when it clears (no daily reminder), and the page shows "Showing the last good data: …". `refresh.json.workspace` holds `status` (`uploaded` / `unchanged` / `kept-last-good` / `withheld`), `problem`, `errors`, `sha256`, `publishedSha256`, `publishedTextSha256`, `publishedGeneratedAt`, `publishedRunId`, `publishedPatternsSha256` (a hash of the pattern set, never the patterns), `withheld`, `checkedAt` and `stamps`; and, added later, `reason` (on `uploaded`), `writtenAt` (when the function last wrote the live copy), `freshAt` (that copy's `fresh.<section>.fetchedAt`, available sections only), `writtenAgeMinutes` and `freshAges` (minutes, at this run). The step runs before the `data.js` build, so a problem there never holds it back.
+
+## Change detection (why `data.js` isn't uploaded every run)
+
+`compose.mjs` builds the data object, then swaps every value that only says *when* something was fetched or published for a placeholder before hashing. That covers the source times (`times.*`), each source's `at`/`lastOkAt`, the Sheet time, the snapshot run id and publish time, and the check time. The sha256 therefore covers content only. A re-sync that brings identical data under new timestamps uploads nothing.
+
+- Changed: placeholders are filled with the real values and `data.js` is uploaded with `x-amz-meta-sha256`, `Cache-Control: no-store`, `refreshedAt` and `dataChangedAt`.
+- Unchanged: only `refresh.json` is written. It holds `refreshedAt`, `dataChangedAt`, `dataSha256`, the current snapshot id and publish time, and `stamps` (the current values of those timestamps). The page applies `stamps` over `data.js`, so the "Updated …" labels stay current without re-uploading 900 KB.
+- The stored hash is `refresh.json.dataSha256`. Delete `refresh.json` to force the next run to upload.
+
+## Alarms
+
+The function publishes to `opstream-gtm-refresh-failures` when its set of problems changes (and once when they clear). While a problem continues, it publishes again once a day. The problems are `snapshot-stale` (LATEST.json older than `SNAPSHOT_STALE_MINUTES`, default 60), `snapshot-has-no-hubspot-export`, `source-stale:<source>` (a `marketing.sources` row in the snapshot whose `lastOkAt` is missing or older than its limit, even when the snapshot itself is on time), `time-stale:<key>` (a `data.times` value older than its limit; a missing time never flags), `auth:<provider>` (a source row whose latest outcome failed with a rejected credential: an HTTP 401/403, or a detail such as Google's `invalid_grant`, a rejected, revoked or expired token, or a token endpoint's 4xx; one id per provider, so ga4 and sheets give one `auth:google`, whether or not the data is stale yet, and it leaves `failing` once the source succeeds again), `workspace-stale` (the live `workspace.json` last written more than `WORKSPACE_STALE_MIN`, default 60, minutes ago; before `writtenAt` was recorded, its build time stands in) and `fresh-stale` (any available `fresh.<section>.fetchedAt` in the live copy more than `FRESH_STALE_MIN`, default 75, minutes old). Apart from a source row's missing `lastOkAt`, unknown times never flag. The source and time limits are rules in `config/freshness-sources.json` `staleness` (default 60 minutes per source row, GA4 180, Otterly 780, the one-time `hubspot_contact_backfill` and `hubspot_meeting_backfill` exempt, `times.ai` and `times.brief` 780; other `times` keys have no limit), sorted after the other problems, sources first. The `auth` ids follow them, sorted; which sources share a credential, and the statuses and detail patterns that count as a rejection, are rules in `config/freshness-sources.json` `auth`. Stale data alone never gives an `auth` id. The workspace and fresh limits sit above the normal cadence: in a quiet period the live copy is rewritten every 30-45 minutes, up to about 60 around the 6-hourly job's skip window, and its fetch times run about 12 minutes older. Neither shows on the page (it reads `workspace.status` and `workspace.problem`, which they leave alone). Any exception publishes the error text and fails the invocation. The CloudWatch alarm `gtm-preview-refresh-errors` (Errors ≥ 1 in 15 min) also notifies the topic. The topic has no subscribers on purpose, and it should stay that way. Alerts reach people through the hourly health check, which reads `failing` in refresh.json.
+
+## CloudFront invalidation: not used
+
+Distribution `EZQ1E2Y6O6NDG` has one behavior (the default, no additional behaviors), and it uses cache policy `4135ea2d-6df8-44a3-9df3-4b5a84be39ad` = `Managed-CachingDisabled` (min/default/max TTL 0). Every request goes to S3, so an invalidation would do nothing and would cost money above 1,000 paths a month. The role has no `cloudfront:*` permission. If a caching policy is ever added, invalidate only `/data.js` (and `/refresh.json`) and grant `cloudfront:CreateInvalidation` on that distribution only.
+
+## IAM (`gtm-preview-refresh-role`, one inline policy)
+
+| Action | Resource |
+|---|---|
+| `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/gtm-preview-refresh` only (the log group is created by `deploy.sh`, 14-day retention) |
+| `s3:ListBucket` (prefix `published/*`), `s3:GetObject` | `opstream-gtm-data-<account-id>/published/*`, read-only |
+| `s3:GetObject`, `s3:PutObject` | `opstream-gtm-preview-db5553a4/data.js`, `/refresh.json` and `/_state/hubspot-live.json` only |
+| `s3:PutObject` | `opstream-gtm-preview-db5553a4/workspace.json` only (write-only; no delete) |
+| `s3:ListBucket` | the preview bucket, so a missing `refresh.json` reads as 404 rather than 403 |
+| `sns:Publish` | `opstream-gtm-refresh-failures` |
+
+There is no Secrets Manager or CloudFront permission. `gtm-preview-refresh-scheduler` can only call `lambda:InvokeFunction` on this function.
+
+## Deploy, off switch, teardown
+
+```sh
+workspace/refresh/deploy.sh             # idempotent: roles, log group, function, alarm, schedule, page files; keeps the schedule's state
+workspace/refresh/deploy.sh --enable    # ... and enable the schedule
+workspace/refresh/deploy.sh --disabled  # ... and create/leave it DISABLED
+WORKSPACE_SCRUB_PATTERNS_FILE=… workspace/refresh/deploy.sh --onepage-app   # serve the one-page workspace (see onepage/README.md)
+workspace/refresh/deploy.sh --lambda-only # function code and environment only: no IAM, schedule, alarm or bucket file
+workspace/refresh/gtm-preview-refresh-off.sh        # off switch (get-schedule, then update-schedule with State DISABLED)
+ON=1 workspace/refresh/gtm-preview-refresh-off.sh   # back on
+aws lambda invoke --profile opstream-deploy --region us-east-2 --function-name gtm-preview-refresh --payload '{"dryRun":true}' /tmp/out.json   # read-only check
+```
+
+`deploy.sh` also uploads the page's code (`index.html`, `app.js`, `styles.css`, `vendor/gtm-charts.js`, `vendor/insights.js`, `vendor/lost-reasons.js`) unless you pass `--no-app` (or `--lambda-only`). An `index.html` that carries a `gtm-page` tag (`onepage-app`, `fresh-workspace`) is left alone unless `--restore-app`. The minute settings (`WORKSPACE_MAX_AGE_MIN`, `WORKSPACE_STALE_MIN`, `FRESH_STALE_MIN`) go into the function's environment when set in the deploy shell; otherwise the function's current values are kept. Neither the function nor `deploy.sh` writes `insights.json` or `lost-reasons.json`; the Strategy seat publishes those (`publish-insights.mjs`, `publish-lost-reasons.mjs`). `/workspace/gtm-preview-teardown.sh` deletes the schedule, alarm, function, log group and both roles before it removes the distribution and bucket.
+
+## LIVE_PULL (off, not granted)
+
+`sources.mjs` can pull HubSpot (OAuth refresh in memory only; GET-only guard; portal check; never writes the secret back), lemlist and Fathom directly. That code runs only when `LIVE_PULL=1`. The deployed function sets `LIVE_PULL=0`, and its role has no `secretsmanager:GetSecretValue`, so turning it on without changing IAM fails. It stays for the case where the sync job can't run. Turning it on needs `HUBSPOT_PORTAL_ID` (the expected portal, checked on every call), `secretsmanager:GetSecretValue` on `opstream-gtm/hubspot-oauth`, `opstream-gtm/lemlist-token` and `opstream-gtm/fathom-token`, plus get/put on `_state/*`. It never touches Google.
+
+## Transcripts
+
+`data.js` lists the transcripts that `records.json` links to and the snapshot has. The function never uploads transcript files. A transcript newer than the preview's last full upload shows "The transcript file is missing from this build" until the transcripts are copied.
+
+## Cost (us-east-2, 2,976 runs a month)
+
+Measured: about 3.6–4.2 s and 150–160 MB when a new snapshot must be read (cold or new run id), and about 0.25 s when the snapshot is already cached. The worst case assumes every run reads a new snapshot.
+
+| Item | Math | $/month |
+|---|---|---|
+| Lambda requests | 2,976 × $0.20/1M | 0.0006 |
+| Lambda compute (arm64) | 2,976 × 4.2 s × 0.5 GB = 6,250 GB-s × $0.0000133334 | 0.083 (0 inside the free tier) |
+| S3 GET | ≤ 15 a run (LATEST, refresh.json, ~13 snapshot files) × 2,976 = 44,640 × $0.0004/1k | 0.018 |
+| S3 PUT/LIST | ≤ 3 a run (LIST, refresh.json, data.js when changed) × 2,976 = 8,928 × $0.005/1k | 0.045 |
+| Secrets Manager | 0 calls | 0 |
+| CloudWatch Logs | ~0.7 KB a run ≈ 2 MB × $0.50/GB, 14-day retention | 0.001 |
+| CloudWatch alarm | 1 standard alarm | 0.10 |
+| SNS | a few publishes, no subscribers | 0 |
+| EventBridge Scheduler | 2,976 invocations (14M free) | 0 |
+| CloudFront invalidations | none (CachingDisabled) | 0 |
+| **Total** | | **≈ $0.25** (≈ $0.17 with the Lambda free tier) |
